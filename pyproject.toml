@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bili-video2book"
+version = "0.1.0"
+description = "Batch-transform Bilibili long videos & lecture series into publication-grade deep-dive textbooks and structured review books."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "LINJIANG12"}
+]
+keywords = ["bilibili", "video-to-markdown", "study-notes", "ai-agent", "gemini-multimodal", "cheatsheet-generator", "deep-dive-learning"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+
+[project.scripts]
+bili-video2book = "src.cli:main"
+bili-skill = "src.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
