@@ -2,10 +2,10 @@
 
 # 📚 Bili-Video2Book
 
-### Batch-transform Bilibili long videos & lecture series into publication-grade deep-dive textbooks and structured review books.
+### Turn Bilibili lectures into readable deep-dive textbooks and study notes in one click.
 
 <p align="center">
-  <b>Retain every derivation, blackboard computation, and mental model from the original video, while empowering learners with reading throughput, full-text searchability, and self-testing closure.</b>
+  <b>Skip watching hours of video: read 5x faster, search anything instantly, and master every concept with full derivations and built-in practice questions.</b>
 </p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
