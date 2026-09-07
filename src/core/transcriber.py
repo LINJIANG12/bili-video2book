@@ -1,18 +1,14 @@
-"""Multimodal Audio Transcriber: Dialogue Model Priority & Local Fallback.
+"""High-Performance Local Audio Transcriber using faster-whisper.
 
-Architecture:
-- Priority 1: Direct multimodal audio ingestion by the active dialogue model via AgentModelClient.
-- Failure & Fallback Gate: If the dialogue model does not support audio modality or is unavailable,
-  the tool halts, reports the issue clearly, and prompts the user whether to permit fallback
-  to the local faster-whisper model.
+Philosophy:
+- transcribe() = 纯本地 faster-whisper 离线转录 (CPU int8 or CUDA float16).
+- 转录原则：优先对话模型（Agent 原生），whisper 仅兜底。
+- 零环境变量、零端口：本工具不读写任何环境变量、不绑定端口。
 """
 
 import os
-import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
-
-from .agent_client import AgentModelClient
+from typing import Any, Dict, List, Optional, Union
 
 
 class AudioTranscriber:
@@ -22,7 +18,7 @@ class AudioTranscriber:
     def get_model(
         cls,
         model_size: str = "base",
-        device: str = "cpu",
+        device: str = "auto",
         compute_type: Optional[str] = None,
     ):
         """Retrieve or instantiate a cached faster-whisper model."""
@@ -37,9 +33,10 @@ class AudioTranscriber:
             device = "cpu"
         compute_type = compute_type or ("float16" if device == "cuda" else "int8")
 
-        # Ensure reliable model download in restricted networks
-        if "HF_ENDPOINT" not in os.environ:
-            os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+        # 零环境变量原则：本工具绝不写入 os.environ。
+        # 如需加速模型下载，用户可在 Shell 中按需自设镜像，例如：
+        #   $env:HF_ENDPOINT="https://hf-mirror.com"  (PowerShell) /
+        #   export HF_ENDPOINT="https://hf-mirror.com"  (bash)
 
         cache_key = f"{model_size}_{device}_{compute_type}"
         if cache_key not in cls._cached_models:
@@ -56,23 +53,27 @@ class AudioTranscriber:
     def transcribe(
         cls,
         audio_path: Union[str, Path],
-        engine: str = "auto",
+        engine: str = "local",
         model_size: str = "base",
         language: str = "zh",
-        device: str = "cpu",
+        device: str = "auto",
         compute_type: Optional[str] = None,
         beam_size: int = 1,
         initial_prompt: Optional[str] = None,
-        allow_local_fallback: Optional[bool] = None,
-        fallback_callback: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
+        """Transcribe an audio file using pure-local faster-whisper (offline).
+
+        engine 仅保留 local；传 agent/auto 时不做任何网络调用，直接提示：
+        “转录由 Agent 原生执行，工具层仅导出任务书”。
         """
-        Transcribe an audio file to text.
-        Priority:
-        1. Dialogue Model (AgentModelClient) if engine in ('auto', 'agent') and model supports audio.
-        2. If dialogue model lacks audio capability or fails:
-           HALTS and asks user whether to fallback to local faster-whisper.
-        """
+        if engine in ("agent", "auto"):
+            raise RuntimeError(
+                "转录由 Agent 原生执行，工具层仅导出任务书"
+                "（transcribe() 为纯本地 faster-whisper 离线转录，engine 仅支持 local）。"
+            )
+        if engine != "local":
+            raise ValueError(f"未知 engine: {engine!r}，仅支持 local。")
+
         path_obj = Path(audio_path).resolve()
         if not path_obj.exists():
             raise FileNotFoundError(f"Audio file not found: {path_obj}")
@@ -85,93 +86,6 @@ class AudioTranscriber:
                 print(f"[*] 检测到输入为视频文件 ({path_obj.suffix})，自动抽取轻量 64kbps 纯音频...")
                 LocalMediaParser.extract_audio(path_obj, extracted_audio)
             path_obj = extracted_audio
-
-        # Path 1: Priority Dialogue Model
-        if engine in ("auto", "agent"):
-            cfg = AgentModelClient.discover_config()
-            can_audio = AgentModelClient.can_transcribe_audio()
-            available = AgentModelClient.is_available()
-
-            if can_audio and available:
-                model_name = cfg.get("model", "dialogue-model") if cfg else "dialogue-model"
-                print(f"[*] 【优先路径】调用宿主对话大模型 ({model_name}) 执行原生多模态语音转录...")
-                try:
-                    return AgentModelClient.transcribe_audio(
-                        audio_path=path_obj,
-                        chunk_minutes=10,
-                        initial_prompt=initial_prompt,
-                    )
-                except Exception as err:
-                    print(f"[-] 对话大模型多模态转录请求异常: {err}")
-                    if engine == "agent":
-                        raise
-
-            # Dialogue model cannot handle audio or is unreachable
-            reason = []
-            if not can_audio:
-                reason.append(f"当前配置的模型 ({cfg.get('model') if cfg else 'unknown'}) 不具备音频 (audio) 输入模态")
-            if not available:
-                reason.append(f"本地网关 ({cfg.get('base_url') if cfg else 'unknown'}) 探测无响应或不可达")
-
-            problem_desc = "；".join(reason) if reason else "对话模型服务未就绪"
-            print(f"\n[!] 警告：当前对话大模型无法执行音频转录（原因: {problem_desc}）。")
-
-            if engine == "agent":
-                raise RuntimeError(
-                    f"当前指定了 --engine agent，但对话大模型无法读取音频（{problem_desc}），任务已中止。"
-                )
-
-            # Auto mode: Halt and ask user whether to fallback to local Whisper
-            should_fallback = False
-            if allow_local_fallback is True:
-                should_fallback = True
-                print("[*] 检测到预授权参数，已确认切换至本地 faster-whisper 引擎兜底...")
-            elif allow_local_fallback is False:
-                should_fallback = False
-            elif fallback_callback is not None:
-                should_fallback = fallback_callback()
-            elif sys.stdin.isatty():
-                try:
-                    ans = input("\n[?] 是否切换为本地 faster-whisper 模型进行离线转录兜底？[y/N]: ").strip().lower()
-                    should_fallback = ans in ("y", "yes")
-                except (EOFError, KeyboardInterrupt):
-                    should_fallback = False
-            else:
-                should_fallback = False
-
-            if not should_fallback:
-                raise RuntimeError(
-                    f"对话大模型不具备音频读取能力（{problem_desc}），且未授权使用本地模型，任务已主动中止。"
-                )
-
-            print(f"[*] 用户已授权：切换为本地 whisper-{model_size} 执行兜底声学转录...")
-
-        # Path 2: Local faster-whisper
-        return cls.transcribe_local(
-            audio_path=path_obj,
-            model_size=model_size,
-            language=language,
-            device=device,
-            compute_type=compute_type,
-            beam_size=beam_size,
-            initial_prompt=initial_prompt,
-        )
-
-    @classmethod
-    def transcribe_local(
-        cls,
-        audio_path: Union[str, Path],
-        model_size: str = "base",
-        language: str = "zh",
-        device: str = "cpu",
-        compute_type: Optional[str] = None,
-        beam_size: int = 1,
-        initial_prompt: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Transcribe an audio file using local faster-whisper."""
-        path_obj = Path(audio_path).resolve()
-        if not path_obj.exists():
-            raise FileNotFoundError(f"Audio file not found: {path_obj}")
 
         model = cls.get_model(
             model_size=model_size,
@@ -219,6 +133,9 @@ class AudioTranscriber:
             "duration": round(info.duration, 2),
             "engine": f"local-whisper-{model_size}",
         }
+
+    # Alias for backward compatibility
+    transcribe_local = transcribe
 
     @staticmethod
     def format_seconds(seconds: float) -> str:

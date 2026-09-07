@@ -1,22 +1,28 @@
-"""Bilibili URL Parser & Video Topology Classifier.
+"""视频地址解析与稿件结构分类器。
 
-Classifies videos into:
-1. single: Single independent video (1 P, no UGC season)
-2. multi_page: Multi-part video collection in one submission (P1, P2...)
-3. ugc_season: Series / collection of separate videos created by an uploader
-4. hybrid: Multi-part video that also belongs to an uploader's UGC season
+分类：
+1. 单稿单集：单个独立视频
+2. 分集选集：同一稿件下多分集
+3. 合集系列：投稿者创建的合集
+4. 复合类型：多分集且归属合集
 """
 
 import json
 import re
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from .wbi import WbiSigner
 
 
 class BilibiliParser:
-    VIEW_API = "https://api.bilibili.com/x/web-interface/view"
+    """视频解析器（详情接口强制签名请求）。"""
+
+    VIEW_API = "https://api.bilibili.com/x/web-interface/wbi/view"
 
     DEFAULT_HEADERS = {
         "User-Agent": (
@@ -25,18 +31,37 @@ class BilibiliParser:
             "Chrome/124.0.0.0 Safari/537.36"
         ),
         "Referer": "https://www.bilibili.com/",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Origin": "https://www.bilibili.com",
+        "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
     }
 
     @staticmethod
+    def _解析密钥路径(密钥文件: Optional[Any] = None, 工作区: Optional[Any] = None) -> Optional[str]:
+        """解析签名密钥文件路径（优先使用工作区提供的路径）。"""
+        try:
+            if 工作区 is not None and hasattr(工作区, "wbi_keys_file"):
+                return str(工作区.wbi_keys_file)
+        except Exception:
+            pass
+        if 密钥文件 is not None:
+            return str(密钥文件)
+        return None
+
+    @staticmethod
     def extract_bvid(url_or_bvid: str) -> Optional[str]:
-        """Extract valid 12-char BVID from raw strings, URLs, or b23.tv short links."""
+        """从原始字符串、链接或短链中提取合法稿件号。"""
         text = url_or_bvid.strip()
         bv_pattern = re.compile(r"(BV[a-zA-Z0-9]{10})", re.IGNORECASE)
         match = bv_pattern.search(text)
         if match:
             return match.group(1)
 
-        # Handle b23.tv short links (follow 302 redirect)
+        # 处理短链（跟随跳转）
         if "b23.tv" in text:
             short_url_match = re.search(r"https?://b23\.tv/[a-zA-Z0-9]+", text)
             if short_url_match:
@@ -56,7 +81,7 @@ class BilibiliParser:
 
     @staticmethod
     def extract_page_index(url_or_bvid: str) -> Optional[int]:
-        """Extract page index (?p=N or &p=N) from URL if present."""
+        """从链接中提取分集序号（无则返回空）。"""
         try:
             parsed = urllib.parse.urlparse(url_or_bvid.strip())
             qs = urllib.parse.parse_qs(parsed.query)
@@ -69,34 +94,103 @@ class BilibiliParser:
         return None
 
     @classmethod
-    def fetch_video_view(cls, bvid: str, sessdata: Optional[str] = None) -> Dict[str, Any]:
-        """Fetch raw view metadata from Bilibili API."""
-        params = urllib.parse.urlencode({"bvid": bvid})
+    def fetch_video_view(
+        cls,
+        bvid: str,
+        sessdata: Optional[str] = None,
+        wbi_keys_file: Optional[str] = None,
+        workspace: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """请求详情接口并返回原始元数据（强制签名，区分导航失败与详情失败）。"""
+        # 密钥路径由工作区提供，含有效期，过期由签名器重取
+        密钥路径 = cls._解析密钥路径(密钥文件=wbi_keys_file, 工作区=workspace)
+
+        # 详情参数必须经签名器加签
+        try:
+            签名参数 = WbiSigner.enc_wbi({"bvid": bvid}, sessdata=sessdata, keys_file=密钥路径)
+        except RuntimeError as 错误:
+            文本 = str(错误)
+            if "[风控]" in 文本 or "[网络]" in 文本:
+                raise RuntimeError(
+                    f"[导航失败]{文本}"
+                    "建议动作：检查登录凭证有效性，等待后降低频率重试。"
+                ) from 错误
+            raise RuntimeError(
+                f"[签名]导航阶段签名失败：{错误}。"
+                "建议动作：删除过期密钥文件后重试；仍失败请检查网络。"
+            ) from 错误
+        except Exception as 错误:
+            raise RuntimeError(
+                f"[签名]导航阶段签名失败：{错误}。"
+                "建议动作：删除过期密钥文件后重试；仍失败请检查网络。"
+            ) from 错误
+
+        params = urllib.parse.urlencode(签名参数)
         url = f"{cls.VIEW_API}?{params}"
         headers = dict(cls.DEFAULT_HEADERS)
         if sessdata:
             headers["Cookie"] = f"SESSDATA={sessdata}"
 
+        # 复用集中限速，避免高频触发风控
+        WbiSigner.wait_rate_limit()
         req = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                if data.get("code") != 0:
-                    raise RuntimeError(
-                        f"Bilibili API error: code={data.get('code')}, msg={data.get('message')}"
-                    )
-                return data["data"]
-        except Exception as err:
-            raise RuntimeError(f"Failed to fetch video view for {bvid}: {err}") from err
+        except urllib.error.HTTPError as 错误:
+            if 错误.code == 412:
+                raise RuntimeError(
+                    "[风控]详情接口被风控拦截（412），签名可能过期或频率过高。"
+                    "建议动作：携带有效登录凭证、删除过期密钥文件后降频重试。"
+                ) from 错误
+            if 500 <= 错误.code <= 599:
+                raise RuntimeError(
+                    f"[网络]详情接口服务端异常（{错误.code}）。"
+                    "建议动作：等待后退避重试。"
+                ) from 错误
+            raise RuntimeError(
+                f"[网络]详情接口请求失败（{错误.code}）。"
+                "建议动作：检查网络后重试。"
+            ) from 错误
+        except Exception as 错误:
+            raise RuntimeError(
+                f"[网络]详情接口请求失败：{错误}。"
+                "建议动作：检查网络连接或代理后重试。"
+            ) from 错误
+
+        if data.get("code") != 0:
+            编码 = data.get("code")
+            信息 = data.get("message")
+            if 编码 == -412:
+                raise RuntimeError(
+                    f"[风控]详情接口返回风控拦截：code={编码}，msg={信息}。"
+                    "建议动作：携带有效登录凭证、删除过期密钥文件并降频重试。"
+                )
+            if 编码 in (-403, -404, 62002, 62004):
+                raise RuntimeError(
+                    f"[风控]详情接口访问受限：code={编码}，msg={信息}。"
+                    "建议动作：确认稿件可见性与凭证权限后重试。"
+                )
+            raise RuntimeError(
+                f"[风控]详情接口返回异常：code={编码}，msg={信息}。"
+                "建议动作：确认稿件号正确、凭证有效后重试。"
+            )
+        return data["data"]
 
     @classmethod
-    def parse_video(cls, url_or_bvid: str, sessdata: Optional[str] = None) -> Dict[str, Any]:
-        """Analyze video structure and return structured classification & episodes."""
+    def parse_video(
+        cls,
+        url_or_bvid: str,
+        sessdata: Optional[str] = None,
+        wbi_keys_file: Optional[str] = None,
+        workspace: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """分析稿件结构并返回分类与分集信息。"""
         bvid = cls.extract_bvid(url_or_bvid)
         if not bvid:
             raise ValueError(f"Could not extract a valid BVID from input: {url_or_bvid}")
 
-        raw = cls.fetch_video_view(bvid, sessdata=sessdata)
+        raw = cls.fetch_video_view(bvid, sessdata=sessdata, wbi_keys_file=wbi_keys_file, workspace=workspace)
 
         title = raw.get("title", "")
         owner = raw.get("owner", {}).get("name", "")
@@ -125,7 +219,7 @@ class BilibiliParser:
             season_title = ugc_season.get("title", "")
             type_desc = f"复合型视频（本稿件含 {len(pages)} 个分P，且属于合集【{season_title}】）"
 
-        # Build clean part list
+        # 构建干净分集列表
         parts = []
         for p in pages:
             p_num = p.get("page", 1)
@@ -137,7 +231,7 @@ class BilibiliParser:
                 "url": f"https://www.bilibili.com/video/{bvid}?p={p_num}",
             })
 
-        # Build season episodes list
+        # 构建合集选集列表
         season_episodes = []
         season_info = None
         if has_ugc_season and ugc_season:
@@ -172,10 +266,11 @@ class BilibiliParser:
             selected_cid = matched_part["cid"]
             selected_title = matched_part["title"]
 
+        _ = Path  # 保持路径工具可用性标记
         return {
             "bvid": bvid,
             "aid": raw.get("aid"),
-            "cid": selected_cid,  # Default to selected cid if p=X present, else P1 cid
+            "cid": selected_cid,  # 链接含分集序号时取对应分集，否则取首集
             "title": title,
             "desc": desc,
             "cover": pic,
@@ -194,5 +289,5 @@ class BilibiliParser:
             "selected_title": selected_title,
         }
 
-    # Alias for convenience
+    # 别名入口
     parse = parse_video

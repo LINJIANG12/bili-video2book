@@ -5,7 +5,6 @@
 Commands:
   parse     - Parse URL/BVID, classify video type, and inspect sub-videos
   audio     - Fetch audio stream URL, download m4a, and optionally chunk via ffmpeg
-  subtitle  - Probe and download official AI/human subtitles (Fallback)
   clean     - Clean spoken transcript and eliminate filler phrases
   prompt    - Build revision note and tutorial article prompts for AI agent
 """
@@ -32,7 +31,6 @@ from src.core.parser import BilibiliParser
 from src.core.local_media import LocalMediaParser, SUPPORTED_VIDEO_EXTS
 from src.core.fetcher import AudioFetcher
 from src.core.audio_chunker import AudioChunker
-from src.core.subtitle import SubtitleFetcher
 from src.core.workspace import TaskWorkspace
 from src.core.transcriber import AudioTranscriber
 from src.core.kernel_extractor import KernelExtractor
@@ -42,11 +40,150 @@ from src.generator.topic_planner import SemanticTopicPlanner
 from src.generator.block_synthesizer import BlockSynthesizer
 
 
+# 中文注释：状态文件记录上次 412/熔断，无则 info 显示“无记录”
+_STATUS_FILE = PROJECT_ROOT / "output" / ".cli_status.json"
+# 中文注释：manifest 中需要相对路径化的路径键集合
+_PATH_KEYS = {"audio", "transcript", "task_prompt", "article", "audio_file", "filepath", "source_path"}
+
+
+def _to_relative_str(val):
+    """中文注释：绝对路径转仓库相对路径，非路径原样返回。"""
+    if not isinstance(val, str) or not val:
+        return val
+    try:
+        p = Path(val)
+        if not p.is_absolute():
+            return val
+        try:
+            return p.relative_to(PROJECT_ROOT).as_posix()
+        except Exception:
+            pass
+        try:
+            return p.relative_to(Path.cwd()).as_posix()
+        except Exception:
+            return val
+    except Exception:
+        return val
+
+
+def _to_absolute_str(val):
+    """中文注释：仓库相对路径转回绝对路径，绝对路径原样返回。"""
+    if not isinstance(val, str) or not val:
+        return val
+    try:
+        p = Path(val)
+        if p.is_absolute():
+            return str(p)
+        # 中文注释：相对路径视为仓库相对，拼回绝对路径
+        return str((PROJECT_ROOT / val).resolve())
+    except Exception:
+        return val
+
+
+def _relativize_obj(obj):
+    """中文注释：递归将 manifest 内路径键转为相对路径，保持按 page 合并兼容。"""
+    if isinstance(obj, dict):
+        return {k: (_to_relative_str(v) if k in _PATH_KEYS else _relativize_obj(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_relativize_obj(x) for x in obj]
+    return obj
+
+
+def _absolutize_obj(obj):
+    """中文注释：递归将 manifest 内路径键转回绝对路径供使用处读取。"""
+    if isinstance(obj, dict):
+        return {k: (_to_absolute_str(v) if k in _PATH_KEYS else _absolutize_obj(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_absolutize_obj(x) for x in obj]
+    return obj
+
+
+def _save_manifest_rel(ws, data):
+    """中文注释：保存前统一相对路径化。"""
+    ws.save_manifest(_relativize_obj(data))
+
+
+def _load_manifest_abs(ws):
+    """中文注释：加载后统一转回绝对路径。"""
+    return _absolutize_obj(ws.load_manifest())
+
+
+def _is_412(err):
+    """中文注释：判断是否为 412 风控拦截。"""
+    return "412" in str(err)
+
+
+def _record_412_status(err):
+    """中文注释：记录 412/熔断状态到状态文件供 info 读取。"""
+    try:
+        import time as _time
+        _STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _STATUS_FILE.write_text(
+            json.dumps({"last_412": _time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "error": str(err)[:500]}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _format_412(err, resume_hint=None):
+    """中文注释：412 三要素文案：定性+可复制动作+预期。"""
+    hint = resume_hint or 'python src/cli.py pipeline "<链接>" --all --sessdata YOUR_SESSDATA'
+    return (
+        f"[412 风控拦截] {err}\n"
+        "①定性：B 站风控拦截（请求过频/缺登录态），非视频删除。\n"
+        "②可复制动作：浏览器登录 bilibili.com → F12 → 应用/存储 → Cookie → 复制 SESSDATA，"
+        f"然后运行：python src/cli.py pipeline \"<链接>\" --all --sessdata YOUR_SESSDATA\n"
+        f"③预期：等待 30-60 分钟后再试；跑 python src/cli.py info 验证状态；断点续跑：{hint}"
+    )
+
+
+def _enrich_network_error(err, resume_hint=None):
+    """中文注释：区分 412 与普通网络错误，412 走三要素文案并落盘状态。"""
+    if _is_412(err):
+        _record_412_status(err)
+        return _format_412(err, resume_hint)
+    return f"[网络/接口异常] {err}（非 412：建议检查网络后重试；频繁失败可补 --sessdata 后重跑）"
+
+
+def _get_audio_stream(bvid, cid, sessdata=None, prefer_quality="low", resume_hint=None):
+    """中文注释：音频流获取统一入口，412  enriched 后抛出。"""
+    try:
+        return AudioFetcher.get_audio_stream_info(bvid, cid, sessdata=sessdata, prefer_quality=prefer_quality)
+    except Exception as err:
+        raise RuntimeError(_enrich_network_error(err, resume_hint)) from err
+
+
+def _export_transcribe_task(ws, page_num, clean_title, audio_file, title="", cid=0):
+    """Export Agent-native TRANSCRIBE_TASK file. No env vars, no network calls."""
+    import re as _re
+    from src.generator.prompt_templates import AUDIO_TRANSCRIPTION_PROMPT
+    # Avoid double prefix when the stem already carries one (e.g. local-file direct transcribe).
+    prefix = "" if _re.match(r"^P\d{2}_", clean_title) else f"P{page_num:02d}_"
+    task_file = ws.articles_dir / f"{prefix}{clean_title}_TRANSCRIBE_TASK.md"
+    task_file.parent.mkdir(parents=True, exist_ok=True)
+    content = (
+        f"# P{page_num:02d} {clean_title} 转录任务书（TRANSCRIBE_TASK）\n\n"
+        f"> 状态：need-agent-transcribe | 请宿主 Agent 原生转录落盘\n\n"
+        f"## 输入\n\n- 音频：{audio_file}\n- 标题：{title}\n- CID：{cid}\n\n"
+        f"## 分片清单（占位）\n\n- [ ] P{page_num:02d} 全片（{audio_file}，00:00 起）待 Agent 逐段转录\n"
+        f"- [ ] 若音频过长，Agent 自行按自然语义切片并逐片落盘后再合并\n\n"
+        f"## 转录提示词（引用 src/generator/prompt_templates.py AUDIO_TRANSCRIPTION_PROMPT）\n\n"
+        f"{AUDIO_TRANSCRIPTION_PROMPT}\n"
+    )
+    task_file.write_text(content, encoding="utf-8")
+    return task_file
+
+
 def _resolve_target_info(target: str, sessdata: Optional[str] = None) -> Dict[str, Any]:
-    """Polymorphically resolve metadata from either local media path or Bilibili URL/BVID."""
+    """中文注释：多态解析本地媒体或 B 站元数据，412 走三要素文案。"""
     if LocalMediaParser.is_local_media(target):
         return LocalMediaParser.parse(target)
-    return BilibiliParser.parse_video(target, sessdata=sessdata)
+    try:
+        return BilibiliParser.parse_video(target, sessdata=sessdata)
+    except Exception as err:
+        raise RuntimeError(_enrich_network_error(err)) from err
 
 
 def _parse_range_string(range_str: str, max_val: int):
@@ -196,7 +333,8 @@ def cmd_audio(args):
                         "status": "downloaded",
                     })
                 else:
-                    stream_info = AudioFetcher.get_audio_stream_info(
+                    # 中文注释：统一走 412 富化入口
+                    stream_info = _get_audio_stream(
                         bvid,
                         p["cid"],
                         sessdata=args.sessdata,
@@ -230,7 +368,8 @@ def cmd_audio(args):
                     "status": "failed",
                 })
 
-        ws.save_manifest({
+        # 中文注释：保存时相对路径化
+        _save_manifest_rel(ws, {
             "bvid": bvid,
             "title": info["title"],
             "total_selected": total_parts,
@@ -266,7 +405,8 @@ def cmd_audio(args):
         print(f"[✓] 音频提取完成: {saved_path}")
     else:
         print(f"[*] 解析音频流中... BV: {bvid}, CID: {target_cid}")
-        stream_info = AudioFetcher.get_audio_stream_info(
+        # 中文注释：统一走 412 富化入口
+        stream_info = _get_audio_stream(
             bvid,
             target_cid,
             sessdata=args.sessdata,
@@ -310,45 +450,6 @@ def cmd_audio(args):
             "chunks": chunks_manifest,
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
-
-
-def cmd_subtitle(args):
-    info = BilibiliParser.parse_video(args.url, sessdata=args.sessdata)
-    bvid = info["bvid"]
-    target_cid = info["cid"]
-    req_page = args.page if args.page is not None else (info.get("url_page") or 1)
-    page_idx = req_page
-    if info["has_multi_pages"]:
-        p_idx = max(1, min(req_page, len(info["parts"])))
-        target_cid = info["parts"][p_idx - 1]["cid"]
-        page_idx = p_idx
-
-    ws = TaskWorkspace.create(
-        title=info["title"],
-        bvid=bvid,
-        custom_name=getattr(args, "task", None),
-        base_dir=getattr(args, "base_dir", "output"),
-    )
-
-    print(f"[*] 正在探测 B 站官方/AI字幕: {bvid} (CID: {target_cid})...")
-    sub_res = SubtitleFetcher.fetch_best_subtitle(bvid, target_cid, sessdata=args.sessdata)
-    if not sub_res:
-        print("[-] 本视频暂无可用官方/AI字幕，请使用本地音频大模型转录流程。")
-        return
-
-    print(f"[✓] 成功获取字幕 ({sub_res['language_doc']}, 是否AI生成: {sub_res['is_ai']}, 条数: {sub_res['total_items']})")
-    if args.output:
-        out_p = Path(args.output).resolve()
-        if out_p.is_dir() or out_p.suffix == "":
-            out_file = out_p / f"P{page_idx:02d}_subtitle.txt"
-        else:
-            out_file = out_p
-    else:
-        out_file = ws.subtitles_dir / f"P{page_idx:02d}_subtitle.txt"
-
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.write_text(sub_res["full_text"], encoding="utf-8")
-    print(f"[✓] 字幕纯文本已保存至: {out_file}")
 
 
 def cmd_clean(args):
@@ -427,17 +528,10 @@ def cmd_note(args):
             print(f"[-] 转录文件未找到: {t_path}", file=sys.stderr)
             return
     else:
-        # Try subtitle fallback if online
-        sub_res = None
-        if not info.get("is_local"):
-            print(f"[*] 探测视频官方/AI字幕作为语料: {info['bvid']}...")
-            sub_res = SubtitleFetcher.fetch_best_subtitle(info["bvid"], target_cid, sessdata=args.sessdata)
-        if sub_res:
-            content = sub_res["full_text"]
-            print(f"[✓] 提取到字幕语料 ({sub_res['total_items']} 行)")
-        else:
-            print("[*] 无在线字幕，使用标题与视频元数据生成笔记骨架模板。")
-            content = f"视频简介: {info.get('desc', '')}\n\n该视频时长 {info.get('duration', 0)} 秒，建议结合音频或切片转录生成完整笔记。"
+        # 中文注释：字幕已移除；无语料时指引跑 pipeline 转录
+        print("[*] 未提供转录文件，字幕直取已移除，统一走转录。")
+        print("[*] 请先跑 pipeline 生成转录语料后再合成笔记。")
+        content = f"视频简介: {info.get('desc', '')}\n\n该视频时长 {info.get('duration', 0)} 秒，建议跑 pipeline 转录后再生成完整笔记。"
 
     # Clean content if available
     if len(content) > 50:
@@ -467,17 +561,25 @@ def cmd_note(args):
 
 
 def cmd_transcribe(args):
+    engine = getattr(args, "engine", "auto")
+    fallback_allowed = bool(getattr(args, "allow_local_fallback", False))
     # Check if target is a single local media file
     target_p = Path(args.target).resolve()
     if target_p.exists() and target_p.is_file():
-        print(f"[*] 直接转录本地媒体: {target_p.name} (引擎策略: {args.engine})...")
-        fallback_allowed = True if args.allow_local_fallback is None else args.allow_local_fallback
+        print(f"[*] 直接转录本地媒体: {target_p.name} (引擎策略: {engine})...")
+        if engine in ("agent", "auto") and not (engine == "auto" and fallback_allowed):
+            if engine == "auto" and fallback_allowed:
+                pass
+            else:
+                from src.generator.prompt_templates import AUDIO_TRANSCRIPTION_PROMPT  # noqa: F401 确认常量名存在
+                ws0 = TaskWorkspace.create(title=target_p.stem, bvid="", custom_name=args.task, base_dir=args.base_dir)
+                tf = _export_transcribe_task(ws0, 1, target_p.stem, target_p, title=target_p.stem)
+                print(f"[✓] 已导出转录任务书待 Agent 原生转录: {tf} (status=need-agent-transcribe)")
+                return
         res = AudioTranscriber.transcribe(
             target_p,
-            engine=args.engine,
             model_size=args.model,
             language=args.lang,
-            allow_local_fallback=fallback_allowed,
         )
         cleaned = TextCleaner.clean(res["full_text"])
         print(f"[✓] 转录完成 (引擎: {res.get('engine', 'unknown')}, 共 {res['total_segments']} 个片段)")
@@ -517,7 +619,8 @@ def cmd_transcribe(args):
             LocalMediaParser.extract_audio(source_file, audio_file)
         else:
             print(f"[*] 音频未缓存，正在下载 P{target_part:02d} 音频...")
-            stream_info = AudioFetcher.get_audio_stream_info(
+            # 中文注释：统一走 412 富化入口
+            stream_info = _get_audio_stream(
                 bvid,
                 target_cid,
                 sessdata=args.sessdata,
@@ -525,14 +628,21 @@ def cmd_transcribe(args):
             )
             AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
 
-    print(f"[*] 开始转录 P{target_part:02d}: {audio_file.name} (策略: {args.engine})...")
-    fallback_allowed = True if args.allow_local_fallback is None else args.allow_local_fallback
+    print(f"[*] 开始转录 P{target_part:02d}: {audio_file.name} (策略: {engine})...")
+    if engine == "agent":
+        tf = _export_transcribe_task(ws, target_part, clean_p_title, audio_file, title=info["title"], cid=target_cid)
+        print(f"[✓] 已导出转录任务书待 Agent 原生转录: {tf} (status=need-agent-transcribe)")
+        return
+    if engine == "auto":
+        # 中文注释：字幕直取已移除；无兜底授权导出任务书，有兜底走 whisper
+        if not fallback_allowed:
+            tf = _export_transcribe_task(ws, target_part, clean_p_title, audio_file, title=info["title"], cid=target_cid)
+            print(f"[✓] 已导出转录任务书待 Agent 原生转录: {tf} (status=need-agent-transcribe)")
+            return
     res = AudioTranscriber.transcribe(
         audio_file,
-        engine=args.engine,
         model_size=args.model,
         language=args.lang,
-        allow_local_fallback=fallback_allowed,
     )
     raw_txt_file = ws.subtitles_dir / f"P{target_part:02d}_{clean_p_title}_raw.txt"
     raw_txt_file.write_text(res["full_text"], encoding="utf-8")
@@ -560,6 +670,9 @@ def cmd_pipeline(args):
     print(f"[*] 全流程处理流水线启动 (Task Workspace: {ws.root_dir.name})")
     print("=" * 65)
 
+    # 中文注释：pipeline 内 --allow-local-fallback 失效，显式传也只告警一次并忽略
+    if bool(getattr(args, "allow_local_fallback", False)):
+        print("[warn] --allow-local-fallback 在 pipeline 内已失效，已忽略（对话模型优先；如需本地转录请显式 --engine local）")
     engine_desc = "对话大模型优先 (异常时暂停询问本地模型)" if getattr(args, "engine", "auto") == "auto" else args.engine
     print(f"[*] 转录引擎策略: {engine_desc} | 本地备用规格: whisper-{args.model}")
 
@@ -586,114 +699,301 @@ def cmd_pipeline(args):
     total_episodes = len(selected_parts)
     print(f"[*] 待处理分集总数: {total_episodes}")
 
-    manifest_entries = []
-    for idx, p in enumerate(selected_parts, 1):
-        p_num = p["page"]
+    # 断点续派过滤：manifest 中 status==success 的 page 跳过（--force 时不过滤）
+    if not getattr(args, "force", False):
+        try:
+            # 中文注释：加载时转回绝对路径使用
+            _done_pages = {d.get("page") for d in _load_manifest_abs(ws).get("details", []) if d.get("status") == "success"}
+        except Exception:
+            _done_pages = set()
+        if _done_pages:
+            kept = []
+            for p in selected_parts:
+                if p.get("page") in _done_pages:
+                    print(f"[skip] P{p.get('page'):02d} {p.get('title')} 已完成，跳过")
+                else:
+                    kept.append(p)
+            selected_parts = kept
+            total_episodes = len(selected_parts)
+            print(f"[*] 断点续派后待处理: {total_episodes}")
+    else:
+        print("[*] --force 已指定，不过滤已完成分集")
+
+    from concurrent.futures import ThreadPoolExecutor
+    import time as _time_mod
+
+    prefetch_workers = max(1, int(getattr(args, "prefetch_workers", 12) or 1))
+    tx_workers = max(1, int(getattr(args, "transcribe_episodes", 2) or 1))
+    print(f"[*] 并发配置: 音频预取 {prefetch_workers} 线程 | 分集转录并行 {tx_workers} 集（块级并发另计）")
+
+    def _audio_paths(p):
         clean_p_title = "".join([c for c in p["title"] if c.isalnum() or c in (" ", "-", "_")]).strip()
-        print(f"\n[{idx:02d}/{total_episodes:02d}] 开始处理 P{p_num:02d}: {p['title']}...")
+        return ws.audio_dir / f"P{p['page']:02d}_{clean_p_title}.m4a", clean_p_title
 
-        # 1. Audio Check or Extraction/Download
-        audio_file = ws.audio_dir / f"P{p_num:02d}_{clean_p_title}.m4a"
-        if not audio_file.exists() or audio_file.stat().st_size < 10240:
-            if info.get("is_local"):
-                print(f"    [1/4] 从本地视频提取通用 64kbps 纯音频...")
-                LocalMediaParser.extract_audio(p.get("filepath", info.get("source_path")), audio_file)
-            else:
-                print(f"    [1/4] 下载轻量音频...")
-                stream_info = AudioFetcher.get_audio_stream_info(
-                    bvid,
-                    p["cid"],
-                    sessdata=args.sessdata,
-                    prefer_quality=getattr(args, "quality", "low"),
-                )
-                AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
+    def _classify_audio_error(err):
+        # 中文注释：失败分类：412 风控/缺登录态/网络超时/其他
+        msg = str(err)
+        if "412" in msg:
+            return "412风控拦截"
+        low = msg.lower()
+        if any(k in msg for k in ("SESSDATA", "sessdata", "401", "403", "登录", "Cookie", "cookie")):
+            return "缺登录态/权限"
+        if any(k in low for k in ("timeout", "timed out", "connection", "network", "dns", "reset", "超时", "网络", "连接")):
+            return "网络超时"
+        return "其他下载异常"
+
+    def _ensure_audio_once(p):
+        # 中文注释：单次音频收齐尝试，命中缓存直接返回
+        audio_file, _ = _audio_paths(p)
+        if audio_file.exists() and audio_file.stat().st_size >= 10240 and not getattr(args, "force", False):
+            return audio_file
+        if info.get("is_local"):
+            print(f"    [prefetch] P{p['page']:02d} 本地提取音频...")
+            LocalMediaParser.extract_audio(p.get("filepath", info.get("source_path")), audio_file)
         else:
-            print(f"    [1/4] 音频已就绪: {audio_file.name} ({round(audio_file.stat().st_size / 1024 / 1024, 2)} MB)")
+            print(f"    [prefetch] P{p['page']:02d} 下载轻量音频...")
+            # 中文注释：元数据 API 保持现有令牌桶，不动 fetcher；此处统一走 412 富化入口
+            stream_info = _get_audio_stream(
+                bvid, p["cid"], sessdata=args.sessdata, prefer_quality=getattr(args, "quality", "low"),
+            )
+            AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
+        print(f"    [prefetch] P{p['page']:02d} 音频就绪: {audio_file.name}")
+        return audio_file
 
-        # 2. Text Extraction
+    def _ensure_audio_with_retry(p):
+        # 中文注释：单集下载失败退避重试 3 次（共 4 次尝试），退避 1/2/4 秒
+        last_err = None
+        for attempt in range(4):
+            try:
+                return _ensure_audio_once(p)
+            except Exception as err:
+                last_err = err
+                if attempt < 3:
+                    print(f"    [retry] P{p['page']:02d} 第{attempt + 1}次失败，退避重试 ({_classify_audio_error(err)}): {str(err)[:120]}")
+                    try:
+                        _time_mod.sleep(2 ** attempt)
+                    except Exception:
+                        pass
+        raise last_err
+
+    # 中文注释：阶段一“音频收齐”：ThreadPoolExecutor 并发下载全部选中集音频
+    print("=" * 65)
+    print("[*] 阶段一：音频收齐（全部选中集并发下载/提取）")
+    print("=" * 65)
+    audio_failed = []
+    audio_ready = {}
+    with ThreadPoolExecutor(max_workers=prefetch_workers) as prefetch_pool:
+        fut_map = {p["page"]: prefetch_pool.submit(_ensure_audio_with_retry, p) for p in selected_parts}
+        for p in selected_parts:
+            try:
+                audio_ready[p["page"]] = fut_map[p["page"]].result()
+            except Exception as err:
+                audio_failed.append({
+                    "page": p["page"], "title": p["title"], "cid": p["cid"],
+                    "error": str(err), "category": _classify_audio_error(err), "status": "failed",
+                })
+    # 中文注释：阶段一结束后写检查点 parts.json + manifest
+    try:
+        _clean_parts = [{k: v for k, v in p.items() if not k.startswith("_")} for p in selected_parts]
+        ws.save_parts(_clean_parts)
+    except Exception:
+        pass
+    _save_manifest_rel(ws, {
+        "audio_stage": {"total": len(selected_parts), "ready": len(audio_ready), "failed": len(audio_failed)},
+        "audio_failed_episodes": [{k: v for k, v in d.items()} for d in audio_failed],
+    })
+    skip_failed_opt = bool(getattr(args, "skip_failed", False))
+    skipped_entries = []
+    if audio_failed:
+        if skip_failed_opt:
+            # 中文注释：显式 opt-in 豁免：记入 manifest 跳过名单，不进转录
+            skipped_entries = list(audio_failed)
+            audio_failed = []
+            print(f"[*] --skip-failed 已指定，豁免 {len(skipped_entries)} 集（不进转录）")
+            _save_manifest_rel(ws, {
+                "skipped_episodes": skipped_entries,
+                "skipped_pages": [d.get("page") for d in skipped_entries],
+            })
+        else:
+            # 中文注释：任一集最终失败则严格终止报告并 sys.exit 非零
+            print("\n" + "=" * 65, file=sys.stderr)
+            print("[✗] 阶段一终止：音频收齐失败（硬切分门禁，未进入转录）", file=sys.stderr)
+            print(f"失败集清单（共 {len(audio_failed)} 集）：", file=sys.stderr)
+            for f_ep in audio_failed:
+                print(f"    - P{f_ep['page']:02d} {f_ep['title']} [{f_ep.get('category')}]：{str(f_ep['error'])[:160]}", file=sys.stderr)
+            print("失败分类统计：", file=sys.stderr)
+            _cats = {}
+            for f_ep in audio_failed:
+                _cats[f_ep.get("category", "其他下载异常")] = _cats.get(f_ep.get("category", "其他下载异常"), 0) + 1
+            for _c, _n in _cats.items():
+                print(f"    - {_c} × {_n}", file=sys.stderr)
+            print("三选项：①删集重跑（缩小 --range 剔除失败集后重跑）②补--sessdata（浏览器复制 SESSDATA 后重跑）③加--skip-failed跳过（豁免失败集，仅转录成功集）", file=sys.stderr)
+            print("=" * 65, file=sys.stderr)
+            sys.exit(2)
+    # 中文注释：阶段二仅阶段一全绿（或失败集全部被豁免）才启动
+    _skip_pages = {d.get("page") for d in skipped_entries}
+    effective_parts = [p for p in selected_parts if p.get("page") not in _skip_pages]
+    # 中文注释：阶段二入口校验音频 100% 就绪，否则拒绝并指去向
+    _missing = []
+    for p in effective_parts:
+        _af, _ = _audio_paths(p)
+        if not (_af.exists() and _af.stat().st_size >= 10240):
+            _missing.append(p)
+    if _missing:
+        print("\n" + "=" * 65, file=sys.stderr)
+        print("[✗] 阶段二拒绝启动：音频未 100% 就绪（请回阶段一排查音频目录）", file=sys.stderr)
+        for _m in _missing:
+            _af, _ = _audio_paths(_m)
+            print(f"    - P{_m['page']:02d} {_m['title']} 缺失/过小：{_af}", file=sys.stderr)
+        print(f"去向：检查 {ws.audio_dir} 与 parts.json，补齐后重跑 pipeline（断点续派自动跳过已完成集）", file=sys.stderr)
+        print("=" * 65, file=sys.stderr)
+        sys.exit(2)
+    print("=" * 65)
+    print(f"[*] 阶段二：批量转录（共 {len(effective_parts)} 集，并发 {tx_workers} 集）")
+    print("=" * 65)
+
+    def _extract_text(p):
+        p_num = p["page"]
+        audio_file, clean_p_title = _audio_paths(p)
         transcript_clean_file = ws.subtitles_dir / f"P{p_num:02d}_{clean_p_title}_clean.txt"
-        transcript_text = ""
         if transcript_clean_file.exists() and transcript_clean_file.stat().st_size > 50 and not args.force:
-            print(f"    [2/4] 转录文本已存在，跳过 ASR: {transcript_clean_file.name}")
-            transcript_text = transcript_clean_file.read_text(encoding="utf-8")
-        else:
-            # Try official subtitles if online
-            sub_res = None
-            if not info.get("is_local"):
-                sub_res = SubtitleFetcher.fetch_best_subtitle(bvid, p["cid"], sessdata=args.sessdata)
-            if sub_res:
-                print(f"    [2/4] 命中官方/AI字幕，直接免转录抽取 ({sub_res['total_items']} 条)")
-                transcript_text = sub_res["full_text"]
-            else:
-                print(f"    [2/4] 启动语音转录 (策略: {getattr(args, 'engine', 'auto')})...")
-                fallback_allowed = True if args.allow_local_fallback is None else args.allow_local_fallback
-                asr_res = AudioTranscriber.transcribe(
-                    audio_path=audio_file,
-                    engine=getattr(args, "engine", "auto"),
-                    model_size=args.model,
-                    language=args.lang,
-                    allow_local_fallback=fallback_allowed,
-                )
-                transcript_text = asr_res["full_text"]
-                engine_used = asr_res.get("engine", f"whisper-{args.model}")
-                print(f"    [✓] 语音转录完成 ({engine_used})，共 {asr_res['total_segments']} 个片段")
+            print(f"    [P{p_num:02d}] 转录文本已存在，跳过 ASR: {transcript_clean_file.name}")
+            return transcript_clean_file.read_text(encoding="utf-8"), "cached"
+        engine = getattr(args, "engine", "auto")
+        # 中文注释：pipeline 内删除自动 whisper 兜底；--engine local 显式指定才走 whisper
+        if engine == "local":
+            print(f"    [P{p_num:02d}] 本地引擎转录 (whisper-{args.model})...")
+            asr_res = AudioTranscriber.transcribe(audio_path=audio_file, model_size=args.model, language=args.lang)
+            raw_text = asr_res["full_text"]
+            engine_used = asr_res.get("engine", f"whisper-{args.model}")
+            print(f"    [P{p_num:02d}] [✓] 本地转录完成 ({engine_used})，共 {asr_res['total_segments']} 个片段")
+            cleaned = TextCleaner.clean(raw_text)["cleaned_text"]
+            transcript_clean_file.parent.mkdir(parents=True, exist_ok=True)
+            transcript_clean_file.write_text(cleaned, encoding="utf-8")
+            return cleaned, engine_used
+        # 中文注释：engine=auto/agent 只走对话模型原生，导出 TRANSCRIBE_TASK
+        try:
+            tf = _export_transcribe_task(ws, p_num, clean_p_title, audio_file, title=info["title"], cid=p["cid"])
+        except Exception as err:
+            # 中文注释：对话模型不可用则终止任务 + 结构化报告，非零退出
+            print("\n" + "=" * 65, file=sys.stderr)
+            print(f"[✗] 对话模型不可用，终止任务：P{p_num:02d} TRANSCRIBE_TASK 导出失败：{err}", file=sys.stderr)
+            print("原因：对话模型原生转录通道不可用（任务书落盘失败）", file=sys.stderr)
+            print("①排障重跑：检查 articles 目录写权限与磁盘空间后重跑 pipeline", file=sys.stderr)
+            print("②显式--engine local：改用本地 whisper 转录（离线兜底）", file=sys.stderr)
+            print("③中止：放弃本趟转录，已收齐音频保留在 audio/ 可稍后重跑", file=sys.stderr)
+            print("=" * 65, file=sys.stderr)
+            sys.exit(3)
+        print(f"    [P{p_num:02d}] 已导出 TRANSCRIBE_TASK 待 Agent 原生转录: {tf.name} (status=need-agent-transcribe)")
+        return "", "need-agent-transcribe"
 
-            # 3. Safe typography normalization (non-destructive). Agent performs semantic rectification.
-            cleaned = TextCleaner.clean(transcript_text)
-            transcript_text = cleaned["cleaned_text"]
-            transcript_clean_file.write_text(transcript_text, encoding="utf-8")
+    manifest_entries = []
+    failed_entries = []
+    with ThreadPoolExecutor(max_workers=tx_workers) as tx_pool:
+        for p in effective_parts:
+            p["_text_future"] = tx_pool.submit(_extract_text, p)
 
-        # 4. Generate Single-Episode Tooling Artifacts (local baseline; Agent upgrades to video-replacement quality)
-        article_file = ws.articles_dir / f"P{p_num:02d}_{clean_p_title}_精读文章.md"
-        note_file = ws.notes_dir / f"P{p_num:02d}_{clean_p_title}_笔记.md"
+        for idx, p in enumerate(effective_parts, 1):
+            p_num = p["page"]
+            audio_file, clean_p_title = _audio_paths(p)
+            print(f"\n[{idx:02d}/{len(effective_parts):02d}] 汇总落盘 P{p_num:02d}: {p['title']}...")
+            try:
+                transcript_text, engine_used = p["_text_future"].result()
+            except SystemExit:
+                raise
+            except Exception as err:
+                print(f"    [✗] P{p_num:02d} 处理失败: {err}", file=sys.stderr)
+                failed_entries.append({
+                    "page": p_num, "title": p["title"], "cid": p["cid"],
+                    "error": str(err), "status": "failed",
+                })
+                continue
 
-        if article_file.exists() and article_file.stat().st_size > 1500 and not args.force:
-            print(f"    [4/4] 本地基础文章已存在: {article_file.name} (Agent 可升级为替代视频级)")
-        else:
-            print(f"    [4/4] 生成本地基础文章 (Agent 将升级为替代视频级)...")
-            article_md = DocumentBuilder.render_learning_article(
+            transcript_clean_file = ws.subtitles_dir / f"P{p_num:02d}_{clean_p_title}_clean.txt"
+
+            if engine_used == "need-agent-transcribe":
+                tr_task = ws.articles_dir / f"P{p_num:02d}_{clean_p_title}_TRANSCRIBE_TASK.md"
+                if not tr_task.exists():
+                    tr_task = _export_transcribe_task(ws, p_num, clean_p_title, audio_file, title=info["title"], cid=p["cid"])
+                print(f"    [agent] P{p_num:02d} 待 Agent 原生转录: {tr_task.name}")
+                manifest_entries.append({
+                    "page": p_num, "title": p["title"], "cid": p["cid"],
+                    "audio": str(audio_file), "transcript": str(transcript_clean_file),
+                    "task_prompt": str(tr_task), "article": "",
+                    "asr_engine": engine_used, "doc_engine": "agent-native",
+                    "status": "need-agent-transcribe",
+                })
+                continue
+
+            # Export standard Task Prompt for Agent to execute natively
+            prompts = DocumentBuilder.render_prompts(
                 title=info["title"],
                 part_title=f"P{p_num:02d} {p['title']}",
                 content=transcript_text,
-            )
-            article_file.write_text(article_md, encoding="utf-8")
-            print(f"    [✓] 本地基础文章生成完毕: {article_file.name} ({len(article_md)} 字)")
-
-        if not info["has_multi_pages"]:
-            note_md = DocumentBuilder.render_note(
-                title=info["title"],
-                part_title=p["title"],
-                content=transcript_text,
-                note_type=args.note_type,
                 desc=info.get("desc", ""),
             )
-            note_file.write_text(note_md, encoding="utf-8")
-            print(f"    [✓] 独立单集本地笔记生成完毕: {note_file.name} ({len(note_md)} 字) (Agent 可升级)")
+            task_file = ws.articles_dir / f"P{p_num:02d}_{clean_p_title}_TASK.md"
+            task_file.write_text(prompts["article_prompt"], encoding="utf-8")
 
-        kernel_path = ws.subtitles_dir / "kernels" / f"P{p_num:02d}_{clean_p_title}_kernel.json"
-        KernelExtractor.extract_single_kernel(p_num, p["title"], transcript_text, kernel_path=kernel_path)
+            # Single-Episode Tooling Artifacts (local baseline; Agent upgrades to video-replacement quality)
+            article_file = ws.articles_dir / f"P{p_num:02d}_{clean_p_title}_精读文章.md"
+            note_file = ws.notes_dir / f"P{p_num:02d}_{clean_p_title}_笔记.md"
 
-        manifest_entries.append({
-            "page": p_num,
-            "title": p["title"],
-            "cid": p["cid"],
-            "audio": str(audio_file),
-            "transcript": str(transcript_clean_file),
-            "article": str(article_file),
-            "asr_engine": asr_res.get("engine", f"whisper-{args.model}") if 'asr_res' in locals() else "official-subtitle",
-            "doc_engine": "agent-native",
-            "status": "success",
-        })
+            if article_file.exists() and article_file.stat().st_size > 1500 and not args.force:
+                print(f"    [artifact] 本地基础文章已存在: {article_file.name} (Agent 可升级为替代视频级)")
+            else:
+                article_md = DocumentBuilder.render_learning_article(
+                    title=info["title"],
+                    part_title=f"P{p_num:02d} {p['title']}",
+                    content=transcript_text,
+                )
+                article_file.write_text(article_md, encoding="utf-8")
+                print(f"    [artifact] 本地基础文章生成完毕: {article_file.name} ({len(article_md)} 字)")
 
-    # Phase 2: Native Knowledge-Block Note Aggregation for Multi-P Collections
-    if info["has_multi_pages"] and len(selected_parts) > 1:
+            if not info["has_multi_pages"]:
+                note_md = DocumentBuilder.render_note(
+                    title=info["title"],
+                    part_title=p["title"],
+                    content=transcript_text,
+                    note_type=args.note_type,
+                    desc=info.get("desc", ""),
+                )
+                note_file.write_text(note_md, encoding="utf-8")
+                print(f"    [artifact] 独立单集本地笔记生成完毕: {note_file.name} ({len(note_md)} 字) (Agent 可升级)")
+
+            kernel_path = ws.subtitles_dir / "kernels" / f"P{p_num:02d}_{clean_p_title}_kernel.json"
+            KernelExtractor.extract_single_kernel(p_num, p["title"], transcript_text, kernel_path=kernel_path)
+
+            manifest_entries.append({
+                "page": p_num,
+                "title": p["title"],
+                "cid": p["cid"],
+                "audio": str(audio_file),
+                "transcript": str(transcript_clean_file),
+                "task_prompt": str(task_file),
+                "article": str(article_file),
+                "asr_engine": engine_used,
+                "doc_engine": "agent-native",
+                "status": "success",
+            })
+
+    if failed_entries:
         print("\n" + "=" * 65)
-        print(f"[*] 阶段二：启动课程知识块智能聚合 (根据转录内容动态规划与合成大笔记)")
+        print(f"[!] 本趟共 {len(failed_entries)} 集处理失败（下载/转录/质检），已显式记入 manifest，重跑 pipeline --all 自动补齐：")
+        for f_ep in failed_entries:
+            print(f"    - P{f_ep['page']:02d} {f_ep['title']}: {str(f_ep['error'])[:160]}")
+        print("=" * 65)
+
+    # 中文注释：知识块聚合仅基于有效集（含转录成功与待 Agent 转录），豁免集不参与
+    # Phase 3: Native Knowledge-Block Note Aggregation for Multi-P Collections
+    if info["has_multi_pages"] and len(effective_parts) > 1:
+        print("\n" + "=" * 65)
+        print("[*] 阶段三：启动课程知识块智能聚合 (根据转录内容动态规划与合成大笔记)")
         print("=" * 65)
 
         # Collect transcript summaries to ground semantic topic planning in real spoken content
         summaries = {}
-        for p in selected_parts:
+        for p in effective_parts:
             p_num = p["page"]
             clean_t = "".join([c for c in p["title"] if c.isalnum() or c in (" ", "-", "_")]).strip()
             clean_f = ws.subtitles_dir / f"P{p_num:02d}_{clean_t}_clean.txt"
@@ -701,7 +1001,7 @@ def cmd_pipeline(args):
                 summaries[p_num] = clean_f.read_text(encoding="utf-8")[:300]
 
         plan = SemanticTopicPlanner.plan(
-            selected_parts,
+            effective_parts,
             course_title=info["title"],
             ws=ws,
             transcript_summaries=summaries,
@@ -715,25 +1015,50 @@ def cmd_pipeline(args):
         block_results = []
         for b in plan:
             eps = b["episodes"]
-            block_parts = [p for p in selected_parts if p["page"] in eps]
+            block_parts = [p for p in effective_parts if p["page"] in eps]
             if not block_parts:
                 continue
             kernels = KernelExtractor.extract_batch_kernels(block_parts, ws=ws, max_workers=min(len(block_parts), 5))
             res = BlockSynthesizer.synthesize_block(b, kernels, ws=ws)
+
+            # Export Synthesis Task Prompt for Agent to execute natively
+            clean_b_title = "".join(c for c in b["block_title"] if c.isalnum() or c in (" ", "-", "_")).strip()
+            synthesis_prompt = BlockSynthesizer.build_synthesis_prompt(b, kernels)
+            b_task_file = ws.notes_dir / f"模块{b['block_id']:02d}_{clean_b_title}_TASK.md"
+            b_task_file.write_text(synthesis_prompt, encoding="utf-8")
+            res["task_prompt"] = str(b_task_file)
+
             block_results.append(res)
 
-        manifest_data = ws.load_manifest()
+        # 中文注释：加载转绝对、使用后保存转相对
+        manifest_data = _load_manifest_abs(ws)
         manifest_data["knowledge_blocks_plan"] = plan
         manifest_data["knowledge_blocks_results"] = block_results
-        ws.save_manifest(manifest_data)
+        _save_manifest_rel(ws, manifest_data)
 
-    ws.save_manifest({
+    _existing = _load_manifest_abs(ws)
+    _merged = {d.get("page"): d for d in _existing.get("details", []) if isinstance(d, dict)}
+    for d in manifest_entries:
+        _merged[d.get("page")] = d
+    _failed_merged = {d.get("page"): d for d in _existing.get("failed_episodes", []) if isinstance(d, dict)}
+    for d in failed_entries:
+        _failed_merged[d.get("page")] = d
+    # 中文注释：按 page 合并后相对路径化保存，豁免集记入跳过名单
+    _save_manifest_rel(ws, {
         "pipeline_completed": True,
-        "processed_episodes": len(manifest_entries),
-        "details": manifest_entries,
+        "processed_episodes": sum(1 for d in _merged.values() if d.get("status") == "success"),
+        "details": [_merged[k] for k in sorted(_merged)],
+        "failed_episodes": [_failed_merged[k] for k in sorted(_failed_merged)],
+        "skipped_episodes": skipped_entries,
+        "skipped_pages": [d.get("page") for d in skipped_entries],
     })
     print("\n" + "=" * 65)
-    print(f"[✓] 全流程流水线执行完毕！全部产物已按任务归档至: {ws.root_dir}")
+    print(f"[✓] 工具层流水线执行完毕！语料与任务书已归档至: {ws.root_dir}")
+    print("【★ 宿主 Agent 接管指南】：")
+    print(f"  1. 单集精读文章任务书: {ws.articles_dir}/*_TASK.md")
+    if info["has_multi_pages"] and len(effective_parts) > 1:
+        print(f"  2. 知识块聚合笔记任务书: {ws.notes_dir}/*_TASK.md")
+    print("  3. 请主程序以 5 个并发通道（Task 子代理或并行会话）直接领跑任务书，执行真正的认知写作！")
     print("=" * 65)
 
 
@@ -795,16 +1120,84 @@ def cmd_cluster_notes(args):
         res = BlockSynthesizer.synthesize_block(b, kernels, ws=ws, force=args.force)
         block_results.append(res)
 
-    # Save manifest
-    manifest = ws.load_manifest()
+    # 中文注释：加载转绝对、保存转相对
+    manifest = _load_manifest_abs(ws)
     manifest["knowledge_blocks_plan"] = plan
     manifest["knowledge_blocks_results"] = block_results
-    ws.save_manifest(manifest)
+    _save_manifest_rel(ws, manifest)
 
     print("\n" + "=" * 65)
     print(f"[✓] 知识块聚合重构执行完毕！共生成 {len(block_results)} 篇体系化核心复习大笔记")
     print(f"[✓] 笔记存储目录: {ws.notes_dir}")
     print("=" * 65)
+
+
+def cmd_info(args):
+    """中文注释：做实 info：WBI 有效期/sessdata 有无/412 状态/断点续跑示例。"""
+    import shutil
+    import sys
+    import time as _time
+    if getattr(args, "refresh", False):
+        try:
+            if _STATUS_FILE.exists():
+                _STATUS_FILE.unlink()
+                print("[*] 已清理缓存状态文件")
+        except Exception:
+            pass
+    print("=" * 65)
+    print("【系统运行环境与工具链检查】")
+    print(f"• Python 运行环境: v{sys.version.split()[0]} ({sys.executable})")
+    ffmpeg_path = shutil.which("ffmpeg")
+    print(f"• FFmpeg 状态   : {'已就绪 (' + ffmpeg_path + ')' if ffmpeg_path else '未找到（建议安装以支持音频切片）'}")
+    try:
+        import faster_whisper
+        print(f"• faster-whisper : 已就绪 (v{faster_whisper.__version__}) - 100% 离线本地转录 (无需任何 Key)")
+    except ImportError:
+        print("• faster-whisper : 未安装 (可运行 pip install faster-whisper)")
+    print("• 架构模式      : 宿主 Agent 原生派发模式（零环境变量、零网络代理绑定）")
+    print("=" * 65)
+    # 中文注释：WBI key 有效期读内存缓存+缓存文件
+    print("【WBI Key 状态】")
+    try:
+        from src.core.wbi import WbiSigner
+        exp = getattr(WbiSigner, "_cache_expire_time", 0.0)
+        has_key = bool(getattr(WbiSigner, "_cached_mixin_key", None))
+        if has_key and exp > _time.time():
+            print(f"• WBI Key：有效，有效期至 {_time.strftime('%Y-%m-%d %H:%M:%S', _time.localtime(exp))}")
+        elif has_key:
+            print("• WBI Key：已过期，下次请求自动刷新")
+        else:
+            print("• WBI Key：无记录（尚未请求，首次调用自动获取）")
+    except Exception as err:
+        print(f"• WBI Key：无记录（{err}）")
+    # 中文注释：sessdata 只显示有/无，脱敏不打印值
+    sess = getattr(args, "sessdata", None)
+    print(f"• SESSDATA：{'有（已传入，脱敏不显示）' if sess else '无（未传入 --sessdata）'}")
+    # 中文注释：上次 412/熔断状态
+    print("【上次 412/熔断状态】")
+    try:
+        if _STATUS_FILE.exists():
+            print(f"• 状态文件：{_STATUS_FILE}（仓库相对：{_to_relative_str(str(_STATUS_FILE))}）")
+            print(f"• 内容：{_STATUS_FILE.read_text(encoding='utf-8')[:500]}")
+        else:
+            print("• 无记录")
+    except Exception as err:
+        print(f"• 无记录（读取失败：{err}）")
+    print("=" * 65)
+    print("【Agent 自主驱动工作协议】：")
+    print("1. 物理层跑批: python src/cli.py pipeline \"<链接>\" --all")
+    print("2. 语料与任务书自动生成于 output/<任务名>/")
+    print("   - articles/PXX_*_TASK.md: 单集精读文章提示词")
+    print("   - notes/模块XX_*_TASK.md: 知识块聚合复习笔记提示词")
+    print("3. 宿主 Agent 主程序以 5 个并发通道（Task子代理或并行生成）读取任务书，直接撰写落盘！")
+    print("=" * 65)
+    print("【可复制的断点续跑命令示例】：")
+    print('python src/cli.py pipeline "<链接>" --all --sessdata YOUR_SESSDATA')
+    print('python src/cli.py pipeline "<链接>" --range 1-10 --sessdata YOUR_SESSDATA')
+    print("=" * 65)
+
+
+cmd_agent_info = cmd_info
 
 
 def main():
@@ -834,15 +1227,7 @@ def main():
     p_audio.add_argument("--chunk-minutes", type=int, default=10, help="Split audio into balanced chunks of ~N minutes (0=disabled)")
     p_audio.add_argument("--json", action="store_true", help="Output in JSON format")
 
-    # subtitle
-    p_sub = subparsers.add_parser("subtitle", help="Fetch official or AI subtitle fallback")
-    p_sub.add_argument("url", help="Bilibili URL or BV ID")
-    p_sub.add_argument("--page", type=int, default=None, help="Page/Part index (auto-detects ?p=X from URL if omitted)")
-    p_sub.add_argument("--task", default=None, help="Custom task workspace folder name")
-    p_sub.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
-    p_sub.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
-    p_sub.add_argument("--output", help="Save subtitle to explicit file or directory", default=None)
-
+    # 中文注释：subtitle 子命令已移除，统一走转录；subtitles/ 目录仅作转录语料存储
     # clean
     p_clean = subparsers.add_parser("clean", help="Clean transcript text")
     p_clean.add_argument("file", help="Raw transcript file path")
@@ -896,7 +1281,16 @@ def main():
     p_pipe.add_argument("--task", default=None, help="Custom task workspace folder name")
     p_pipe.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
     p_pipe.add_argument("--force", action="store_true", help="Force re-transcribing and re-generating even if exists")
+    p_pipe.add_argument("--prefetch-workers", type=int, default=12, help="Parallel audio prefetch (download/extract) threads")
+    p_pipe.add_argument("--transcribe-episodes", type=int, default=2, help="Episodes transcribed concurrently (each uses chunk-level pool internally)")
+    p_pipe.add_argument("--skip-failed", action="store_true", default=False, help="Explicit opt-in: exempt failed episodes from transcription gate (recorded in manifest skip list)")
     p_pipe.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
+
+    # info / agent-info
+    p_info = subparsers.add_parser("info", aliases=["agent-info"], help="Show environment & toolchain readiness status")
+    p_info.add_argument("--refresh", action="store_true", help="Clear cached status")
+    # 中文注释：sessdata 仅判有/无，脱敏不打印
+    p_info.add_argument("--sessdata", help="Optional SESSDATA cookie (only shows 有/无)", default=None)
 
     # cluster-notes
     p_cl = subparsers.add_parser("cluster-notes", help="Cluster multi-P course into coherent knowledge block notes")
@@ -919,13 +1313,14 @@ def main():
     dispatch = {
         "parse": cmd_parse,
         "audio": cmd_audio,
-        "subtitle": cmd_subtitle,
         "clean": cmd_clean,
         "prompt": cmd_prompt,
         "note": cmd_note,
         "transcribe": cmd_transcribe,
         "pipeline": cmd_pipeline,
         "cluster-notes": cmd_cluster_notes,
+        "agent-info": cmd_agent_info,
+        "info": cmd_info,
     }
     dispatch[args.subcommand](args)
 
