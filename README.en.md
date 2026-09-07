@@ -31,7 +31,7 @@ However, watching video as an input medium carries four major inherent bottlenec
 3. **Audio Noise & Cross-Episode Fragmentation**: Microphone adjustments, verbal tics, and narrative cases abruptly severed by class bell intervals;
 4. **The "Illusion of Competence" Without Feedback**: Passive audiovisual consumption easily tricks the brain into feeling "I get it," yet once the video closes and an actual exam problem or coding assignment begins, the mind goes blank.
 
-**Bili-Video2Book exists to losslessly reconstruct the derivation, examples, and mental models of long videos into structured, searchable, publication-grade text with active self-testing closure.**
+**Bili-Video2Book exists to losslessly reconstruct the derivation, examples, and mental models of long videos into structured, searchable, and self-tested study articles and review notes.**
 
 ---
 
