@@ -2,10 +2,10 @@
 
 # 📚 Bili-Video2Book
 
-### Turn Bilibili lectures into readable deep-dive textbooks and study notes in one click.
+### 把 B 站长视频和系列网课，一键变成能直接当教材读的深度长文与备考笔记
 
 <p align="center">
-  <b>Skip watching hours of video: read 5x faster, search anything instantly, and master every concept with full derivations and built-in practice questions.</b>
+  <b>完整保留老师讲课的每一步推导、板书演算与核心思路；看文字比刷视频快 5 倍，支持关键词秒搜，文末附带练习题助你真正学懂。</b>
 </p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
@@ -14,172 +14,173 @@
 [![Fallback: faster-whisper int8](https://img.shields.io/badge/Fallback-faster--whisper%20int8-orange?style=flat-square)](https://github.com/SYSTRAN/faster-whisper)
 [![Tests: 34 passing](https://img.shields.io/badge/Tests-34%20passing-brightgreen?style=flat-square)](#)
 
-**[中文说明](README.zh-CN.md)** &nbsp;·&nbsp; [Why Replace Video](#the-hidden-cost-of-watching-video-is-time-and-unsearchability) &nbsp;·&nbsp; [What It Does](#what-it-does) &nbsp;·&nbsp; [Two Deliverable Forms](#two-distinct-forms-two-different-missions) &nbsp;·&nbsp; [Install](#install) &nbsp;·&nbsp; [How to Use](#how-to-use) &nbsp;·&nbsp; [Design Principles](#design-principles)
+**[English](README.en.md)** &nbsp;·&nbsp; [它解决什么问题](#看视频学知识最大的代价是时间与不可检索) &nbsp;·&nbsp; [它能做什么](#它能做什么) &nbsp;·&nbsp; [两套双轨形态](#两套双轨形态怎么分工) &nbsp;·&nbsp; [安装](#安装) &nbsp;·&nbsp; [怎么用](#怎么用) &nbsp;·&nbsp; [设计原则](#设计原则)
 
 </div>
 
 ---
 
-## The hidden cost of watching video is time and unsearchability
+## 看视频学知识，最大的代价是时间与不可检索
 
-We watch dozens of hours of university lecture videos and engineering talks because textbooks are often dry and condensed, while lectures contain the instructor's **vivid derivations, real-world pitfall recaps, blackboard calculations, and cognitive metaphors**.
+我们之所以选择花费几十个小时去刷大学公开课或工程教学视频，是因为纸质教材往往写得过于晦涩，而视频里有主讲人极其生动的**推导演进、真实踩坑经验、黑板离散计算与认知隐喻**。
 
-However, watching video as an input medium carries four major inherent bottlenecks:
+但“看视频”本身作为一种输入媒介，存在四个天然的致命硬伤：
 
-1. **Extremely Low Information Throughput**: Normal speaking rate is only 150–200 words/minute. Even at 1.5x speed, a 40-hour lecture series drains 26 hours of sitting in front of a screen. In contrast, human reading speed is 800–1200 words/minute—a 4x to 6x efficiency multiplier;
-2. **Zero Full-Text Searchability & Painful Revision**: Video is a linear, unsearchable stream. Reviewing a specific formula, configuration parameter, or proof requires minutes of scrub-bar hunting and pause-frame guesswork;
-3. **Audio Noise & Cross-Episode Fragmentation**: Microphone adjustments, verbal tics, and narrative cases abruptly severed by class bell intervals;
-4. **The "Illusion of Competence" Without Feedback**: Passive audiovisual consumption easily tricks the brain into feeling "I get it," yet once the video closes and an actual exam problem or coding assignment begins, the mind goes blank.
+1. **极低的信息通量与不可控的时间损耗**：人类听觉语速通常只有 150~200 字/分钟，即便开启 1.5 倍速，一门 40 小时的网课也需要枯坐 26 小时；而人类眼睛的阅读速度是 800~1200 字/分钟，信息摄取效率相差 4~6 倍；
+2. **不可检索与碎片回溯成本极高**：视频是线性且不可全文搜索的流媒体。考前复习若想查一个公式细节或配置项，必须在数小时的进度条上痛苦地反复拖拽、暂停、截屏；
+3. **被迫忍受视听噪音与跨集割裂**：调试麦克风、口头禅、闲聊琐碎，以及因分集下课被强行切断的工程案例；
+4. **缺乏即时反馈的“虚假熟练度”**：单向视听输入极易让大脑产生“听懂了”的快感错觉，但真正合上视频动笔做题或实际写代码时，依然大脑一片空白。
 
-**Bili-Video2Book exists to losslessly reconstruct the derivation, examples, and mental models of long videos into structured, searchable, publication-grade text with active self-testing closure.**
+**Bili-Video2Book 致力于将视频中具有知识价值的推导演进、真实示例与核心思维模型，无损重构为高效、结构化、可全文检索且具备自学自测闭环的出版级文字资产。**
 
 ---
 
-## What it does
+## 它能做什么
 
-**Tens of hours of lectures in, two structured books out.**
+**几十小时网课进，两套自洽专著出。**
 
-Give it any Bilibili single long video or multi-part lecture series URL. The toolchain handles lightweight audio extraction, lossless chunking, multimodal direct ingestion, and global semantic topic planning, yielding two orthogonal deliverables:
+输入 B 站任意长视频或多 P 连载网课链接，系统自动完成轻量人声音频抓取、无损切片提取、多模态直读与全局知识块规划，交付两套各司其职的双轨产物：
 
 ```text
-Traditional Video Watching:
-[40 hours of streaming] ──► Low throughput ➔ Scrubbing bar ➔ Unsearchable ➔ Fragmented ➔ No test closure
+传统看视频学习方式：
+[40小时漫长视听] ──► 语速受限 ➔ 进度条反复拖拽 ➔ 无法搜索 ➔ 跨集割裂 ➔ 无检验闭环
 
-Bili-Video2Book Reconstructed:
-[One-click Batch Flow] ──┬──► 📘 Standalone In-Depth Tutorial Articles (articles/)
-                         │     └── Full derivations · Blackboard math · End-to-end cases · Self-test questions
-                         │
-                         └──► 📑 Module Review Cheatsheets (notes/)
-                               └── ASCII topologies · Ontology merge (> Source: Pxx) · Adaptive matrices · Anti-patterns
+Bili-Video2Book 重构方式：
+[一键批量重构] ──┬──► 📘 9 篇单集精读教材长文（约 15 万字，articles/）
+                 │     └── 全量推导 · 真实黑板运算 · 案例闭环 · 随堂自测(带正文溯源解析)
+                 │
+                 └──► 📑 6 大模块复习速查笔记（高密度 Cheatsheet，notes/）
+                       └── ASCII 拓扑框架 · 概念本体融合(打标 > 来源: Pxx) · 自适应对比矩阵 · 避坑清单
 ```
 
-### Strict Closed-Book Grounding (Anti-Hallucination)
-- Strictly forbids hallucinating modern tech buzzwords, external tech stacks, or corporate systems not mentioned in the transcript;
-- Explicitly writes *"Not specified in lecture"* whenever details are absent, preserving the speaker's original metaphors without external embellishments.
+### 严格闭卷事实边界（Strict Grounding）
+本项目全流程贯彻“闭卷保真”防幻觉机制：
+- 严禁脑补转录未出现的现代大厂流行词或虚构外部系统；
+- 语料中未说明的地方明确写明“课程未说明”，保留讲述者原汁原味的比喻与表达方式。
 
 ---
 
-## Two distinct forms, two different missions
+## 两套双轨形态怎么分工
 
-Tailored for the contrasting cognitive requirements between first-time in-depth learning and rapid exam revision:
+针对读者在自学阶段与复习阶段截然不同的认知诉求，两套交付物严格遵循不同的**内容纪律**与**排版规范**：
 
-| Form | Reader is | Must have | Must **NOT** have |
+| 文体形态 | 读者此刻在 | 必须包含（Must have） | 坚决不能有（Must NOT have） |
 | :--- | :--- | :--- | :--- |
-| 📘 **Deep-Dive Article**<br>`articles/` | **In-depth learning**<br>(Completely replaces watching the video) | Exhaustive derivation steps, blackboard discrete math & proofs, case lifecycle, **2–3 end-of-article self-test questions with grounded explanations** | Summarized skips, filler words, audiovisual phrasing ("as we see on screen"), ungrounded external hallucinations |
-| 📑 **Review Cheatsheet**<br>`notes/` | **Revision / Rapid Lookup**<br>(High-density Cheatsheet) | **Opening ASCII knowledge topology tree**, cross-episode ontology merge (annotated `> Source: Pxx`), **adaptive comparison matrices**, anti-pattern checklists | **Narrative case storytelling**, **exam test papers**, forced empty tables without comparable entities |
+| 📘 **精读教材长文**<br>`articles/` | **系统深入自学**<br>（彻底替代原长视频） | 详尽推导步骤、黑板离散计算与证明、案例前因后果、**文末 2~3 道紧扣核心考点的深度自测题（附带可在正文溯源的详细解析）** | 概括性跳步、口水碎语、“视频中我们看到”等视听口吻、外部事实虚构脑补 |
+| 📑 **模块速查笔记**<br>`notes/` | **考前突击 / 检索查阅**<br>（高密度 Cheatsheet） | **开篇 ASCII 知识拓扑框架树**、跨集概念本体深度融合（打标 `> 来源: Pxx` 方便回溯）、**自适应横向对比矩阵**、常见反模式避坑清单 | **长篇大论的案例叙述**、**自测试卷练习题**、无对比要素时的强行空白表格 |
 
 ---
 
-## Two-tier architecture
+## 双层协同架构
 
 ```text
-[ Input Bilibili Video / Course Series URL ]
-                     │
-                     ▼
-┌── 🛠️ Tooling Tier (CLI Pipeline · Pure Local Performance) ────────┐
-│  1. Topology Parser : Single/Multi-P/Series & ?p=X parameter detection │
-│  2. Lightweight Stream : 64kbps DASH voice-optimized audio download │
-│  3. Lossless Chunker : 10-minute stream-copy instant segmentation  │
-│  4. Acoustic ASR     : Multimodal dialogue model priority ➔ Local Whisper │
-│  5. Topic Planner    : Kernel extraction & topic_plan.json generation │
-└────────────────────────────────────────────────────────────────────┘
-                     │ Emits clean text, kernels JSON, and AGENT_TASK.md
-                     ▼
-┌── 🧠 Synthesis Tier (Host Dialogue Agent · Gemini 3.8 Flash High) ───┐
-│  1. Semantic Rectifier : Literal proofreading with domain hints    │
-│  2. In-Depth Articles  : Standalone video-replacement chapters     │
-│  3. Review Cheatsheets : Cross-episode ontology merge & topologies │
-└────────────────────────────────────────────────────────────────────┘
+[ 输入 B 站任意长视频 / 连载网课链接 ]
+                 │
+                 ▼
+┌── 🛠️ 工具层 (CLI 管道 · 纯本地极速) ──────────────────────────────┐
+│  1. 拓扑解析  : 单P/多P/合集识别与 ?p=X 分P参数自动嗅探 (parser.py)    │
+│  2. 轻量抓取  : 64kbps DASH 纯净人声音频流直取 (fetcher.py + wbi.py) │
+│  3. 均衡切片  : 10 分钟无损流拷贝瞬间切片 (audio_chunker.py)          │
+│  4. 声学转录  : 优先对话模型多模态直读 ➔ 经授权回退本地 Whisper      │
+│  5. 语义规划  : 提取高纯度知识元并生成全局 topic_plan.json (planner.py) │
+└───────────────────────────────────────────────────────────────────────┘
+                 │ 导出规范化语料、知识元原子与 Agent 任务书
+                 ▼
+┌── 🧠 智能合成层 (宿主对话大模型 · Gemini 3.8 Flash High) ───────────┐
+│  1. 语义校对  : 依据领域线索纯字面纠偏（只改字，不改话）              │
+│  2. 精读长文  : 撰写单集教材级深度自学长文 (articles/Pxx_长文.md)     │
+│  3. 模块大笔记: 跨集本体融合、ASCII 拓扑、自适应矩阵 (notes/模块XX.md)  │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Install
+## 安装
 
-Use directly as a native Agent Skill, or run as a standalone local CLI.
+支持作为成熟 AI Agent 的原生 Skill 挂载，亦可作为本地独立 CLI 工具运行。
 
-### 1. 🗣️ Ask your Agent (Recommended)
-Paste this into OpenCode, Claude Code, or Cursor:
+### 1. 🗣️ 交给 Agent 一句话（推荐）
+在 OpenCode、Claude Code、Cursor 等助手中直接发送：
 ```text
-Install https://github.com/LINJIANG12/bili-video2book as my global skill.
+把 https://github.com/LINJIANG12/bili-video2book 安装为我的全局 Skill。
 ```
 
-### 2. 🧬 Git Clone
+### 2. 🧬 Git Clone 本地安装
 ```bash
 git clone https://github.com/LINJIANG12/bili-video2book.git
 cd bili-video2book
 
-# System dependency (for lossless fast audio remux):
-# Ensure ffmpeg is available in your system PATH
+# 系统依赖（用于音视频无损极速切片）：
+# 请确保系统已安装 ffmpeg 并加入环境变量 PATH
 
-# Optional dependency (for offline local model fallback):
+# 可选依赖（用于无网络时离线声学模型兜底）：
 pip install faster-whisper
 ```
 
 ---
 
-## How to use
+## 怎么用
 
-### Scenario 1: One-click Full Course Pipeline
+### 场景一：一键处理整门多 P 课程（全自动流水线）
 ```bash
 python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all
 ```
 
-### Scenario 2: Process a Single Episode or Range
+### 场景二：处理特定单集或分集区间
 ```bash
-# Process episode 1
+# 处理单集（例如第 1 讲）
 python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --page 1
 
-# Process episode range 2 through 5
+# 处理指定分集区间（例如第 2 讲至第 5 讲）
 python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range 2-5
 ```
 
-### Scenario 3: Cluster and Re-synthesize Knowledge Blocks Only
+### 场景三：仅重新聚合知识块复习大笔记
 ```bash
 python src/cli.py cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --replace
 ```
 
-### Scenario 4: Transcribe Local Audio Directly
+### 场景四：直接转录本地音频
 ```bash
 python src/cli.py transcribe "lecture.m4a" --engine auto
 ```
 
 ---
 
-## Real-world task workspace
+## 真实交付物形态
 
-Every task is strictly encapsulated in an isolated sandbox directory:
+所有任务严格采用**独立沙盒工作区（Task Workspace）**归档：
 
 ```text
-output/【Database Course】Final_Sprint_BV14VqVBrEhc/
-├── articles/                     # 📘 9 standalone deep-dive articles (~15k chars each, with self-tests)
-│   ├── P01_Introduction_article.md
-│   ├── P02_Relational_Algebra_article.md
+output/【数据库速成课】期末突击_BV14VqVBrEhc/
+├── articles/                     # 📘 9 集单集精读教材长文（每篇约 1.5 万字，含自测题）
+│   ├── P01_1绪论_精读文章.md
+│   ├── P02_2关系数据库_精读文章.md
 │   └── ...
-├── notes/                        # 📑 6 synthesized review notes (High-density Cheatsheets)
-│   ├── Module01_Database_Intro_P01-P02_notes.md
-│   ├── Module02_SQL_Core_Syntax_P03_notes.md
+├── notes/                        # 📑 6 大知识块融合复习速查笔记（高密度 Cheatsheet）
+│   ├── 模块01_数据库系统概论与关系模型基础_P01-P02_笔记.md
+│   ├── 模块02_结构化查询语言SQL核心语法与应用_P03_笔记.md
 │   └── ...
-├── subtitles/                    # 📝 Raw & normalized transcripts + knowledge kernel JSONs
-│   ├── P01_Introduction_clean.txt
+├── subtitles/                    # 📝 原始与清洗后转录文本 + 知识元原子 JSON
+│   ├── P01_1绪论_clean.txt
 │   └── kernels/
-├── audio/                        # 🎵 64kbps voice audio archives
-├── topic_plan.json               # 🗺️ Cross-episode semantic clustering map
-└── manifest.json                 # 📋 Task metadata and pipeline execution log
+├── audio/                        # 🎵 64kbps 纯净人声音频留档
+├── topic_plan.json               # 🗺️ 跨集知识块聚类拓扑规划
+└── manifest.json                 # 📋 任务元数据与流水线执行记录
 ```
 
 ---
 
-## Design principles
+## 核心设计原则
 
-- **Text must completely replace long video.** Refuse shallow 500-word summaries; preserve the instructor's derivations, calculations, and metaphors.
-- **Strict Grounding as bedrock.** Strictly forbid hallucinating unmentioned technical concepts or fabricated enterprise systems.
-- **Structure follows content.** Reject rigid templates; adaptive comparison matrices generate naturally where comparable entities exist.
-- **Eliminate cross-episode fragmentation.** Multi-part lectures are planned globally—concepts scattered across episodes are unified into singular entries.
-- **Learning-testing closure.** Tutorial articles conclude with rigorous self-test questions whose reasoning traces 100% back to the text.
+- **文字必须能够彻底替代长视频。** 拒绝浮躁的 500 字提纲，宁可写满万字，绝不遗漏推导环节与关键板书。
+- **事实边界坚如磐石。** 语料即法典，禁止引入外部未经主讲人提及的技术概念与虚构大厂案例。
+- **结构因内容自适应。** 坚决摒弃生硬死板的工科模板，对比矩阵按需自然生成，全学科通用。
+- **消灭跨集割裂感。** 针对连载网课实行全局语义规划，同一概念分散讲，笔记集中深度融。
+- **学测闭环促掌握。** 精读长文文末配备针对核心考点的自测题，答案解析 100% 在正文中溯源。
 
 ---
 
-## License
+## 许可证
 
-This project is licensed under the [MIT License](LICENSE).
+本项目基于 [MIT License](LICENSE) 开源。欢迎提交 Issue 与 Pull Request，共同推动高效、严肃、有深度的知识沉淀工程！
