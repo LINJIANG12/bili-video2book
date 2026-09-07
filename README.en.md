@@ -59,8 +59,8 @@ Bili-Video2Book Reconstructed:
 - **Local Course Directories**: Pass an entire directory of lecture videos—the engine automatically applies natural sorting (e.g. `01, 02`, `Part1, Part2`) to order P01..Pn, then runs the full batch extraction, in-depth article generation, and module review synthesis!
 
 ### Strict Closed-Book Grounding (Anti-Hallucination)
-- Strictly forbids hallucinating modern tech buzzwords, external tech stacks, or corporate systems not mentioned in the transcript;
-- Explicitly writes *"Not specified in lecture"* whenever details are absent, preserving the speaker's original metaphors without external embellishments.
+- **Video content as sole source of truth**: Strictly forbids hallucinating unmentioned examples, figures, statistics, jargon, or conclusions;
+- **Explicit gaps, faithful preservation**: Explicitly writes *"Not mentioned in video"* whenever details are absent, preserving the speaker's authentic metaphors and reasoning path without ungrounded embellishments.
 
 ---
 
@@ -187,7 +187,7 @@ output/【Database Course】Final_Sprint_BV14VqVBrEhc/
 ## Design principles
 
 - **Text must completely replace long video.** Refuse shallow 500-word summaries; preserve the instructor's derivations, calculations, and metaphors.
-- **Strict Grounding as bedrock.** Strictly forbid hallucinating unmentioned technical concepts or fabricated enterprise systems.
+- **Strict Grounding as bedrock.** Strictly forbid hallucinating unmentioned examples, figures, concepts, or fabricated cases; preserve original nuance faithfully.
 - **Structure follows content.** Reject rigid templates; adaptive comparison matrices generate naturally where comparable entities exist.
 - **Eliminate cross-episode fragmentation.** Multi-part lectures are planned globally—concepts scattered across episodes are unified into singular entries.
 - **Learning-testing closure.** Tutorial articles conclude with rigorous self-test questions whose reasoning traces 100% back to the text.
