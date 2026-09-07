@@ -12,7 +12,7 @@
 [![适配环境: OpenCode | Claude Code | Cursor](https://img.shields.io/badge/适配环境-OpenCode%20%7C%20Claude%20Code%20%7C%20Cursor-111827?style=flat-square)](SKILL.md)
 [![AI引擎: 对话大模型多模态直读](https://img.shields.io/badge/转录引擎-多模态原生直读-8A2BE2?style=flat-square)](#)
 [![离线兜底: 本地 Whisper int8](https://img.shields.io/badge/离线兜底-faster--whisper%20int8-orange?style=flat-square)](https://github.com/SYSTRAN/faster-whisper)
-[![测试覆盖: 34项全通过](https://img.shields.io/badge/自动化测试-34%20项全通过-brightgreen?style=flat-square)](#)
+[![测试覆盖: 40项全通过](https://img.shields.io/badge/自动化测试-40%20项全通过-brightgreen?style=flat-square)](#)
 
 **[English](README.en.md)** &nbsp;·&nbsp; [为什么需要](#为什么用视频学硬知识往往事倍功半) &nbsp;·&nbsp; [它能做什么](#它能做什么) &nbsp;·&nbsp; [双轨交付矩阵](#双轨交付矩阵各司其职) &nbsp;·&nbsp; [双层架构](#双层协同架构) &nbsp;·&nbsp; [极速上手](#安装与快速开始) &nbsp;·&nbsp; [设计原则](#核心设计原则)
 
@@ -39,7 +39,7 @@
 
 **几十小时网课进，两套自洽专著出。**
 
-输入 B 站任意长视频或多 P 连载网课链接，系统自动完成轻量人声音频抓取、无损切片提取、多模态直读与全局知识块规划，交付两套各司其职的双轨产物：
+输入 B 站任意长视频/连载网课链接、本地视频文件（`.mp4`/`.mkv`/`.mov`/`.flv` 等）或本地整套网课目录，系统自动完成轻量人声音频提取、无损切片、多模态直读与全局知识块规划，交付两套各司其职的双轨产物：
 
 ```text
 传统看视频学习方式：
@@ -52,6 +52,11 @@ Bili-Video2Book 重构方式：
                  └──► 📑 6 大模块复习速查笔记（高密度 Cheatsheet，notes/）
                        └── ASCII 拓扑框架 · 概念本体融合(打标 > 来源: Pxx) · 自适应对比矩阵 · 避坑清单
 ```
+
+### 🌐 在线与本地多态输入支持
+- **B 站在线视频/系列**：单 P 视频、多 P 连载网课、UGC 合集全自动解析，自动识别 `?p=X`；
+- **本地单视频/音频文件**：支持 `.mp4`、`.mkv`、`.mov`、`.avi`、`.flv`、`.webm`、`.ts` 等全格式视频，自动高速剥离 64kbps 纯净人声音频；
+- **本地整套课程目录**：直接将存有几十讲视频的本地文件夹传入，系统按文件名自然排序（智能识别 `01, 02`、`第1讲, 第2讲`）编排分 P，一键完成整套课程的批量提取、精读文章与模块大笔记聚合！
 
 ### 严格闭卷事实边界（Strict Grounding）
 本项目全流程贯彻“闭卷保真”防幻觉机制：
@@ -74,12 +79,12 @@ Bili-Video2Book 重构方式：
 ## 双层协同架构
 
 ```text
-[ 输入 B 站任意长视频 / 连载网课链接 ]
+[ 输入 B 站任意长视频 / 连载网课链接 / 本地视频文件 / 本地课程目录 ]
                  │
                  ▼
 ┌── 🛠️ 工具层 (CLI 管道 · 纯本地极速) ──────────────────────────────┐
-│  1. 拓扑解析  : 单P/多P/合集识别与 ?p=X 分P参数自动嗅探 (parser.py)    │
-│  2. 轻量抓取  : 64kbps DASH 纯净人声音频流直取 (fetcher.py + wbi.py) │
+│  1. 拓扑解析  : 单P/多P/合集与本地视频目录智能多态嗅探 (parser/local_media) │
+│  2. 轻量提取  : 64kbps DASH 人声直取 / 本地视频通用 64k 剥离 (fetcher/ffmpeg) │
 │  3. 均衡切片  : 10 分钟无损流拷贝瞬间切片 (audio_chunker.py)          │
 │  4. 声学转录  : 优先对话模型多模态直读 ➔ 经授权回退本地 Whisper      │
 │  5. 语义规划  : 提取高纯度知识元并生成全局 topic_plan.json (planner.py) │
@@ -140,9 +145,19 @@ python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range
 python src/cli.py cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --replace
 ```
 
-### 场景四：直接转录本地音频
+### 场景四：直接转录本地音视频文件
 ```bash
-python src/cli.py transcribe "lecture.m4a" --engine auto
+# 传入本地视频（自动剥离 64k 音频并转录）或音频
+python src/cli.py transcribe "lecture.mp4" --engine auto
+```
+
+### 场景五：直接处理本地视频或整套网课目录（全流程教材化）
+```bash
+# 单集本地视频全流程处理（自动提取音频 -> 10分钟切片 -> 转录 -> 精读长文与笔记）
+python src/cli.py pipeline "D:\videos\lecture01.mp4"
+
+# 本地整套网课目录（自动自然排序 P01..Pn、批量提取、转录与跨集模块大笔记聚合）
+python src/cli.py pipeline "D:\videos\软件工程全套网课\" --all
 ```
 
 ---

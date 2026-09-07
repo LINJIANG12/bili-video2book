@@ -11,7 +11,11 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+
+SUPPORTED_VIDEO_EXTS = {
+    ".mp4", ".mkv", ".mov", ".avi", ".flv", ".wmv", ".webm", ".ts", ".m4v", ".rmvb"
+}
 
 
 class AudioChunker:
@@ -52,6 +56,17 @@ class AudioChunker:
         return 0.0
 
     @classmethod
+    def extract_audio_from_video(
+        cls,
+        video_path: Union[str, Path],
+        output_audio_path: Optional[Union[str, Path]] = None,
+    ) -> Path:
+        """Universal audio extractor: extracts 64kbps 16kHz mono AAC audio from any video format."""
+        from .local_media import LocalMediaParser
+        target = Path(output_audio_path) if output_audio_path else Path(video_path).with_suffix(".m4a")
+        return LocalMediaParser.extract_audio(video_path, target)
+
+    @classmethod
     def chunk_audio(
         cls,
         audio_filepath: str,
@@ -69,6 +84,15 @@ class AudioChunker:
         src = Path(audio_filepath).resolve()
         if not src.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_filepath}")
+
+        # If input is a video file, extract 64k audio first before chunking
+        if src.suffix.lower() in SUPPORTED_VIDEO_EXTS:
+            target_dir = Path(output_dir).resolve() if output_dir else src.parent / f"{src.stem}_chunks"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            extracted_audio = target_dir / f"{src.stem}.m4a"
+            if not extracted_audio.exists() or extracted_audio.stat().st_size == 0:
+                cls.extract_audio_from_video(src, extracted_audio)
+            src = extracted_audio
 
         total_duration = cls.get_audio_duration(str(src))
         chunk_seconds = chunk_minutes * 60

@@ -77,6 +77,15 @@ class AudioTranscriber:
         if not path_obj.exists():
             raise FileNotFoundError(f"Audio file not found: {path_obj}")
 
+        # If input is a video file, automatically extract 64kbps 16kHz mono AAC audio first
+        from .local_media import SUPPORTED_VIDEO_EXTS, LocalMediaParser
+        if path_obj.suffix.lower() in SUPPORTED_VIDEO_EXTS:
+            extracted_audio = path_obj.parent / f"{path_obj.stem}.m4a"
+            if not extracted_audio.exists() or extracted_audio.stat().st_size == 0:
+                print(f"[*] 检测到输入为视频文件 ({path_obj.suffix})，自动抽取轻量 64kbps 纯音频...")
+                LocalMediaParser.extract_audio(path_obj, extracted_audio)
+            path_obj = extracted_audio
+
         # Path 1: Priority Dialogue Model
         if engine in ("auto", "agent"):
             cfg = AgentModelClient.discover_config()

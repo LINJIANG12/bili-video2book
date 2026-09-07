@@ -12,7 +12,7 @@
 [![Hosts: OpenCode | Claude Code | Cursor](https://img.shields.io/badge/Hosts-OpenCode%20%7C%20Claude%20Code%20%7C%20Cursor-111827?style=flat-square)](SKILL.md)
 [![AI Engine: Multimodal Native](https://img.shields.io/badge/Engine-Multimodal%20Native%20LLM-8A2BE2?style=flat-square)](#)
 [![Fallback: faster-whisper int8](https://img.shields.io/badge/Fallback-faster--whisper%20int8-orange?style=flat-square)](https://github.com/SYSTRAN/faster-whisper)
-[![Tests: 34 passing](https://img.shields.io/badge/Tests-34%20passing-brightgreen?style=flat-square)](#)
+[![Tests: 40 passing](https://img.shields.io/badge/Tests-40%20passing-brightgreen?style=flat-square)](#)
 
 **[中文说明](README.md)** &nbsp;·&nbsp; [Why Replace Video](#the-hidden-cost-of-watching-video-is-time-and-unsearchability) &nbsp;·&nbsp; [What It Does](#what-it-does) &nbsp;·&nbsp; [Two Deliverable Forms](#two-distinct-forms-two-different-missions) &nbsp;·&nbsp; [Install](#install) &nbsp;·&nbsp; [How to Use](#how-to-use) &nbsp;·&nbsp; [Design Principles](#design-principles)
 
@@ -39,7 +39,7 @@ However, watching video as an input medium carries four major inherent bottlenec
 
 **Tens of hours of lectures in, two structured books out.**
 
-Give it any Bilibili single long video or multi-part lecture series URL. The toolchain handles lightweight audio extraction, lossless chunking, multimodal direct ingestion, and global semantic topic planning, yielding two orthogonal deliverables:
+Give it any Bilibili video/course series URL, local video file (`.mp4`, `.mkv`, `.mov`, `.flv`, etc.), or local course directory. The toolchain handles lightweight audio extraction (universal 64kbps 16kHz mono AAC), lossless chunking, multimodal direct ingestion, and global semantic topic planning, yielding two orthogonal deliverables:
 
 ```text
 Traditional Video Watching:
@@ -52,6 +52,11 @@ Bili-Video2Book Reconstructed:
                          └──► 📑 Module Review Cheatsheets (notes/)
                                └── ASCII topologies · Ontology merge (> Source: Pxx) · Adaptive matrices · Anti-patterns
 ```
+
+### 🌐 Polymorphic Input Support (Online & Local)
+- **Bilibili Online URLs**: Automatic resolution for single videos, multi-part course series, and UGC seasons (with `?p=X` auto-detection);
+- **Local Media Files**: Universal 64kbps voice extraction for all major video formats (`.mp4`, `.mkv`, `.mov`, `.avi`, `.flv`, `.webm`, `.ts`, etc.);
+- **Local Course Directories**: Pass an entire directory of lecture videos—the engine automatically applies natural sorting (e.g. `01, 02`, `Part1, Part2`) to order P01..Pn, then runs the full batch extraction, in-depth article generation, and module review synthesis!
 
 ### Strict Closed-Book Grounding (Anti-Hallucination)
 - Strictly forbids hallucinating modern tech buzzwords, external tech stacks, or corporate systems not mentioned in the transcript;
@@ -73,15 +78,15 @@ Tailored for the contrasting cognitive requirements between first-time in-depth 
 ## Two-tier architecture
 
 ```text
-[ Input Bilibili Video / Course Series URL ]
+[ Input Bilibili Video / Course Series URL / Local Video / Course Directory ]
                      │
                      ▼
 ┌── 🛠️ Tooling Tier (CLI Pipeline · Pure Local Performance) ────────┐
-│  1. Topology Parser : Single/Multi-P/Series & ?p=X parameter detection │
-│  2. Lightweight Stream : 64kbps DASH voice-optimized audio download │
-│  3. Lossless Chunker : 10-minute stream-copy instant segmentation  │
-│  4. Acoustic ASR     : Multimodal dialogue model priority ➔ Local Whisper │
-│  5. Topic Planner    : Kernel extraction & topic_plan.json generation │
+│  1. Topology Parser : Single/Multi-P & local directory auto-detection │
+│  2. Audio Stripper  : 64kbps DASH download / Universal FFmpeg extract│
+│  3. Lossless Chunker: 10-minute stream-copy instant segmentation     │
+│  4. Acoustic ASR    : Multimodal dialogue model priority ➔ Whisper   │
+│  5. Topic Planner   : Kernel extraction & topic_plan.json generation │
 └────────────────────────────────────────────────────────────────────┘
                      │ Emits clean text, kernels JSON, and AGENT_TASK.md
                      ▼
@@ -109,7 +114,7 @@ Install https://github.com/LINJIANG12/bili-video2book as my global skill.
 git clone https://github.com/LINJIANG12/bili-video2book.git
 cd bili-video2book
 
-# System dependency (for lossless fast audio remux):
+# System dependency (for lossless fast audio extraction and remux):
 # Ensure ffmpeg is available in your system PATH
 
 # Optional dependency (for offline local model fallback):
@@ -120,15 +125,22 @@ pip install faster-whisper
 
 ## How to use
 
-### Scenario 1: One-click Full Course Pipeline
+### Scenario 1: One-click Full Course Pipeline (Bilibili or Local Folder)
 ```bash
+# Bilibili course
 python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all
+
+# Local video course folder (auto natural sort P01..Pn, batch transcription & module notes)
+python src/cli.py pipeline "D:\videos\Database_Course\" --all
 ```
 
 ### Scenario 2: Process a Single Episode or Range
 ```bash
 # Process episode 1
 python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --page 1
+
+# Process single local video file
+python src/cli.py pipeline "D:\videos\lecture01.mp4"
 
 # Process episode range 2 through 5
 python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range 2-5
@@ -139,8 +151,10 @@ python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range
 python src/cli.py cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --replace
 ```
 
-### Scenario 4: Transcribe Local Audio Directly
+### Scenario 4: Transcribe Local Video or Audio Directly
 ```bash
+# Automatically strips 64k audio from any video container (.mp4, .mkv, .mov, etc.) and transcribes
+python src/cli.py transcribe "lecture.mp4" --engine auto
 python src/cli.py transcribe "lecture.m4a" --engine auto
 ```
 

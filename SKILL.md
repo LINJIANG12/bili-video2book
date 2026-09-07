@@ -1,11 +1,11 @@
 ---
 name: bilibili-audio-knowledge-extractor
-version: 1.3.0
+version: 1.4.0
 description: |
-  Bilibili 视频音频提取、本地语音转录与结构化知识沉淀 Skill（宿主 Agent 原生合成架构）。
-  支持任意 B 站视频/多P分集/系列合集链接：拓扑解析、64kbps 轻量音频抓取、10 分钟均衡切片、
-  本地 faster-whisper 语音转录、安全文本规范化、知识块语义规划与提示词导出。
-  本 Skill 只负责【工具层】（下载/转录/清洗/规划/导出）；所有语义校对、体系笔记与
+  Bilibili 视频与本地音视频提取、语音转录与结构化知识沉淀 Skill（宿主 Agent 原生合成架构）。
+  支持任意 B 站视频/多P合集/本地视频文件/本地课程目录：多态识别、全格式通用 64k 纯音频剥离、
+  10 分钟均衡切片、多模态直读与本地 whisper 语音转录、安全文本规范化、知识块规划与提示词导出。
+  本 Skill 只负责【工具层】（提取/转录/清洗/规划/导出）；所有语义校对、体系笔记与
   【可替代视频级】精读长文均由宿主对话模型（Agent 自身）按导出的提示词原生完成。
 triggers:
   - bilibili 视频笔记
@@ -14,6 +14,9 @@ triggers:
   - 解析B站合集
   - 制作学习笔记
   - 整理视频
+  - 本地视频转文章
+  - 本地网课笔记
+  - 本地视频提取音频
   - 课程总结
   - 视频精读
   - 公开课笔记
@@ -43,8 +46,8 @@ triggers:
 
 ## 范围决策树（何时单集？何时全量？）
 
-- **单 P 独立视频**：零打扰直接 `pipeline` 单集全流程。
-- **多 P 课程 + 显式全量意图**（"全部/整门课/全套"）：`audio --all` + `pipeline --all` + 知识块聚合笔记。
+- **单 P / 本地单视频**：零打扰直接 `pipeline` 单集全流程。
+- **多 P 课程 / 本地网课目录 + 显式全量意图**（"全部/整门课/全套"）：`pipeline --all` + 知识块聚合笔记。
 - **多 P 课程 + 显式单集意图**（"第X讲" 或 URL 带 `?p=X`）：只处理该集。
 - **多 P 课程 + 意图模糊**：回显拓扑并给出三选一确认（仅首集 / 全量聚合 / 指定区间）。
 
@@ -72,15 +75,15 @@ triggers:
 ## 常用 CLI 速查
 
 ```bash
-python src/cli.py parse "<链接>" [--json]
-python src/cli.py audio "<链接>" --all --quality low
-python src/cli.py transcribe "<链接或本地音频>" [--engine auto|agent|local] [--model base]
+python src/cli.py parse "<链接或本地文件/目录>" [--json]
+python src/cli.py audio "<链接或本地文件/目录>" [--all] [--quality low]
+python src/cli.py transcribe "<链接或本地视频/音频>" [--engine auto|agent|local] [--model base]
 python src/cli.py subtitle "<链接>"
 python src/cli.py clean <file>
-python src/cli.py prompt "<链接>" --type note|article|rectify|both
-python src/cli.py note "<链接>" --transcript-file <file>
-python src/cli.py pipeline "<链接>" [--page N|--range A-B|--all] [--engine auto|agent|local] [--model base] [--force]
-python src/cli.py cluster-notes "<链接>" [--block-id N] [--start-block N --end-block M] [--replace] [--force]
+python src/cli.py prompt "<链接或本地路径>" --type note|article|rectify|both
+python src/cli.py note "<链接或本地路径>" --transcript-file <file>
+python src/cli.py pipeline "<链接或本地文件/目录>" [--page N|--range A-B|--all] [--engine auto|agent|local] [--model base] [--force]
+python src/cli.py cluster-notes "<链接或本地目录>" [--block-id N] [--start-block N --end-block M] [--replace] [--force]
 ```
 
 任务产物统一归档于：`output/<任务名>_<BVID>/{audio,subtitles,notes,articles,topic_plan.json,manifest.json}`

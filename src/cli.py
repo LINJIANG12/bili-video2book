@@ -14,6 +14,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # Enable real-time line buffering
 try:
@@ -28,6 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.parser import BilibiliParser
+from src.core.local_media import LocalMediaParser, SUPPORTED_VIDEO_EXTS
 from src.core.fetcher import AudioFetcher
 from src.core.audio_chunker import AudioChunker
 from src.core.subtitle import SubtitleFetcher
@@ -38,6 +40,13 @@ from src.generator.cleaner import TextCleaner
 from src.generator.doc_builder import DocumentBuilder
 from src.generator.topic_planner import SemanticTopicPlanner
 from src.generator.block_synthesizer import BlockSynthesizer
+
+
+def _resolve_target_info(target: str, sessdata: Optional[str] = None) -> Dict[str, Any]:
+    """Polymorphically resolve metadata from either local media path or Bilibili URL/BVID."""
+    if LocalMediaParser.is_local_media(target):
+        return LocalMediaParser.parse(target)
+    return BilibiliParser.parse_video(target, sessdata=sessdata)
 
 
 def _parse_range_string(range_str: str, max_val: int):
@@ -61,9 +70,30 @@ def _parse_range_string(range_str: str, max_val: int):
 
 
 def cmd_parse(args):
-    info = BilibiliParser.parse_video(args.url, sessdata=args.sessdata)
+    info = _resolve_target_info(args.url, sessdata=args.sessdata)
     if args.json:
         print(json.dumps(info, ensure_ascii=False, indent=2))
+        return
+
+    if info.get("is_local"):
+        mins = info["duration"] // 60
+        secs = info["duration"] % 60
+        print("=" * 65)
+        print(f"【视频标题】: {info['title']}")
+        print(f"【来源路径】: {info.get('source_path')}")
+        print(f"【类型判定】: {info['type_desc']}")
+        print(f"【总时长】  : {mins:02d}:{secs:02d}")
+        print("=" * 65)
+
+        if info["has_multi_pages"]:
+            print(f"\n▶ 本地分集列表 (共 {len(info['parts'])} P):")
+            for p in info["parts"][:args.limit]:
+                pmins = p["duration"] // 60
+                psecs = p["duration"] % 60
+                print(f"  P{p['page']:02d} [{pmins:02d}:{psecs:02d}] {p['title']}")
+                print(f"      文件: {p['filepath']}")
+            if len(info["parts"]) > args.limit:
+                print(f"  ... 剩余 {len(info['parts']) - args.limit} 个分P已省略，可用 --limit 查看全量")
         return
 
     print("=" * 65)
@@ -96,7 +126,7 @@ def cmd_parse(args):
 
 
 def cmd_audio(args):
-    info = BilibiliParser.parse_video(args.url, sessdata=args.sessdata)
+    info = _resolve_target_info(args.url, sessdata=args.sessdata)
     bvid = info["bvid"]
 
     # Initialize Task Workspace
@@ -150,30 +180,46 @@ def cmd_audio(args):
 
             print(f"\n[{idx:02d}/{total_parts:02d}] 正在提取 P{p_num:02d}: {p['title']} (CID: {p['cid']})...")
             try:
-                stream_info = AudioFetcher.get_audio_stream_info(
-                    bvid,
-                    p["cid"],
-                    sessdata=args.sessdata,
-                    prefer_quality=getattr(args, "quality", "low"),
-                )
-                print(f"    - 流码率: {stream_info['quality_desc']}")
-                saved_path = AudioFetcher.download_audio(
-                    stream_info["best_stream_url"],
-                    str(target_file),
-                    repackage_m4a=True,
-                )
-                f_size = Path(saved_path).stat().st_size
-                print(f"    [✓] 下载与封装完成: {Path(saved_path).name} ({round(f_size / (1024 * 1024), 2)} MB)")
-                manifest_items.append({
-                    "page": p_num,
-                    "title": p["title"],
-                    "cid": p["cid"],
-                    "duration": p["duration"],
-                    "audio_file": saved_path,
-                    "size_bytes": f_size,
-                    "quality": stream_info["quality_desc"],
-                    "status": "downloaded",
-                })
+                if info.get("is_local"):
+                    LocalMediaParser.extract_audio(p["filepath"], target_file)
+                    saved_path = str(target_file)
+                    f_size = Path(saved_path).stat().st_size
+                    print(f"    [✓] 本地音频提取完成: {Path(saved_path).name} ({round(f_size / (1024 * 1024), 2)} MB)")
+                    manifest_items.append({
+                        "page": p_num,
+                        "title": p["title"],
+                        "cid": p["cid"],
+                        "duration": p["duration"],
+                        "audio_file": saved_path,
+                        "size_bytes": f_size,
+                        "quality": "64kbps-aac-mono",
+                        "status": "downloaded",
+                    })
+                else:
+                    stream_info = AudioFetcher.get_audio_stream_info(
+                        bvid,
+                        p["cid"],
+                        sessdata=args.sessdata,
+                        prefer_quality=getattr(args, "quality", "low"),
+                    )
+                    print(f"    - 流码率: {stream_info['quality_desc']}")
+                    saved_path = AudioFetcher.download_audio(
+                        stream_info["best_stream_url"],
+                        str(target_file),
+                        repackage_m4a=True,
+                    )
+                    f_size = Path(saved_path).stat().st_size
+                    print(f"    [✓] 下载与封装完成: {Path(saved_path).name} ({round(f_size / (1024 * 1024), 2)} MB)")
+                    manifest_items.append({
+                        "page": p_num,
+                        "title": p["title"],
+                        "cid": p["cid"],
+                        "duration": p["duration"],
+                        "audio_file": saved_path,
+                        "size_bytes": f_size,
+                        "quality": stream_info["quality_desc"],
+                        "status": "downloaded",
+                    })
             except Exception as err:
                 print(f"    [✗] 处理 P{p_num:02d} 发生异常: {err}", file=sys.stderr)
                 manifest_items.append({
@@ -209,32 +255,39 @@ def cmd_audio(args):
         target_cid = matched["cid"]
         target_title = f"P{target_part:02d}_{matched['title']}"
 
-    print(f"[*] 解析音频流中... BV: {bvid}, CID: {target_cid}")
-    stream_info = AudioFetcher.get_audio_stream_info(
-        bvid,
-        target_cid,
-        sessdata=args.sessdata,
-        prefer_quality=getattr(args, "quality", "low"),
-    )
-
-    if args.url_only:
-        if args.json:
-            print(json.dumps(stream_info, ensure_ascii=False, indent=2))
-        else:
-            print(f"【音质】: {stream_info['quality_desc']}")
-            print(f"【音频下载直链】:\n{stream_info['best_stream_url']}")
-        return
-
     clean_title = "".join([c for c in target_title if c.isalnum() or c in (" ", "-", "_")]).strip()
     target_m4a = target_audio_dir / f"{clean_title}.m4a"
 
-    print(f"[*] 正在下载最高音质音频 ({stream_info['quality_desc']})...")
-    saved_path = AudioFetcher.download_audio(
-        stream_info["best_stream_url"],
-        str(target_m4a),
-        repackage_m4a=True,
-    )
-    print(f"[✓] 音频下载完成: {saved_path}")
+    if info.get("is_local"):
+        source_file = matched["filepath"] if info["has_multi_pages"] else info["source_path"]
+        print(f"[*] 正在从本地视频提取通用 64kbps 纯音频...")
+        saved_path = str(LocalMediaParser.extract_audio(source_file, target_m4a))
+        stream_info = {"quality_desc": "64kbps AAC Mono (16kHz)", "best_stream_url": saved_path}
+        print(f"[✓] 音频提取完成: {saved_path}")
+    else:
+        print(f"[*] 解析音频流中... BV: {bvid}, CID: {target_cid}")
+        stream_info = AudioFetcher.get_audio_stream_info(
+            bvid,
+            target_cid,
+            sessdata=args.sessdata,
+            prefer_quality=getattr(args, "quality", "low"),
+        )
+
+        if args.url_only:
+            if args.json:
+                print(json.dumps(stream_info, ensure_ascii=False, indent=2))
+            else:
+                print(f"【音质】: {stream_info['quality_desc']}")
+                print(f"【音频下载直链】:\n{stream_info['best_stream_url']}")
+            return
+
+        print(f"[*] 正在下载最高音质音频 ({stream_info['quality_desc']})...")
+        saved_path = AudioFetcher.download_audio(
+            stream_info["best_stream_url"],
+            str(target_m4a),
+            repackage_m4a=True,
+        )
+        print(f"[✓] 音频下载完成: {saved_path}")
 
     chunks_manifest = []
     if args.chunk_minutes > 0:
@@ -317,7 +370,7 @@ def cmd_clean(args):
 
 
 def cmd_prompt(args):
-    info = BilibiliParser.parse_video(args.url, sessdata=args.sessdata)
+    info = _resolve_target_info(args.url, sessdata=args.sessdata)
     title = info["title"]
     req_page = args.page if args.page is not None else (info.get("url_page") or 1)
     part_title = "P1"
@@ -354,7 +407,7 @@ def cmd_prompt(args):
 
 
 def cmd_note(args):
-    info = BilibiliParser.parse_video(args.url, sessdata=args.sessdata)
+    info = _resolve_target_info(args.url, sessdata=args.sessdata)
     title = info["title"]
     part_title = ""
     target_cid = info["cid"]
@@ -374,14 +427,16 @@ def cmd_note(args):
             print(f"[-] 转录文件未找到: {t_path}", file=sys.stderr)
             return
     else:
-        # Try subtitle fallback
-        print(f"[*] 探测视频官方/AI字幕作为语料: {info['bvid']}...")
-        sub_res = SubtitleFetcher.fetch_best_subtitle(info["bvid"], target_cid, sessdata=args.sessdata)
+        # Try subtitle fallback if online
+        sub_res = None
+        if not info.get("is_local"):
+            print(f"[*] 探测视频官方/AI字幕作为语料: {info['bvid']}...")
+            sub_res = SubtitleFetcher.fetch_best_subtitle(info["bvid"], target_cid, sessdata=args.sessdata)
         if sub_res:
             content = sub_res["full_text"]
             print(f"[✓] 提取到字幕语料 ({sub_res['total_items']} 行)")
         else:
-            print("[*] 该视频无字幕，使用标题与视频元数据生成笔记骨架模板。")
+            print("[*] 无在线字幕，使用标题与视频元数据生成笔记骨架模板。")
             content = f"视频简介: {info.get('desc', '')}\n\n该视频时长 {info.get('duration', 0)} 秒，建议结合音频或切片转录生成完整笔记。"
 
     # Clean content if available
@@ -412,16 +467,17 @@ def cmd_note(args):
 
 
 def cmd_transcribe(args):
-    # Check if direct local audio file path is supplied
-    direct_audio = Path(args.target).resolve()
-    if direct_audio.exists() and direct_audio.is_file():
-        print(f"[*] 直接转录本地音频: {direct_audio.name} (引擎策略: {args.engine})...")
+    # Check if target is a single local media file
+    target_p = Path(args.target).resolve()
+    if target_p.exists() and target_p.is_file():
+        print(f"[*] 直接转录本地媒体: {target_p.name} (引擎策略: {args.engine})...")
+        fallback_allowed = True if args.allow_local_fallback is None else args.allow_local_fallback
         res = AudioTranscriber.transcribe(
-            direct_audio,
+            target_p,
             engine=args.engine,
             model_size=args.model,
             language=args.lang,
-            allow_local_fallback=args.allow_local_fallback,
+            allow_local_fallback=fallback_allowed,
         )
         cleaned = TextCleaner.clean(res["full_text"])
         print(f"[✓] 转录完成 (引擎: {res.get('engine', 'unknown')}, 共 {res['total_segments']} 个片段)")
@@ -435,8 +491,8 @@ def cmd_transcribe(args):
             print(cleaned["cleaned_text"][:500] + "...")
         return
 
-    # Treat as Bilibili URL/BVID
-    info = BilibiliParser.parse_video(args.target, sessdata=args.sessdata)
+    # Polymorphically resolve metadata (Local directory course or Bilibili URL/BVID)
+    info = _resolve_target_info(args.target, sessdata=args.sessdata)
     bvid = info["bvid"]
     ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
 
@@ -453,24 +509,30 @@ def cmd_transcribe(args):
     clean_p_title = "".join([c for c in p_title if c.isalnum() or c in (" ", "-", "_")]).strip()
     audio_file = ws.audio_dir / f"P{target_part:02d}_{clean_p_title}.m4a"
 
-    # Download if not present
+    # Audio check or extraction/download
     if not audio_file.exists() or audio_file.stat().st_size < 10240:
-        print(f"[*] 音频未缓存，正在下载 P{target_part:02d} 音频...")
-        stream_info = AudioFetcher.get_audio_stream_info(
-            bvid,
-            target_cid,
-            sessdata=args.sessdata,
-            prefer_quality=getattr(args, "quality", "low"),
-        )
-        AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
+        if info.get("is_local"):
+            source_file = matched["filepath"] if info["has_multi_pages"] else info["source_path"]
+            print(f"[*] 正在从本地视频提取 64kbps 纯音频...")
+            LocalMediaParser.extract_audio(source_file, audio_file)
+        else:
+            print(f"[*] 音频未缓存，正在下载 P{target_part:02d} 音频...")
+            stream_info = AudioFetcher.get_audio_stream_info(
+                bvid,
+                target_cid,
+                sessdata=args.sessdata,
+                prefer_quality=getattr(args, "quality", "low"),
+            )
+            AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
 
     print(f"[*] 开始转录 P{target_part:02d}: {audio_file.name} (策略: {args.engine})...")
+    fallback_allowed = True if args.allow_local_fallback is None else args.allow_local_fallback
     res = AudioTranscriber.transcribe(
         audio_file,
         engine=args.engine,
         model_size=args.model,
         language=args.lang,
-        allow_local_fallback=args.allow_local_fallback,
+        allow_local_fallback=fallback_allowed,
     )
     raw_txt_file = ws.subtitles_dir / f"P{target_part:02d}_{clean_p_title}_raw.txt"
     raw_txt_file.write_text(res["full_text"], encoding="utf-8")
@@ -485,7 +547,7 @@ def cmd_transcribe(args):
 
 
 def cmd_pipeline(args):
-    info = BilibiliParser.parse_video(args.url, sessdata=args.sessdata)
+    info = _resolve_target_info(args.url, sessdata=args.sessdata)
     bvid = info["bvid"]
 
     ws = TaskWorkspace.create(
@@ -518,6 +580,7 @@ def cmd_pipeline(args):
             "title": info["title"],
             "cid": info["cid"],
             "duration": info["duration"],
+            "filepath": info.get("source_path", ""),
         }]
 
     total_episodes = len(selected_parts)
@@ -529,17 +592,21 @@ def cmd_pipeline(args):
         clean_p_title = "".join([c for c in p["title"] if c.isalnum() or c in (" ", "-", "_")]).strip()
         print(f"\n[{idx:02d}/{total_episodes:02d}] 开始处理 P{p_num:02d}: {p['title']}...")
 
-        # 1. Audio Check or Download
+        # 1. Audio Check or Extraction/Download
         audio_file = ws.audio_dir / f"P{p_num:02d}_{clean_p_title}.m4a"
         if not audio_file.exists() or audio_file.stat().st_size < 10240:
-            print(f"    [1/4] 下载轻量音频...")
-            stream_info = AudioFetcher.get_audio_stream_info(
-                bvid,
-                p["cid"],
-                sessdata=args.sessdata,
-                prefer_quality=getattr(args, "quality", "low"),
-            )
-            AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
+            if info.get("is_local"):
+                print(f"    [1/4] 从本地视频提取通用 64kbps 纯音频...")
+                LocalMediaParser.extract_audio(p.get("filepath", info.get("source_path")), audio_file)
+            else:
+                print(f"    [1/4] 下载轻量音频...")
+                stream_info = AudioFetcher.get_audio_stream_info(
+                    bvid,
+                    p["cid"],
+                    sessdata=args.sessdata,
+                    prefer_quality=getattr(args, "quality", "low"),
+                )
+                AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
         else:
             print(f"    [1/4] 音频已就绪: {audio_file.name} ({round(audio_file.stat().st_size / 1024 / 1024, 2)} MB)")
 
@@ -550,19 +617,22 @@ def cmd_pipeline(args):
             print(f"    [2/4] 转录文本已存在，跳过 ASR: {transcript_clean_file.name}")
             transcript_text = transcript_clean_file.read_text(encoding="utf-8")
         else:
-            # Try official subtitles
-            sub_res = SubtitleFetcher.fetch_best_subtitle(bvid, p["cid"], sessdata=args.sessdata)
+            # Try official subtitles if online
+            sub_res = None
+            if not info.get("is_local"):
+                sub_res = SubtitleFetcher.fetch_best_subtitle(bvid, p["cid"], sessdata=args.sessdata)
             if sub_res:
                 print(f"    [2/4] 命中官方/AI字幕，直接免转录抽取 ({sub_res['total_items']} 条)")
                 transcript_text = sub_res["full_text"]
             else:
-                print(f"    [2/4] 无官方字幕，启动语音转录 (策略: {getattr(args, 'engine', 'auto')})...")
+                print(f"    [2/4] 启动语音转录 (策略: {getattr(args, 'engine', 'auto')})...")
+                fallback_allowed = True if args.allow_local_fallback is None else args.allow_local_fallback
                 asr_res = AudioTranscriber.transcribe(
                     audio_path=audio_file,
                     engine=getattr(args, "engine", "auto"),
                     model_size=args.model,
                     language=args.lang,
-                    allow_local_fallback=getattr(args, "allow_local_fallback", None),
+                    allow_local_fallback=fallback_allowed,
                 )
                 transcript_text = asr_res["full_text"]
                 engine_used = asr_res.get("engine", f"whisper-{args.model}")
@@ -668,7 +738,7 @@ def cmd_pipeline(args):
 
 
 def cmd_cluster_notes(args):
-    info = BilibiliParser.parse_video(args.url, sessdata=args.sessdata)
+    info = _resolve_target_info(args.url, sessdata=args.sessdata)
     bvid = info["bvid"]
     ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
 
@@ -742,22 +812,22 @@ def main():
     subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
 
     # parse
-    p_parse = subparsers.add_parser("parse", help="Parse video topology & list parts")
-    p_parse.add_argument("url", help="Bilibili URL or BV ID")
+    p_parse = subparsers.add_parser("parse", help="Parse video topology & list parts (Bilibili URL or local media)")
+    p_parse.add_argument("url", help="Bilibili URL/BV ID or local video/audio/directory path")
     p_parse.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
     p_parse.add_argument("--limit", type=int, default=10, help="Max items to display")
     p_parse.add_argument("--json", action="store_true", help="Output in JSON format")
 
     # audio
-    p_audio = subparsers.add_parser("audio", help="Fetch & download audio stream")
-    p_audio.add_argument("url", help="Bilibili URL or BV ID")
+    p_audio = subparsers.add_parser("audio", help="Fetch & download/extract audio stream")
+    p_audio.add_argument("url", help="Bilibili URL/BV ID or local video/audio/directory path")
     p_audio.add_argument("--page", type=int, default=None, help="Page/Part index (auto-detects ?p=X from URL if omitted)")
-    p_audio.add_argument("--all", action="store_true", help="Batch download all parts in a multi-P video")
+    p_audio.add_argument("--all", action="store_true", help="Batch download/extract all parts")
     p_audio.add_argument("--range", default=None, help="Episode range to download (e.g. 1-10, 1,3,5)")
     p_audio.add_argument("--quality", choices=["low", "medium", "high"], default="low", help="Audio quality (low=64k speech default, medium=132k, high=192k)")
     p_audio.add_argument("--task", default=None, help="Custom task workspace folder name")
     p_audio.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
-    p_audio.add_argument("--force", action="store_true", help="Force re-download even if audio file already exists")
+    p_audio.add_argument("--force", action="store_true", help="Force re-download/re-extraction even if audio file already exists")
     p_audio.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
     p_audio.add_argument("--url-only", action="store_true", help="Only print stream URL without downloading")
     p_audio.add_argument("--output", default=None, help="Optional explicit output directory override")
@@ -780,7 +850,7 @@ def main():
 
     # prompt
     p_prompt = subparsers.add_parser("prompt", help="Render Agent prompt templates")
-    p_prompt.add_argument("url", help="Bilibili URL or BV ID")
+    p_prompt.add_argument("url", help="Bilibili URL/BV ID or local media path")
     p_prompt.add_argument("--page", type=int, default=None, help="Page index (auto-detects ?p=X from URL if omitted)")
     p_prompt.add_argument("--transcript-file", help="Path to transcript file")
     p_prompt.add_argument("--type", choices=["note", "article", "rectify", "both"], default="both")
@@ -789,7 +859,7 @@ def main():
 
     # note
     p_note = subparsers.add_parser("note", help="Generate and save sober GitHub-styled note directly")
-    p_note.add_argument("url", help="Bilibili URL or BV ID")
+    p_note.add_argument("url", help="Bilibili URL/BV ID or local media path")
     p_note.add_argument("--page", type=int, default=None, help="Page index (auto-detects ?p=X from URL if omitted)")
     p_note.add_argument("--task", default=None, help="Custom task workspace folder name")
     p_note.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
@@ -799,9 +869,9 @@ def main():
     p_note.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
 
     # transcribe
-    p_tr = subparsers.add_parser("transcribe", help="Transcribe audio or Bilibili video to clean text")
-    p_tr.add_argument("target", help="Bilibili URL/BVID or local audio file path")
-    p_tr.add_argument("--page", type=int, default=None, help="Page index for Bilibili video (auto-detects ?p=X from URL if omitted)")
+    p_tr = subparsers.add_parser("transcribe", help="Transcribe audio or video to clean text")
+    p_tr.add_argument("target", help="Bilibili URL/BVID, local audio file, or local video file")
+    p_tr.add_argument("--page", type=int, default=None, help="Page index for Bilibili video or local course (auto-detects ?p=X from URL if omitted)")
     p_tr.add_argument("--engine", choices=["auto", "agent", "local"], default="auto", help="Transcription engine: auto(prioritize dialogue model, halt & prompt on lack of audio), agent(dialogue model only), local(whisper only)")
     p_tr.add_argument("--allow-local-fallback", action="store_true", default=None, help="Directly allow local whisper fallback if dialogue model cannot read audio without interactive prompt")
     p_tr.add_argument("--model", default="base", choices=["tiny", "base", "small", "medium"], help="Local whisper model size (used when falling back to local)")
@@ -813,9 +883,9 @@ def main():
 
     # pipeline
     p_pipe = subparsers.add_parser("pipeline", help="Execute complete automated pipeline (Audio -> ASR -> Notes & Articles)")
-    p_pipe.add_argument("url", help="Bilibili URL or BV ID")
+    p_pipe.add_argument("url", help="Bilibili URL/BV ID, local video file, or local course directory")
     p_pipe.add_argument("--page", type=int, default=None, help="Page/Part index (auto-detects ?p=X from URL if omitted)")
-    p_pipe.add_argument("--all", action="store_true", help="Process all episodes in multi-P collection")
+    p_pipe.add_argument("--all", action="store_true", help="Process all episodes in multi-P collection or local course directory")
     p_pipe.add_argument("--range", default=None, help="Episode range to process (e.g. 1-10, 1,3,5)")
     p_pipe.add_argument("--engine", choices=["auto", "agent", "local"], default="auto", help="Transcription engine: auto(prioritize dialogue model, halt & prompt on lack of audio), agent(dialogue model only), local(whisper only)")
     p_pipe.add_argument("--allow-local-fallback", action="store_true", default=None, help="Directly allow local whisper fallback if dialogue model cannot read audio without interactive prompt")
