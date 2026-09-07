@@ -1,8 +1,7 @@
 """Multimodal Audio Transcriber: Dialogue Model Priority & Local Fallback.
 
 Architecture:
-- Priority 1: Direct multimodal audio ingestion by the active dialogue model
-  (e.g. Gemini 3.8 Flash High via AgentModelClient).
+- Priority 1: Direct multimodal audio ingestion by the active dialogue model via AgentModelClient.
 - Failure & Fallback Gate: If the dialogue model does not support audio modality or is unavailable,
   the tool halts, reports the issue clearly, and prompts the user whether to permit fallback
   to the local faster-whisper model.

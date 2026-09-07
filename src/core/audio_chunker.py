@@ -1,6 +1,6 @@
 """Lossless Audio Chunker using FFmpeg Stream Copy.
 
-Optimized for multimodal AI models (Gemini / GPT-4o Audio / Audio Agents):
+Optimized for multimodal AI models (Audio Agents / Multimodal LLMs):
 - Splits long lectures (e.g. 45min - 2hours) into 10-20 min semantic chunks
 - Zero re-encoding: uses `-acodec copy` for instantaneous (<0.1s) segmentation
 - Generates structured manifest with timestamps for downstream AI aggregation

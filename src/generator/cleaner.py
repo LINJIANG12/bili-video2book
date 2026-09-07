@@ -4,7 +4,7 @@ Philosophy:
 1. Abolishes destructive character-level regexes that mutilate Chinese idioms (e.g. "代代相传", "常常", "层层递进").
 2. Preserves all grammatical verbs (e.g. "是不是") and demonstrative pronouns (e.g. "这个", "那个").
 3. Safely normalizes consecutive duplicate punctuation (e.g. "，，" -> "，", "、、" -> "、") and excessive whitespace.
-4. Leaves complex semantic deduplication and filler optimization to the LLM (Gemini 3.8 Flash).
+4. Leaves complex semantic deduplication and filler optimization to the host dialogue LLM.
 """
 
 import re

@@ -10,7 +10,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Hosts: OpenCode | Claude Code | Cursor](https://img.shields.io/badge/Hosts-OpenCode%20%7C%20Claude%20Code%20%7C%20Cursor-111827?style=flat-square)](SKILL.md)
-[![AI Engine: Multimodal Native](https://img.shields.io/badge/Engine-Gemini%203.8%20Multimodal%20Native-8A2BE2?style=flat-square)](#)
+[![AI Engine: Multimodal Native](https://img.shields.io/badge/Engine-Multimodal%20Native%20LLM-8A2BE2?style=flat-square)](#)
 [![Fallback: faster-whisper int8](https://img.shields.io/badge/Fallback-faster--whisper%20int8-orange?style=flat-square)](https://github.com/SYSTRAN/faster-whisper)
 [![Tests: 34 passing](https://img.shields.io/badge/Tests-34%20passing-brightgreen?style=flat-square)](#)
 
@@ -85,7 +85,7 @@ Tailored for the contrasting cognitive requirements between first-time in-depth 
 └────────────────────────────────────────────────────────────────────┘
                      │ Emits clean text, kernels JSON, and AGENT_TASK.md
                      ▼
-┌── 🧠 Synthesis Tier (Host Dialogue Agent · Gemini 3.8 Flash High) ───┐
+┌── 🧠 Synthesis Tier (Host Dialogue Agent · Multimodal Native) ───────┐
 │  1. Semantic Rectifier : Literal proofreading with domain hints    │
 │  2. In-Depth Articles  : Standalone video-replacement chapters     │
 │  3. Review Cheatsheets : Cross-episode ontology merge & topologies │
