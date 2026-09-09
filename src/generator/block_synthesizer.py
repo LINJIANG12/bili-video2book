@@ -1,11 +1,15 @@
-"""Block Synthesizer: Provides prompts for Agent to synthesize block notes, plus local fallback rendering.
+"""Block Synthesizer: Exports module-level synthesis task-files for Agent-native note authoring.
 
-Architecture: CLI provides tooling + local fallback. The mature Agent performs high-quality synthesis natively.
+Architecture: CLI provides tooling only (task-file export); the mature host dialogue model performs
+the real block-note synthesis natively from the exported SYNTHESIS_PROMPT.
 """
 
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from src.core.workspace import sanitize_filename
+from src.generator.prompt_templates import NOTE_STYLES
 
 
 class BlockSynthesizer:
@@ -55,7 +59,7 @@ class BlockSynthesizer:
         """Construct standard block note filename: 模块01_软件工程概述_P01-P02_笔记.md."""
         block_id = block_meta.get("block_id", 1)
         raw_title = block_meta.get("block_title", "知识模块")
-        clean_title = "".join(c for c in raw_title if c.isalnum() or c in (" ", "-", "_")).strip()
+        clean_title = sanitize_filename(raw_title)
 
         eps = sorted(block_meta.get("episodes", []))
         if not eps:
@@ -128,6 +132,7 @@ class BlockSynthesizer:
         cls,
         block_meta: Dict[str, Any],
         kernels: List[Dict[str, Any]],
+        style: Optional[str] = None,
     ) -> str:
         """Build the synthesis prompt for the Agent to execute natively (no network in tooling)."""
         eps = sorted(block_meta.get("episodes", []))
@@ -143,7 +148,32 @@ class BlockSynthesizer:
             .replace("{core_theme}", str(block_meta.get("core_theme", "")))
             .replace("{kernels_json}", kernels_clean_json)
         )
-        return prompt.replace("{{", "{").replace("}}", "}")
+        prompt = prompt.replace("{{", "{").replace("}}", "}")
+
+        # Inject selected note style (e.g. minimal / SSHeRun/CS-Xmind-Note)
+        if style:
+            style_key = style.lower().strip()
+            for k, v in NOTE_STYLES.items():
+                if style.strip() == k or style.strip() == v.get("label"):
+                    style_key = k
+                    break
+            if style_key in NOTE_STYLES:
+                st = NOTE_STYLES[style_key]
+                prompt += (
+                    f"\n━━━━━━━━━━━━━━━━━━\n"
+                    f"三、指定笔记风格：{st['label']} ({style_key})\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"{st['instruction']}\n"
+                )
+        return prompt
+
+    @classmethod
+    def get_task_filename(cls, block_meta: Dict[str, Any]) -> str:
+        """Construct block synthesis task-file name: 模块01_软件工程概述_TASK.md."""
+        block_id = block_meta.get("block_id", 1)
+        raw_title = block_meta.get("block_title", "知识模块")
+        clean_title = "".join(c for c in raw_title if c.isalnum() or c in (" ", "-", "_")).strip()
+        return f"模块{block_id:02d}_{clean_title}_TASK.md"
 
     @classmethod
     def synthesize_block(
@@ -152,38 +182,48 @@ class BlockSynthesizer:
         kernels: List[Dict[str, Any]],
         ws: Any,
         force: bool = False,
+        style: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Local tooling synthesis: persist local fallback note. Agent should upgrade via build_synthesis_prompt()."""
-        filename = cls.get_block_filename(block_meta)
-        note_file = ws.notes_dir / filename
+        """Tooling export: persist the module synthesis task-file (SYNTHESIS_PROMPT) for Agent-native authoring."""
+        task_file = ws.notes_dir / cls.get_task_filename(block_meta)
 
         eps = sorted(block_meta.get("episodes", []))
         p_str = f"P{eps[0]:02d}-P{eps[-1]:02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
 
-        if note_file.exists() and note_file.stat().st_size > 1500 and not force:
-            print(f"[*] 模块 {block_meta['block_id']:02d} ({p_str}) 笔记已存在，跳过生成: {note_file.name}")
-            return {
-                "block_id": block_meta["block_id"],
-                "block_title": block_meta["block_title"],
-                "episodes": eps,
-                "note_file": str(note_file),
-                "size_bytes": note_file.stat().st_size,
-                "status": "cached",
-            }
+        # 中文注释：任务书已存在且内容完备即跳过重写；若旧任务书为空壳且当前已有知识元，自动刷新
+        if task_file.exists() and not force:
+            should_refresh = False
+            try:
+                content = task_file.read_text(encoding="utf-8")
+                if len(content) < 100:
+                    should_refresh = True
+                elif kernels and any(k.get("definitions") or k.get("mechanisms_and_models") or k.get("title") for k in kernels):
+                    if "【知识元集合】\n[]" in content or "【知识元集合】\n[\n]" in content or '"definitions": []' in content:
+                        should_refresh = True
+            except Exception:
+                should_refresh = True
 
-        print(f"[*] 正在为模块 {block_meta['block_id']:02d} ({p_str}: {block_meta['block_title']}) 生成本地基础笔记 (Agent 可基于 prompt 升级)...")
+            if not should_refresh:
+                print(f"[*] 模块 {block_meta['block_id']:02d} ({p_str}) 任务书已存在，跳过导出: {task_file.name}")
+                return {
+                    "block_id": block_meta["block_id"],
+                    "block_title": block_meta["block_title"],
+                    "episodes": eps,
+                    "task_file": str(task_file),
+                    "size_bytes": task_file.stat().st_size,
+                    "status": "cached",
+                }
 
-        note_md = cls.render_local_fallback(block_meta, kernels)
-
-        note_file.parent.mkdir(parents=True, exist_ok=True)
-        note_file.write_text(note_md, encoding="utf-8")
-        print(f"[✓] 模块 {block_meta['block_id']:02d} 本地笔记落盘完成 ({len(note_md)} 字) -> {note_file.name}")
+        synthesis_prompt = cls.build_synthesis_prompt(block_meta, kernels, style=style)
+        task_file.parent.mkdir(parents=True, exist_ok=True)
+        task_file.write_text(synthesis_prompt, encoding="utf-8")
+        print(f"[✓] 模块 {block_meta['block_id']:02d} ({p_str}: {block_meta['block_title']}) 融合笔记任务书已导出: {task_file.name}")
 
         return {
             "block_id": block_meta["block_id"],
             "block_title": block_meta["block_title"],
             "episodes": eps,
-            "note_file": str(note_file),
-            "size_bytes": note_file.stat().st_size,
+            "task_file": str(task_file),
+            "size_bytes": task_file.stat().st_size,
             "status": "generated",
         }

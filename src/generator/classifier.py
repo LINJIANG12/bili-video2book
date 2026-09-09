@@ -10,6 +10,23 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 
+def _compile_keyword_regex(keywords: List[str]) -> "re.Pattern":
+    """将关键词列表预编译为零宽前瞻合并正则。
+
+    - 长词优先排序，保证复合词（如"深度评测"）优先命中；
+    - 零宽前瞻 (?=(...)) 使引擎在每个位置重试，重叠短词（如"测评"）也能独立计数，
+      与逐关键词 `kw in text` 的子串判定语义完全等价，但只需单次扫描。
+    """
+    ordered = sorted(set(keywords), key=len, reverse=True)
+    alternation = "|".join(re.escape(k) for k in ordered)
+    return re.compile(f"(?=({alternation}))", re.IGNORECASE)
+
+
+def _count_keyword_hits(pattern: "re.Pattern", text: str) -> int:
+    """统计文本中命中的唯一关键词数量（每个关键词最多计 1 分）。"""
+    return len({m.group(1) for m in pattern.finditer(text)})
+
+
 class NoteClassifier:
     STUDY = "study"
     NEWS = "news"
@@ -42,6 +59,18 @@ class NoteClassifier:
         "纪录片", "故事", "自述", "复盘", "成长", "复盘分析",
     ]
 
+    # 模块加载时一次性预编译合并正则（长词优先，零宽前瞻支持重叠命中），
+    # 运行时以单次扫描替代逐关键词的 O(N*M) 线性遍历。
+    _STUDY_KW_RE = _compile_keyword_regex(STUDY_KEYWORDS)
+    _NEWS_KW_RE = _compile_keyword_regex(NEWS_KEYWORDS)
+    _GENERAL_KW_RE = _compile_keyword_regex(GENERAL_KEYWORDS)
+
+    # 分类加成规则同样预编译，避免每次调用重复解析
+    _EPISODE_RE = re.compile(r"第\s*\d+\s*(讲|课|集|P|章)", re.IGNORECASE)
+    _VERSION_RE = re.compile(r"\b(v\d+\.\d+|\d+\.\d+\s*(dev|beta|rc))\b", re.IGNORECASE)
+    _STUDY_BOOST_RE = re.compile(r"(公开课|课程|教程|原理|考研|期末)")
+    _NEWS_BOOST_RE = re.compile(r"(重磅|发布|更新|最新功能|新特性|大事件)")
+
     @classmethod
     def classify(
         cls,
@@ -60,19 +89,19 @@ class NoteClassifier:
 
         combined_text = f"{title} {desc} {' '.join(tags or [])}".lower()
 
-        # Score matching
-        study_score = sum(1 for kw in cls.STUDY_KEYWORDS if kw.lower() in combined_text)
-        news_score = sum(1 for kw in cls.NEWS_KEYWORDS if kw.lower() in combined_text)
-        general_score = sum(1 for kw in cls.GENERAL_KEYWORDS if kw.lower() in combined_text)
+        # Score matching（预编译合并正则单次扫描，语义与逐关键词子串判定等价）
+        study_score = _count_keyword_hits(cls._STUDY_KW_RE, combined_text)
+        news_score = _count_keyword_hits(cls._NEWS_KW_RE, combined_text)
+        general_score = _count_keyword_hits(cls._GENERAL_KW_RE, combined_text)
 
-        # Regular expression boosts
-        if re.search(r"第\s*\d+\s*(讲|课|集|P|章)", combined_text, re.IGNORECASE):
+        # Regular expression boosts（预编译规则复用）
+        if cls._EPISODE_RE.search(combined_text):
             study_score += 2
-        if re.search(r"\b(v\d+\.\d+|\d+\.\d+\s*(dev|beta|rc))\b", combined_text, re.IGNORECASE):
+        if cls._VERSION_RE.search(combined_text):
             news_score += 2
-        if re.search(r"(公开课|课程|教程|原理|考研|期末)", combined_text):
+        if cls._STUDY_BOOST_RE.search(combined_text):
             study_score += 2
-        if re.search(r"(重磅|发布|更新|最新功能|新特性|大事件)", combined_text):
+        if cls._NEWS_BOOST_RE.search(combined_text):
             news_score += 2
 
         if news_score > study_score and news_score > general_score:

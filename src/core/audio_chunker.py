@@ -140,6 +140,7 @@ class AudioChunker:
                 "-i", str(src),
                 "-t", str(round(duration_current, 2)),
                 "-acodec", "copy",
+                "-avoid_negative_ts", "make_zero",
                 str(chunk_path),
             ]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)

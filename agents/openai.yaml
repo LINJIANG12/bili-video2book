@@ -1,0 +1,16 @@
+interface:
+  display_name: "Bili-Video2Book"
+  short_description: "Transform Bilibili & local course videos into deep textbooks and review notes."
+  default_prompt: "请帮我把这个视频/网课重构成精读教材与复习笔记："
+
+policy:
+  allow_implicit_invocation: true
+
+dependencies:
+  tools:
+    - type: "system"
+      value: "python"
+      description: "Python 3.8+ runtime"
+    - type: "system"
+      value: "ffmpeg"
+      description: "Audio extraction and media slicing utility"

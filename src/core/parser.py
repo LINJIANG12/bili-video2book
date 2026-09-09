@@ -8,8 +8,10 @@
 """
 
 import json
+import random
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,15 +43,15 @@ class BilibiliParser:
     }
 
     @staticmethod
-    def _解析密钥路径(密钥文件: Optional[Any] = None, 工作区: Optional[Any] = None) -> Optional[str]:
+    def _resolve_keys_path(keys_file: Optional[Any] = None, workspace: Optional[Any] = None) -> Optional[str]:
         """解析签名密钥文件路径（优先使用工作区提供的路径）。"""
         try:
-            if 工作区 is not None and hasattr(工作区, "wbi_keys_file"):
-                return str(工作区.wbi_keys_file)
+            if workspace is not None and hasattr(workspace, "wbi_keys_file"):
+                return str(workspace.wbi_keys_file)
         except Exception:
             pass
-        if 密钥文件 is not None:
-            return str(密钥文件)
+        if keys_file is not None:
+            return str(keys_file)
         return None
 
     @staticmethod
@@ -103,76 +105,97 @@ class BilibiliParser:
     ) -> Dict[str, Any]:
         """请求详情接口并返回原始元数据（强制签名，区分导航失败与详情失败）。"""
         # 密钥路径由工作区提供，含有效期，过期由签名器重取
-        密钥路径 = cls._解析密钥路径(密钥文件=wbi_keys_file, 工作区=workspace)
+        resolved_keys_path = cls._resolve_keys_path(keys_file=wbi_keys_file, workspace=workspace)
 
         # 详情参数必须经签名器加签
         try:
-            签名参数 = WbiSigner.enc_wbi({"bvid": bvid}, sessdata=sessdata, keys_file=密钥路径)
-        except RuntimeError as 错误:
-            文本 = str(错误)
-            if "[风控]" in 文本 or "[网络]" in 文本:
+            signed_params = WbiSigner.enc_wbi({"bvid": bvid}, sessdata=sessdata, keys_file=resolved_keys_path)
+        except RuntimeError as err:
+            err_msg = str(err)
+            if "[风控]" in err_msg or "[网络]" in err_msg:
                 raise RuntimeError(
-                    f"[导航失败]{文本}"
+                    f"[导航失败]{err_msg}"
                     "建议动作：检查登录凭证有效性，等待后降低频率重试。"
-                ) from 错误
+                ) from err
             raise RuntimeError(
-                f"[签名]导航阶段签名失败：{错误}。"
+                f"[签名]导航阶段签名失败：{err}。"
                 "建议动作：删除过期密钥文件后重试；仍失败请检查网络。"
-            ) from 错误
-        except Exception as 错误:
+            ) from err
+        except Exception as err:
             raise RuntimeError(
-                f"[签名]导航阶段签名失败：{错误}。"
+                f"[签名]导航阶段签名失败：{err}。"
                 "建议动作：删除过期密钥文件后重试；仍失败请检查网络。"
-            ) from 错误
+            ) from err
 
-        params = urllib.parse.urlencode(签名参数)
+        params = urllib.parse.urlencode(signed_params)
         url = f"{cls.VIEW_API}?{params}"
         headers = dict(cls.DEFAULT_HEADERS)
         if sessdata:
             headers["Cookie"] = f"SESSDATA={sessdata}"
 
-        # 复用集中限速，避免高频触发风控
-        WbiSigner.wait_rate_limit()
-        req = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as 错误:
-            if 错误.code == 412:
+        # 复用集中限速，避免高频触发风控；增加 3 次指数退避重试（对齐 fetcher）
+        max_retries = 3
+        base_backoff = 1.5
+        data = None
+
+        for attempt in range(1, max_retries + 2):
+            WbiSigner.wait_rate_limit()
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    break
+            except urllib.error.HTTPError as err:
+                retryable = (err.code == 412) or (500 <= err.code <= 599)
+                if retryable and attempt <= max_retries:
+                    retry_after = err.headers.get("Retry-After") if hasattr(err, "headers") else None
+                    if retry_after and retry_after.isdigit():
+                        wait = float(retry_after)
+                    else:
+                        wait = base_backoff * (2 ** (attempt - 1)) + random.uniform(0.1, 0.5)
+                    print(f"[重试]详情接口状态异常（{err.code}），{wait:.1f}秒后重试（第{attempt}次）")
+                    time.sleep(wait)
+                    continue
+                if err.code == 412:
+                    raise RuntimeError(
+                        "[风控]详情接口被风控拦截（412），签名可能过期或频率过高。"
+                        "建议动作：携带有效登录凭证、删除过期密钥文件后降频重试。"
+                    ) from err
+                if 500 <= err.code <= 599:
+                    raise RuntimeError(
+                        f"[网络]详情接口服务端异常（{err.code}）。"
+                        "建议动作：等待后退避重试。"
+                    ) from err
                 raise RuntimeError(
-                    "[风控]详情接口被风控拦截（412），签名可能过期或频率过高。"
-                    "建议动作：携带有效登录凭证、删除过期密钥文件后降频重试。"
-                ) from 错误
-            if 500 <= 错误.code <= 599:
+                    f"[网络]详情接口请求失败（{err.code}）。"
+                    "建议动作：检查网络后重试。"
+                ) from err
+            except Exception as err:
+                if attempt <= max_retries:
+                    wait = base_backoff * (2 ** (attempt - 1)) + random.uniform(0.1, 0.5)
+                    print(f"[重试]详情接口网络异常：{err}，{wait:.1f}秒后重试（第{attempt}次）")
+                    time.sleep(wait)
+                    continue
                 raise RuntimeError(
-                    f"[网络]详情接口服务端异常（{错误.code}）。"
-                    "建议动作：等待后退避重试。"
-                ) from 错误
-            raise RuntimeError(
-                f"[网络]详情接口请求失败（{错误.code}）。"
-                "建议动作：检查网络后重试。"
-            ) from 错误
-        except Exception as 错误:
-            raise RuntimeError(
-                f"[网络]详情接口请求失败：{错误}。"
-                "建议动作：检查网络连接或代理后重试。"
-            ) from 错误
+                    f"[网络]详情接口请求失败：{err}。"
+                    "建议动作：检查网络连接或代理后重试。"
+                ) from err
 
         if data.get("code") != 0:
-            编码 = data.get("code")
-            信息 = data.get("message")
-            if 编码 == -412:
+            code = data.get("code")
+            msg = data.get("message")
+            if code == -412:
                 raise RuntimeError(
-                    f"[风控]详情接口返回风控拦截：code={编码}，msg={信息}。"
+                    f"[风控]详情接口返回风控拦截：code={code}，msg={msg}。"
                     "建议动作：携带有效登录凭证、删除过期密钥文件并降频重试。"
                 )
-            if 编码 in (-403, -404, 62002, 62004):
+            if code in (-403, -404, 62002, 62004):
                 raise RuntimeError(
-                    f"[风控]详情接口访问受限：code={编码}，msg={信息}。"
+                    f"[风控]详情接口访问受限：code={code}，msg={msg}。"
                     "建议动作：确认稿件可见性与凭证权限后重试。"
                 )
             raise RuntimeError(
-                f"[风控]详情接口返回异常：code={编码}，msg={信息}。"
+                f"[风控]详情接口返回异常：code={code}，msg={msg}。"
                 "建议动作：确认稿件号正确、凭证有效后重试。"
             )
         return data["data"]
@@ -266,7 +289,6 @@ class BilibiliParser:
             selected_cid = matched_part["cid"]
             selected_title = matched_part["title"]
 
-        _ = Path  # 保持路径工具可用性标记
         return {
             "bvid": bvid,
             "aid": raw.get("aid"),

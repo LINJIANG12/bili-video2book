@@ -9,10 +9,10 @@
 </p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
-[![Hosts: OpenCode | Claude Code | Cursor](https://img.shields.io/badge/Hosts-OpenCode%20%7C%20Claude%20Code%20%7C%20Cursor-111827?style=flat-square)](SKILL.md)
-[![AI Engine: Multimodal Native](https://img.shields.io/badge/Engine-Multimodal%20Native%20LLM-8A2BE2?style=flat-square)](#)
-[![Fallback: faster-whisper int8](https://img.shields.io/badge/Fallback-faster--whisper%20int8-orange?style=flat-square)](https://github.com/SYSTRAN/faster-whisper)
-[![Tests: 40 passing](https://img.shields.io/badge/Tests-40%20passing-brightgreen?style=flat-square)](#)
+[![Hosts: Antigravity | ChatGPT | OpenAI Codex | Terminal (pip)](https://img.shields.io/badge/Hosts-Antigravity%20%7C%20ChatGPT%20%7C%20Codex%20%7C%20Terminal-111827?style=flat-square)](SKILL.md)
+[![Standard: Open Agent Skills](https://img.shields.io/badge/Standard-Open%20Agent%20Skills-blue?style=flat-square)](SKILL.md)
+[![AI Engine: Plan A Native Audio (Antigravity/ChatGPT)](https://img.shields.io/badge/Engine-Plan%20A%20Native%20Audio(Antigravity%2FChatGPT)-8A2BE2?style=flat-square)](#)
+[![Tests: 49 passing](https://img.shields.io/badge/Tests-49%20passing-brightgreen?style=flat-square)](#)
 
 **[中文说明](README.md)** &nbsp;·&nbsp; [Why Replace Video](#the-hidden-cost-of-watching-video-is-time-and-unsearchability) &nbsp;·&nbsp; [What It Does](#what-it-does) &nbsp;·&nbsp; [Two Deliverable Forms](#two-distinct-forms-two-different-missions) &nbsp;·&nbsp; [Install](#install) &nbsp;·&nbsp; [How to Use](#how-to-use) &nbsp;·&nbsp; [Design Principles](#design-principles)
 
@@ -39,18 +39,18 @@ However, watching video as an input medium carries four major inherent bottlenec
 
 **Tens of hours of lectures in, two structured books out.**
 
-Give it any Bilibili video/course series URL, local video file (`.mp4`, `.mkv`, `.mov`, `.flv`, etc.), or local course directory. The toolchain handles lightweight audio extraction (universal 64kbps 16kHz mono AAC), lossless chunking, multimodal direct ingestion, and global semantic topic planning, yielding two orthogonal deliverables:
+Input any Bilibili long video/series URL, local media file (`.mp4`/`.mkv`/`.mov`/`.flv`), or entire local lecture folder. The system extracts lightweight 64kbps human voice, applies balanced lossless slicing, enables multimodal transcription, and performs global knowledge block planning to deliver two distinct deliverables:
 
 ```text
-Traditional Video Watching:
-[40 hours of streaming] ──► Low throughput ➔ Scrubbing bar ➔ Unsearchable ➔ Fragmented ➔ No test closure
+Traditional video study:
+[40h Watching & Listening] ──► Low throughput ➔ Timeline scrub hunting ➔ Unsearchable ➔ Fragmented ➔ No feedback
 
-Bili-Video2Book Reconstructed:
-[One-click Batch Flow] ──┬──► 📘 Standalone In-Depth Tutorial Articles (articles/)
-                         │     └── Full derivations · Blackboard math · End-to-end cases · Self-test questions
-                         │
-                         └──► 📑 Module Review Cheatsheets (notes/)
-                               └── ASCII topologies · Ontology merge (> Source: Pxx) · Adaptive matrices · Anti-patterns
+Bili-Video2Book pipeline:
+[One-Click Reconstruction] ──┬──► 📘 9 In-Depth Single-Episode Textbooks (~150k words, articles/)
+                             │     └── Full derivations · Blackboard steps · Case closures · Self-test exercises
+                             │
+                             └──► 📑 6 Clustered Knowledge Block Notes (High-density Cheatsheets, notes/)
+                                   └── ASCII topologies · Merged ontologies (> Source: Pxx) · Comparative matrices · Pitfalls
 ```
 
 ### 🌐 Polymorphic Input Support (Online & Local)
@@ -81,13 +81,14 @@ Tailored for the contrasting cognitive requirements between first-time in-depth 
 [ Input Bilibili Video / Course Series URL / Local Video / Course Directory ]
                      │
                      ▼
-┌── 🛠️ Tooling Tier (CLI Pipeline · Pure Local Performance) ────────┐
-│  1. Topology Parser : Single/Multi-P & local directory auto-detection │
-│  2. Audio Stripper  : 64kbps DASH download / Universal FFmpeg extract│
-│  3. Lossless Chunker: 10-minute stream-copy instant segmentation     │
-│  4. Acoustic ASR    : Multimodal dialogue model priority ➔ Whisper   │
-│  5. Topic Planner   : Kernel extraction & topic_plan.json generation │
-└────────────────────────────────────────────────────────────────────┘
+┌── 🛠️ Tooling Tier (CLI Entry · PipelineCoordinator Domain Service · Local) ─┐
+│  1. Topology Parser  : Single/Multi-P & local directory auto-detection       │
+│  2. Unified Network  : WBI signing · 412 risk-control retry (http_client)    │
+│  3. Audio Stripper   : 64kbps DASH download / Universal FFmpeg extract       │
+│  4. Lossless Chunker : 10-minute stream-copy instant segmentation            │
+│  5. Pipeline Orchestrator: two-stage flow + resume (pipeline.py)             │
+│  6. Topic Planner    : Kernel extraction & duration-aware clustering         │
+└────────────────────────────────────────────────────────────────────────────┘
                      │ Emits clean text, kernels JSON, and AGENT_TASK.md
                      ▼
 ┌── 🧠 Synthesis Tier (Host Dialogue Agent · Multimodal Native) ───────┐
@@ -101,37 +102,45 @@ Tailored for the contrasting cognitive requirements between first-time in-depth 
 
 ## Install
 
-Use directly as a native Agent Skill, or run as a standalone local CLI.
+Use directly as a native Agent Skill, or run as a standalone local CLI tool.
 
 ### 1. 🗣️ Ask your Agent (Recommended)
-Paste this into OpenCode, Claude Code, or Cursor:
+Paste this into Antigravity, ChatGPT, or OpenAI Codex:
 ```text
 Install https://github.com/LINJIANG12/bili-video2book as my global skill.
 ```
 
-### 2. 🧬 Git Clone
+> **Note (Codex Standard)**:
+> - **In-Repo Execution**: This repository provides `.agents/skills/bili-video2book`. In Codex CLI or Open Agent Skills supported tools, trigger directly via `$bili-video2book` or plain prompt.
+> - **Global Usage**: Symlink or copy this repository to `~/.agents/skills/bili-video2book`.
+
+### 2. 🧬 Local Install & Terminal CLI (pip)
 ```bash
 git clone https://github.com/LINJIANG12/bili-video2book.git
 cd bili-video2book
 
+# Optional: Install globally as terminal CLI command (usable anywhere)
+pip install -e .
+
 # System dependency (for lossless fast audio extraction and remux):
 # Ensure ffmpeg is available in your system PATH
 
-# Optional dependency (for offline local model fallback):
-pip install faster-whisper
+# Zero third-party Python dependency: Pure Python Standard Library implementation!
 ```
 
 ---
 
 ## How to use
 
+If installed via `pip install -e .`, use `bili-video2book` directly from any working directory. Or run `python src/cli.py` in repo root:
+
 ### Scenario 1: One-click Full Course Pipeline (Bilibili or Local Folder)
 ```bash
 # Bilibili course
-python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all
+bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all
 
 # Local video course folder (auto natural sort P01..Pn, batch transcription & module notes)
-python src/cli.py pipeline "D:\videos\Database_Course\" --all
+bili-video2book pipeline "D:\videos\Database_Course\" --all
 ```
 
 ### Scenario 2: Process a Single Episode or Range
@@ -153,9 +162,10 @@ python src/cli.py cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --
 
 ### Scenario 4: Transcribe Local Video or Audio Directly
 ```bash
-# Automatically strips 64k audio from any video container (.mp4, .mkv, .mov, etc.) and transcribes
-python src/cli.py transcribe "lecture.mp4" --engine auto
-python src/cli.py transcribe "lecture.m4a" --engine auto
+# Automatically strips 64k audio from any video container (.mp4, .mkv, .mov, etc.).
+# Cached clean transcript => reused; otherwise a TRANSCRIBE_TASK is exported for the dialogue model (sole path).
+python src/cli.py transcribe "lecture.mp4"
+python src/cli.py transcribe "lecture.m4a"
 ```
 
 ---
@@ -178,8 +188,8 @@ output/【Database Course】Final_Sprint_BV14VqVBrEhc/
 │   ├── P01_Introduction_clean.txt
 │   └── kernels/
 ├── audio/                        # 🎵 64kbps voice audio archives
-├── topic_plan.json               # 🗺️ Cross-episode semantic clustering map
-└── manifest.json                 # 📋 Task metadata and pipeline execution log
+├── topic_plan.json               # 🗺️ Cross-episode semantic clustering map (duration-aware)
+└── manifest.json                 # 📋 Task metadata & pipeline log (relative paths, portable)
 ```
 
 ---

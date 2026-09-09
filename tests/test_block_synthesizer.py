@@ -86,6 +86,37 @@ class TestBlockSynthesizer(unittest.TestCase):
         self.assertNotIn("{block_title}", prompt)
         self.assertNotIn("{kernels_json}", prompt)
 
+    def test_synthesize_block_refresh_stale_empty_task(self):
+        """Should refresh an existing task file if it was previously empty or missing definitions."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from src.core.workspace import TaskWorkspace
+            ws = TaskWorkspace.create(title="测试课程", bvid="BV123456", base_dir=tmpdir)
+            block_meta = {
+                "block_id": 1,
+                "block_title": "测试模块",
+                "episodes": [1],
+                "core_theme": "测试主题",
+            }
+            # 1. Initially create with empty kernels
+            res1 = BlockSynthesizer.synthesize_block(block_meta, [], ws=ws)
+            self.assertEqual(res1["status"], "generated")
+
+            # 2. Re-running with empty kernels without force -> cached
+            res2 = BlockSynthesizer.synthesize_block(block_meta, [], ws=ws)
+            self.assertEqual(res2["status"], "cached")
+
+            # 3. Running with rich kernels -> should auto refresh
+            rich_kernels = [{
+                "page": 1,
+                "title": "P1",
+                "definitions": [{"term": "概念A", "essence": "本质A"}],
+                "mechanisms_and_models": [],
+            }]
+            res3 = BlockSynthesizer.synthesize_block(block_meta, rich_kernels, ws=ws)
+            self.assertEqual(res3["status"], "generated")
+            content = Path(res3["task_file"]).read_text(encoding="utf-8")
+            self.assertIn("概念A", content)
+
 
 if __name__ == "__main__":
     unittest.main()

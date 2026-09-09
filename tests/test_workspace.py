@@ -60,6 +60,18 @@ class TestTaskWorkspace(unittest.TestCase):
             self.assertEqual(loaded["total_episodes"], 33)
             self.assertEqual(loaded["status"], "completed")
 
+    def test_sanitize_title_preserves_technical_symbols(self):
+        """Verify sanitize_title does NOT filter out C++, C#, 1.1, dots, brackets, but only strips OS invalid chars."""
+        raw = "【第1.1讲】C++与C#语法特性对比? : <高级>|*指南.mp4"
+        clean = TaskWorkspace.sanitize_title(raw)
+        self.assertIn("C++", clean)
+        self.assertIn("C#", clean)
+        self.assertIn("1.1", clean)
+        self.assertIn("【第1.1讲】", clean)
+        # Forbidden characters must be sanitized
+        for forbidden in [":", "?", "<", ">", "|", "*"]:
+            self.assertNotIn(forbidden, clean)
+
 
 if __name__ == "__main__":
     unittest.main()

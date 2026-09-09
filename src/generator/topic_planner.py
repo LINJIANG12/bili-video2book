@@ -78,12 +78,23 @@ class SemanticTopicPlanner:
             chars = [c for c in title_str if not c.isdigit() and c not in ("-", "_", " ", "(", ")", "（", "）", "第", "讲", "课")]
             return "".join(chars)[:6]
 
+        # 兼顾标题词根关联度与总时长控制（单个 block 建议控制在 75 分钟 / 4500 秒以内）
+        MAX_BLOCK_DURATION_SEC = 4500
+
+        def get_cluster_duration(cluster: List[Dict[str, Any]]) -> int:
+            return sum(int(item.get("duration", 0) or 0) for item in cluster)
+
         for p in parts[1:]:
             prev = current_cluster[-1]
             stem_prev = get_stem(prev["title"])
             stem_curr = get_stem(p["title"])
+            p_dur = int(p.get("duration", 0) or 0)
+            curr_dur = get_cluster_duration(current_cluster)
 
-            if stem_prev and stem_curr and (stem_prev in stem_curr or stem_curr in stem_prev) and len(current_cluster) < 4:
+            # 时长超限检查：若加入当前集导致时长显著超过上限，则主动触发分块
+            duration_ok = (curr_dur + p_dur) <= MAX_BLOCK_DURATION_SEC or curr_dur == 0
+
+            if stem_prev and stem_curr and (stem_prev in stem_curr or stem_curr in stem_prev) and len(current_cluster) < 4 and duration_ok:
                 current_cluster.append(p)
             else:
                 clusters.append(current_cluster)

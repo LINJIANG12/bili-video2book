@@ -101,27 +101,38 @@ class TestAdaptiveNotes(unittest.TestCase):
         )
         self.assertEqual(res_forced["note_type"], "news")
 
-    def test_doc_builder_render_note_markdown(self):
-        """DocumentBuilder.render_note should generate sober GitHub markdown."""
-        md_study = DocumentBuilder.render_note(
-            title="软件工程课程",
-            part_title="需求分析",
-            content="需求工程包括功能性与非功能性需求，需要明确边界条件与验收标准。" * 5,
-            note_type="study",
-        )
-        self.assertIn("需求分析", md_study)
-        self.assertIn("## 知识结构导图", md_study)
-        self.assertIn("## 核心知识点精炼", md_study)
+    def test_block_task_export_only(self):
+        """synthesize_block must export 模块XX_*_TASK.md and never write baseline note files."""
+        from src.generator.block_synthesizer import BlockSynthesizer
 
-        md_news = DocumentBuilder.render_note(
-            title="Godot 4.8 Dev4 发布",
-            part_title="",
-            content="本次发布带来了 3D 拖尾节点、多反弹 AO 近似以及浮窗编辑器视口。" * 5,
-            note_type="news",
-        )
-        self.assertIn("## 核心动态摘要", md_news)
-        self.assertIn("## 核心更新与特性清单", md_news)
-        self.assertIn("## 影响评估与采用建议", md_news)
+        class _FakeWs:
+            def __init__(self, notes_dir):
+                self.notes_dir = notes_dir
+
+        block_meta = {
+            "block_id": 1,
+            "block_title": "软件工程概述与学科认知",
+            "episodes": [1, 2],
+            "core_theme": "学科定位与考核机制",
+        }
+        kernels = [
+            {"page": 1, "title": "软件工程概述-1", "definitions": [{"term": "软件工程", "essence": "系统化方法"}]},
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = _FakeWs(Path(tmpdir))
+            res = BlockSynthesizer.synthesize_block(block_meta, kernels, ws=ws)
+            task_path = Path(res["task_file"])
+            self.assertTrue(str(task_path).endswith("_TASK.md"))
+            self.assertTrue(task_path.exists())
+            task_md = task_path.read_text(encoding="utf-8")
+            self.assertIn("软件工程概述与学科认知", task_md)
+            self.assertIn("深度融合", task_md)
+            self.assertEqual(res["status"], "generated")
+            # No baseline 模块笔记 file may exist
+            self.assertEqual(list(ws.notes_dir.glob("模块*_笔记.md")), [])
+            # Cache rule: task file exists -> skip rewrite
+            res2 = BlockSynthesizer.synthesize_block(block_meta, kernels, ws=ws)
+            self.assertEqual(res2["status"], "cached")
 
     def test_article_and_rectify_prompt_rendering(self):
         """Verify replacement article prompt and literal ASR rectification prompt rendering."""
@@ -151,6 +162,44 @@ class TestAdaptiveNotes(unittest.TestCase):
         )
         self.assertIn("忍见工程包括虚球分析", rec_helper)
         self.assertIn("计算机科学 软件工程", rec_helper)
+
+    def test_cmd_note_multi_page_filename_prefix(self):
+        """cmd_note on multi-page course must prefix filename with P{page:02d} to avoid collision."""
+        import argparse
+        import src.cli as cli_mod
+        from unittest import mock
+
+        fake_info = {
+            "title": "多P课程",
+            "bvid": "BVmulti123",
+            "has_multi_pages": True,
+            "parts": [
+                {"page": 1, "title": "第一节", "cid": 101},
+                {"page": 2, "title": "第二节", "cid": 102},
+            ],
+            "cid": 101,
+            "url_page": 2,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                url="https://www.bilibili.com/video/BVmulti123?p=2",
+                page=2,
+                sessdata=None,
+                task="test_multinote",
+                base_dir=tmpdir,
+                output=None,
+                transcript_file=None,
+                note_type="auto",
+            )
+            with mock.patch("src.cli._resolve_target_info", return_value=fake_info):
+                cli_mod.cmd_note(args)
+
+            notes_dir = Path(tmpdir) / "test_multinote" / "notes"
+            files = list(notes_dir.glob("*.md"))
+            self.assertEqual(len(files), 1)
+            self.assertTrue(files[0].name.startswith("P02_BVmulti123_"))
+            self.assertTrue(files[0].name.endswith("_NOTE_TASK.md"))
 
 
 if __name__ == "__main__":

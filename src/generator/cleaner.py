@@ -12,6 +12,11 @@ from typing import Any, Dict
 
 
 class TextCleaner:
+    # 预编译通用文本清洗正则以复用提升执行效率
+    _CHINESE_SPACE_RE = re.compile(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])")
+    _PUNCT_COLLAPSE_RE = re.compile(r"([，。！？、,!?])\1+")
+    _MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+
     @classmethod
     def clean(cls, raw_transcript: str) -> Dict[str, Any]:
         """Execute non-destructive cleaning and normalization."""
@@ -27,13 +32,13 @@ class TextCleaner:
         text = raw_transcript
 
         # 1. Normalize spaces between Chinese characters
-        text = re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", text)
+        text = cls._CHINESE_SPACE_RE.sub("", text)
 
         # 2. Collapse consecutive identical punctuation marks
-        text = re.sub(r"([，。！？、,!?])\1+", r"\1", text)
+        text = cls._PUNCT_COLLAPSE_RE.sub(r"\1", text)
 
         # 3. Collapse multiple blank lines
-        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = cls._MULTI_NEWLINE_RE.sub("\n\n", text)
 
         # 4. Strip line-level whitespace
         lines = [line.strip() for line in text.split("\n")]
@@ -48,3 +53,4 @@ class TextCleaner:
             "compression_ratio": max(0.0, compression_ratio),
             "cleaned_text": cleaned_text,
         }
+

@@ -41,7 +41,7 @@ class LocalMediaParser:
             if p.is_dir():
                 return any(
                     f.is_file() and f.suffix.lower() in SUPPORTED_MEDIA_EXTS
-                    for f in p.iterdir()
+                    for f in p.rglob("*")
                 )
         except Exception:
             return False
@@ -148,18 +148,18 @@ class LocalMediaParser:
             media_files = [target]
             task_title = target.stem
         else:
-            # Directory: scan all supported media files
+            # Directory: scan all supported media files recursively
             media_files = [
-                f for f in target.iterdir()
+                f for f in target.rglob("*")
                 if f.is_file() and f.suffix.lower() in SUPPORTED_MEDIA_EXTS
             ]
             if not media_files:
                 raise ValueError(f"指定目录下未找到任何受支持的视频或音频文件: {target}")
-            # Natural sort by filename
-            media_files.sort(key=lambda f: natural_sort_key(f.name))
+            # Natural sort by relative path
+            media_files.sort(key=lambda f: natural_sort_key(str(f.relative_to(target))))
             task_title = target.name
 
-        safe_title = "".join(c for c in task_title if c.isalnum() or c in (" ", "-", "_")).strip()
+        safe_title = re.sub(r'[\\/*?:"<>|\n\r\t]+', '_', task_title).strip(" ._-")[:80]
         if not safe_title:
             safe_title = "local_course"
 
@@ -168,9 +168,11 @@ class LocalMediaParser:
         for idx, f in enumerate(media_files, 1):
             dur = cls.get_duration(f)
             total_duration += dur
+            rel = f.relative_to(target) if target.is_dir() else Path(f.name)
+            part_title = f"{rel.parent.as_posix()} - {f.stem}" if rel.parent != Path(".") else f.stem
             parts.append({
                 "page": idx,
-                "title": f.stem,
+                "title": part_title,
                 "cid": f"local_{idx:03d}",
                 "duration": int(dur),
                 "filepath": str(f),

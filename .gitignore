@@ -33,6 +33,12 @@ downloads/
 *.m4s
 *.mp3
 *.wav
+.backup_single_notes/
+*.tmp.*
+
+# Testing & Dev caches
+.pytest_cache/
+.workbuddy/
 
 # IDE / Editor configs
 .vscode/
@@ -44,3 +50,4 @@ downloads/
 config.json
 .env
 .aide/
+

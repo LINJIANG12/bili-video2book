@@ -136,6 +136,27 @@ class TestLocalMedia(unittest.TestCase):
             self.assertFalse(info_bili.get("is_local"))
             self.assertEqual(info_bili["bvid"], "BV16g411M7r2")
 
+    def test_parse_nested_subdirectories(self):
+        """Verify LocalMediaParser.parse recursively discovers media in nested chapter subfolders."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            ch1 = tmp_path / "01_基础篇"
+            ch2 = tmp_path / "02_进阶篇"
+            ch1.mkdir()
+            ch2.mkdir()
+            (ch1 / "01_绪论.mp4").write_bytes(b"dummy")
+            (ch1 / "02_环境搭建.mp4").write_bytes(b"dummy")
+            (ch2 / "01_核心原理.mkv").write_bytes(b"dummy")
+
+            with patch.object(LocalMediaParser, "get_duration", return_value=50.0):
+                meta = LocalMediaParser.parse(tmp_path)
+
+            self.assertEqual(len(meta["parts"]), 3)
+            titles = [p["title"] for p in meta["parts"]]
+            self.assertEqual(titles[0], "01_基础篇 - 01_绪论")
+            self.assertEqual(titles[1], "01_基础篇 - 02_环境搭建")
+            self.assertEqual(titles[2], "02_进阶篇 - 01_核心原理")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .workspace import sanitize_filename
+
 
 class KernelExtractor:
     KERNEL_PROMPT = """你是一位顶尖计算机科学与工程知识萃取专家。
@@ -127,7 +129,7 @@ class KernelExtractor:
 
         def _subagent_worker(ep: Dict[str, Any]) -> Dict[str, Any]:
             p_num = ep["page"]
-            clean_title = "".join(c for c in ep["title"] if c.isalnum() or c in (" ", "-", "_")).strip()
+            clean_title = sanitize_filename(ep["title"])
             k_path = kernels_dir / f"P{p_num:02d}_{clean_title}_kernel.json"
 
             # Read clean transcript file

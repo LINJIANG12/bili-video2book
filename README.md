@@ -9,10 +9,10 @@
 </p>
 
 [![开源协议: MIT](https://img.shields.io/badge/开源协议-MIT-green.svg?style=flat-square)](LICENSE)
-[![适配环境: OpenCode | Claude Code | Cursor](https://img.shields.io/badge/适配环境-OpenCode%20%7C%20Claude%20Code%20%7C%20Cursor-111827?style=flat-square)](SKILL.md)
-[![AI引擎: 对话大模型多模态直读](https://img.shields.io/badge/转录引擎-多模态原生直读-8A2BE2?style=flat-square)](#)
-[![离线兜底: 本地 Whisper int8](https://img.shields.io/badge/离线兜底-faster--whisper%20int8-orange?style=flat-square)](https://github.com/SYSTRAN/faster-whisper)
-[![测试覆盖: 40项全通过](https://img.shields.io/badge/自动化测试-40%20项全通过-brightgreen?style=flat-square)](#)
+[![适配环境: Antigravity | ChatGPT | OpenAI Codex | 终端命令行 (pip)](https://img.shields.io/badge/适配环境-Antigravity%20%7C%20ChatGPT%20%7C%20Codex%20%7C%20Terminal-111827?style=flat-square)](SKILL.md)
+[![Skill 规范: Open Agent Skills](https://img.shields.io/badge/Skill%20规范-Open%20Agent%20Skills-blue?style=flat-square)](SKILL.md)
+[![转录引擎: 方案A原生直读(Antigravity/ChatGPT)](https://img.shields.io/badge/转录引擎-方案A原生直读(Antigravity%2FChatGPT)-8A2BE2?style=flat-square)](#)
+[![测试覆盖: 49项全通过](https://img.shields.io/badge/自动化测试-全项通过-brightgreen?style=flat-square)](#)
 
 **[English](README.en.md)** &nbsp;·&nbsp; [为什么需要](#为什么用视频学硬知识往往事倍功半) &nbsp;·&nbsp; [它能做什么](#它能做什么) &nbsp;·&nbsp; [双轨交付矩阵](#双轨交付矩阵各司其职) &nbsp;·&nbsp; [双层架构](#双层协同架构) &nbsp;·&nbsp; [极速上手](#安装与快速开始) &nbsp;·&nbsp; [设计原则](#核心设计原则)
 
@@ -82,12 +82,13 @@ Bili-Video2Book 重构方式：
 [ 输入 B 站任意长视频 / 连载网课链接 / 本地视频文件 / 本地课程目录 ]
                  │
                  ▼
-┌── 🛠️ 工具层 (CLI 管道 · 纯本地极速) ──────────────────────────────┐
-│  1. 拓扑解析  : 单P/多P/合集与本地视频目录智能多态嗅探 (parser/local_media) │
-│  2. 轻量提取  : 64kbps DASH 人声直取 / 本地视频通用 64k 剥离 (fetcher/ffmpeg) │
-│  3. 均衡切片  : 10 分钟无损流拷贝瞬间切片 (audio_chunker.py)          │
-│  4. 声学转录  : 优先对话模型多模态直读 ➔ 经授权回退本地 Whisper      │
-│  5. 语义规划  : 提取高纯度知识元并生成全局 topic_plan.json (planner.py) │
+┌── 🛠️ 工具层 (CLI 入口 · PipelineCoordinator 领域调度 · 纯本地极速) ────┐
+│  1. 拓扑解析  : 单P/多P/合集与本地目录智能多态嗅探 (parser/local_media)  │
+│  2. 统一网络  : WBI 验签 · 412 风控识别 · 退避重试 (http_client/fetcher) │
+│  3. 轻量提取  : 64kbps DASH 人声直取 / 本地视频 64k 剥离 (fetcher/ffmpeg)│
+│  4. 均衡切片  : 10 分钟无损流拷贝瞬间切片 (audio_chunker.py)            │
+│  5. 流水线调度: 两阶段编排 + 断点续派 (pipeline.py PipelineCoordinator) │
+│  6. 语义规划  : 知识元抽取 + 时长感知知识块聚合 (kernel_extractor/planner)│
 └───────────────────────────────────────────────────────────────────────┘
                  │ 导出规范化语料、知识元原子与 Agent 任务书
                  ▼
@@ -105,59 +106,67 @@ Bili-Video2Book 重构方式：
 支持作为成熟 AI Agent 的原生 Skill 挂载，亦可作为本地独立 CLI 工具运行。
 
 ### 1. 🗣️ 交给 Agent 一句话（推荐）
-在 OpenCode、Claude Code、Cursor 等助手中直接发送：
+在 Antigravity、ChatGPT、OpenAI Codex 等助手中直接发送：
 ```text
 把 https://github.com/LINJIANG12/bili-video2book 安装为我的全局 Skill。
 ```
 
-### 2. 🧬 Git Clone 本地安装
+> **提示（Codex 规范）**：
+> - **仓库级就地调用**：本仓库根目录已内置 `.agents/skills/bili-video2book`，在 Codex CLI 或支持 Open Agent Skills 的终端中直接输入 `$bili-video2book` 或自然语言即可触发。
+> - **全局调用**：将本项目拷贝或软链接至 `~/.agents/skills/bili-video2book`。
+
+### 2. 🧬 本地安装与系统命令行 (Terminal / pip)
 ```bash
 git clone https://github.com/LINJIANG12/bili-video2book.git
 cd bili-video2book
 
+# 可选：安装为全局终端命令行工具（推荐，在任意工作目录下可用）
+pip install -e .
+
 # 系统依赖（用于音视频无损极速切片）：
 # 请确保系统已安装 ffmpeg 并加入环境变量 PATH
 
-# 可选依赖（用于无网络时离线声学模型兜底）：
-pip install faster-whisper
+# 转录无第三方依赖：纯 Python 标准库实现，由宿主对话模型多模态原生完成
 ```
 
 ---
 
 ## 怎么用
 
+若已执行 `pip install -e .`，可直接在终端任意目录下使用 `bili-video2book` 命令；亦可免安装在仓库内直接使用 `python src/cli.py`：
+
 ### 场景一：一键处理整门多 P 课程（全自动流水线）
 ```bash
-python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all
+bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all
 ```
 
 ### 场景二：处理特定单集或分集区间
 ```bash
 # 处理单集（例如第 1 讲）
-python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --page 1
+bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --page 1
 
 # 处理指定分集区间（例如第 2 讲至第 5 讲）
-python src/cli.py pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range 2-5
+bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range 2-5
 ```
 
 ### 场景三：仅重新聚合知识块复习大笔记
 ```bash
-python src/cli.py cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --replace
+bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --replace
 ```
 
 ### 场景四：直接转录本地音视频文件
 ```bash
-# 传入本地视频（自动剥离 64k 音频并转录）或音频
-python src/cli.py transcribe "lecture.mp4" --engine auto
+# 传入本地视频（自动剥离 64k 音频）：存在清洗语料即缓存命中，否则导出 TRANSCRIBE_TASK 待对话模型原生转录
+bili-video2book transcribe "lecture.mp4"
 ```
 
 ### 场景五：直接处理本地视频或整套网课目录（全流程教材化）
 ```bash
 # 单集本地视频全流程处理（自动提取音频 -> 10分钟切片 -> 转录 -> 精读长文与笔记）
-python src/cli.py pipeline "D:\videos\lecture01.mp4"
+bili-video2book pipeline "D:\videos\lecture01.mp4"
 
 # 本地整套网课目录（自动自然排序 P01..Pn、批量提取、转录与跨集模块大笔记聚合）
-python src/cli.py pipeline "D:\videos\软件工程全套网课\" --all
+bili-video2book pipeline "D:\videos\软件工程全套网课\" --all
 ```
 
 ---
@@ -180,8 +189,8 @@ output/【数据库速成课】期末突击_BV14VqVBrEhc/
 │   ├── P01_1绪论_clean.txt
 │   └── kernels/
 ├── audio/                        # 🎵 64kbps 纯净人声音频留档
-├── topic_plan.json               # 🗺️ 跨集知识块聚类拓扑规划
-└── manifest.json                 # 📋 任务元数据与流水线执行记录
+├── topic_plan.json               # 🗺️ 跨集知识块聚类拓扑规划（时长感知聚合）
+└── manifest.json                 # 📋 任务元数据与流水线执行记录（路径已相对化，跨环境可移植）
 ```
 
 ---

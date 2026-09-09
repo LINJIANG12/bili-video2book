@@ -365,12 +365,18 @@ class AudioFetcher:
                 str(目标),
             ]
             结果 = subprocess.run(命令, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if 结果.returncode == 0:
+            if 结果.returncode == 0 and 目标.exists() and 目标.stat().st_size > 0:
                 if 临时.exists():
                     临时.unlink()
                 return str(目标)
+            # 转封装失败但生成了空/残缺文件时清理之
+            if 目标.exists():
+                try:
+                    目标.unlink()
+                except OSError:
+                    pass
 
-        # 无工具或转封装失败则直接改名
+        # 无工具或转封装失败则原子覆盖改名
         if 临时.exists():
-            临时.rename(目标)
+            临时.replace(目标)
         return str(目标)

@@ -36,7 +36,7 @@ _仓库根目录 = _探测仓库根目录()
 class TaskWorkspace:
     """任务工作区：隔离每个任务的输出文件。"""
 
-    非法字符正则 = re.compile(r'[\\/*?:"<>|#\n\r\t]+')
+    非法字符正则 = re.compile(r'[\\/*?:"<>|\n\r\t]+')
 
     # 仓库根目录（相对路径换算基准）
     仓库根目录: Path = _仓库根目录
@@ -72,10 +72,18 @@ class TaskWorkspace:
 
     @classmethod
     def sanitize_name(cls, raw_name: str) -> str:
-        """清理非法文件系统字符并限制长度。"""
+        """清理非法文件系统字符并限制任务文件夹长度（最大 80 字符，防 Windows MAX_PATH 溢出）。"""
         清理后 = cls.非法字符正则.sub("_", raw_name)
         清理后 = re.sub(r"_+", "_", 清理后).strip(" ._-")
-        return 清理后[:100] if 清理后 else "task_unnamed"
+        return 清理后[:80] if 清理后 else "task_unnamed"
+
+    @classmethod
+    def sanitize_title(cls, title: str) -> str:
+        """用于文件名的分集或稿件标题转义：不执行字符过滤式清洗（保留 C++、C#、1.1、括号等原样符号），
+        仅替换操作系统硬性禁止的非法字符并规范化空白与长度。"""
+        cleaned = cls.非法字符正则.sub("_", title)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ._-")
+        return cleaned[:80] if cleaned else "part"
 
     def ensure_dirs(self):
         """确保任务根目录与各分类子目录存在。"""
@@ -149,8 +157,37 @@ class TaskWorkspace:
         except Exception:
             return []
 
-    def save_manifest(self, data: Dict[str, Any]):
-        """持久化或增量更新任务清单（原子写入）。"""
+    PATH_KEYS = {
+        "audio", "transcript", "task_prompt", "task_file", "article",
+        "audio_file", "filepath", "source_path", "target_path", "chunk_path", "chunk_file"
+    }
+
+    @classmethod
+    def relativize_obj(cls, obj: Any) -> Any:
+        """递归将字典/列表中属于路径键的值换算为相对仓库根目录的相对路径。"""
+        if isinstance(obj, dict):
+            return {
+                k: (cls.to_relative(v) if k in cls.PATH_KEYS and isinstance(v, (str, Path)) else cls.relativize_obj(v))
+                for k, v in obj.items()
+            }
+        if isinstance(obj, list):
+            return [cls.relativize_obj(x) for x in obj]
+        return obj
+
+    @classmethod
+    def absolutize_obj(cls, obj: Any) -> Any:
+        """递归将字典/列表中属于路径键的值换算为绝对路径供程序内部安全读取。"""
+        if isinstance(obj, dict):
+            return {
+                k: (str(cls.to_absolute(v)) if k in cls.PATH_KEYS and isinstance(v, (str, Path)) else cls.absolutize_obj(v))
+                for k, v in obj.items()
+            }
+        if isinstance(obj, list):
+            return [cls.absolutize_obj(x) for x in obj]
+        return obj
+
+    def save_manifest(self, data: Dict[str, Any], relative: bool = True):
+        """持久化或增量更新任务清单（原子写入，默认转换为相对路径保持跨环境便携）。"""
         已有 = {}
         if self.manifest_file.exists():
             try:
@@ -159,7 +196,8 @@ class TaskWorkspace:
             except Exception:
                 已有 = {}
 
-        已有.update(data)
+        payload = self.relativize_obj(data) if relative else data
+        已有.update(payload)
         临时 = self.manifest_file.with_suffix(f".tmp.{os.getpid()}")
         with open(临时, "w", encoding="utf-8") as 写:
             json.dump(已有, 写, ensure_ascii=False, indent=2)
@@ -167,12 +205,21 @@ class TaskWorkspace:
             os.fsync(写.fileno())
         os.replace(临时, self.manifest_file)
 
-    def load_manifest(self) -> Dict[str, Any]:
-        """读取清单，不存在或损坏时返回空字典。"""
+    def load_manifest(self, absolute: bool = False) -> Dict[str, Any]:
+        """读取清单，不存在或损坏时返回空字典；可选项转为绝对路径。"""
         if not self.manifest_file.exists():
             return {}
         try:
             with open(self.manifest_file, "r", encoding="utf-8") as 读:
-                return json.load(读)
+                data = json.load(读)
+            if absolute:
+                return self.absolutize_obj(data)
+            return data
         except Exception:
             return {}
+
+
+def sanitize_filename(name: str, max_len: int = 80) -> str:
+    """清理用于文件名的分集或稿件标题（模块级快捷函数）。"""
+    return TaskWorkspace.sanitize_title(name)[:max_len]
+

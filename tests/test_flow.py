@@ -57,23 +57,21 @@ class TestBilibiliSkill(unittest.TestCase):
         self.assertGreater(clean_res["cleaned_length"], 0)
 
     def test_doc_builder(self):
-        """Test building revision notes and tutorial articles."""
+        """Test task-prompt rendering (no pseudo baseline docs) and file persister."""
         title = "软件工程测试课"
         part_title = "第1讲 需求工程"
         content = "本节课详细介绍了需求工程的理论模型、功能性需求和非功能性需求，以及需求分析的边界条件和验证策略。"
-        
-        note_md = DocumentBuilder.render_note(title, part_title, content, note_type="study")
-        article_md = DocumentBuilder.render_learning_article(title, part_title, content)
 
-        self.assertIn("课程与教学笔记", note_md)
-        self.assertIn("深度精读", article_md)
+        prompts = DocumentBuilder.render_prompts(title, part_title, content, note_type="study")
+        self.assertIn("知识框架导图", prompts["note_prompt"])
+        self.assertIn("尽可能替代观看原视频", prompts["article_prompt"])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             res = DocumentBuilder.save_documents(
                 output_dir=tmpdir,
                 base_name="P01_需求工程",
-                note_content=note_md,
-                article_content=article_md,
+                note_content=prompts["note_prompt"],
+                article_content=prompts["article_prompt"],
             )
             self.assertTrue(os.path.exists(res["note_path"]))
             self.assertTrue(os.path.exists(res["article_path"]))

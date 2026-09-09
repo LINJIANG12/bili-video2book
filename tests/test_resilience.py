@@ -99,6 +99,27 @@ class TestRetry412(unittest.TestCase):
             self.assertIn(key, enriched)
 
 
+class TestParserRetry412(unittest.TestCase):
+    def test_parser_fetch_video_view_retries_on_412(self):
+        """BilibiliParser.fetch_video_view must retry on 412 and raise descriptive error if all fail."""
+        from src.core.parser import BilibiliParser
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=None):
+            calls["n"] += 1
+            raise urllib.error.HTTPError(
+                getattr(req, "full_url", "http://example.invalid"),
+                412, "Precondition Failed", {}, None,
+            )
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with mock.patch("time.sleep", return_value=None):
+                with self.assertRaises(RuntimeError) as ctx:
+                    BilibiliParser.fetch_video_view(bvid="BV1testretry")
+        self.assertEqual(calls["n"], 4)  # 1 initial + 3 retries = 4 attempts
+        self.assertIn("412", str(ctx.exception))
+
+
 class TestManifestRelative(unittest.TestCase):
     def test_save_manifest_relative_no_drive(self):
         """Manifest save must relativize absolute paths (no drive letters)."""
@@ -106,11 +127,26 @@ class TestManifestRelative(unittest.TestCase):
             ws = TaskWorkspace.create(title="t", bvid="BVtest12345", base_dir=tmpdir)
             abs_audio = str((cli_mod.PROJECT_ROOT / "output" / "audio" / "P01_x.m4a").resolve())
             cli_mod._save_manifest_rel(ws, {
-                "details": [{"page": 1, "audio": abs_audio, "transcript": abs_audio}],
+                "details": [{
+                    "page": 1,
+                    "audio": abs_audio,
+                    "transcript": abs_audio,
+                    "chunk_path": abs_audio,
+                    "target_path": abs_audio,
+                }],
             })
             raw = ws.manifest_file.read_text(encoding="utf-8")
             self.assertNotRegex(raw, r"[A-Za-z]:[\\/]")
             self.assertNotIn(abs_audio, raw)
+
+    def test_parse_range_string_edge_cases(self):
+        """_parse_range_string must handle out-of-bound ranges without error."""
+        res = cli_mod._parse_range_string("1-100", 5)
+        self.assertEqual(res, [1, 2, 3, 4, 5])
+        res_empty = cli_mod._parse_range_string("10-20", 5)
+        self.assertEqual(res_empty, [])
+        res_zero = cli_mod._parse_range_string("0-3", 5)
+        self.assertEqual(res_zero, [1, 2, 3])
 
 
 class TestPartsCache(unittest.TestCase):
@@ -124,6 +160,23 @@ class TestPartsCache(unittest.TestCase):
             ]
             ws.save_parts(parts)
             self.assertEqual(ws.load_parts(), parts)
+
+    def test_resolve_target_info_offline_self_healing(self):
+        """When network fails but parts.json exists in workspace, must self-heal and return cached parts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = TaskWorkspace.create(title="测试离线课程", bvid="BV1testoff12", base_dir=tmpdir)
+            cached_parts = [
+                {"page": 1, "title": "第一节", "cid": 101, "duration": 120},
+                {"page": 2, "title": "第二节", "cid": 102, "duration": 180},
+            ]
+            ws.save_parts(cached_parts)
+
+            with mock.patch("src.core.parser.BilibiliParser.parse_video", side_effect=RuntimeError("网络中断412")):
+                info = cli_mod._resolve_target_info("https://www.bilibili.com/video/BV1testoff12", base_dir=tmpdir)
+                self.assertEqual(info["bvid"], "BV1testoff12")
+                self.assertEqual(len(info["parts"]), 2)
+                self.assertTrue(info.get("is_cached_offline"))
+                self.assertEqual(info["parts"][0]["title"], "第一节")
 
 
 if __name__ == "__main__":
