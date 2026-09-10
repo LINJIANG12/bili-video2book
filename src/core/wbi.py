@@ -18,6 +18,9 @@ from functools import reduce
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+# 仓库根目录（默认缓存文件路径的锚定基准）
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 class WbiSigner:
     """哔哩签名器。"""
@@ -57,10 +60,15 @@ class WbiSigner:
 
     @classmethod
     def _解析密钥文件路径(cls, keys_file: Optional[Any] = None) -> Path:
-        """解析密钥文件路径（未传入时使用默认路径）。"""
+        """解析密钥文件路径（未传入时使用仓库根下的默认路径）。
+
+        默认路径锚定仓库根而非当前所在目录，否则在别处执行命令会在那里凭空多出一个
+        output/ 目录。
+        """
         if keys_file is None:
-            return Path(cls.DEFAULT_KEYS_FILE)
-        return Path(str(keys_file))
+            return _REPO_ROOT / cls.DEFAULT_KEYS_FILE
+        路径 = Path(str(keys_file))
+        return 路径 if 路径.is_absolute() else _REPO_ROOT / 路径
 
     @classmethod
     def _读取文件缓存(cls, 路径: Path) -> Optional[Tuple[str, str, float]]:

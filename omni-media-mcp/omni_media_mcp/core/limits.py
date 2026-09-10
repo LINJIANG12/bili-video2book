@@ -2,8 +2,8 @@
 
 This module is the single source of truth for file-size caps, subprocess
 timeouts, media-extension whitelists, and enum-like whitelists so callers
-(server.py, providers, core helpers, benchmarks) do not duplicate magic
-numbers or hardcoded extension sets.
+(server.py, core helpers) do not duplicate magic numbers or hardcoded
+extension sets.
 """
 
 from __future__ import annotations
@@ -21,13 +21,9 @@ SUBPROCESS_TIMEOUT_SEC: int = 300
 PROBE_TIMEOUT_SEC: int = 15
 
 # Maximum payload size we are willing to base64-encode fully into memory when
-# sending media inline to a provider. Above this, callers should either slice
-# the media or switch to a provider upload path (e.g. Gemini Files API).
+# handing media to the host inline. Above this, callers should slice the media
+# or switch to the file channel.
 MAX_INLINE_BYTES: int = 20 * 1024 * 1024  # 20 MiB
-
-# Maximum seconds to keep polling a remote upload (e.g. Gemini Files API
-# state transition) before giving up with a clear error.
-UPLOAD_POLL_TIMEOUT_SEC: int = 120
 
 # Maximum safe payload size for inline base64 audio over MCP stdio transport.
 # Kept strictly under 8 MiB to prevent JSON-RPC stdio buffer overflow in clients.
@@ -62,10 +58,6 @@ MEDIA_EXTS: frozenset[str] = frozenset(VIDEO_EXTS | AUDIO_EXTS)
 # ---------------------------------------------------------------------------
 # Whitelists for free-form string parameters exposed as MCP tool arguments
 # ---------------------------------------------------------------------------
-
-MODE_WHITELIST: frozenset[str] = frozenset({"transcribe", "summarize", "qa", "custom"})
-
-PROBE_CATEGORY_WHITELIST: frozenset[str] = frozenset({"all", "audio", "video"})
 
 OUTPUT_MODE_WHITELIST: frozenset[str] = frozenset({"auto", "file", "inline"})
 

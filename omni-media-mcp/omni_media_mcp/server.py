@@ -1,4 +1,13 @@
-"""OmniMedia FastMCP Server: High-performance Multimodal Media Understanding for AI Agents."""
+"""OmniMedia FastMCP Server: host-native audio/video reading for AI Agents.
+
+Only the zero-credential tools the pipeline actually uses are exposed:
+- read_audio: hand the host model native audio slices to listen to
+- inspect_media: probe duration, streams and format
+
+The former cloud-delegation path (read_media / ask_media / probe_models and the whole
+provider + benchmark layer it required) was abandoned: the host model listens to audio
+natively, so no external API credentials are needed at all.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +25,6 @@ try:
 except ImportError:
     from mcp.server.fastmcp import Audio, Context, FastMCP as MCPServer
 
-from .benchmarks.probe import BenchmarkProber
 from .core.inspector import MediaInspector
 from .core.limits import (
     DEFAULT_SAFE_SLICE_MINUTES,
@@ -25,15 +33,12 @@ from .core.limits import (
     MAX_ONESHOT_MINUTES,
     MAX_SAFE_INLINE_BYTES,
     MEDIA_EXTS,
-    MODE_WHITELIST,
     OUTPUT_MODE_WHITELIST,
     VIDEO_EXTS,
     get_slices_cache_dir,
 )
 from .core.preprocessor import MediaPreprocessor
 from .core.temp_manager import ManagedTempDir
-from .prompts import PROMPT_QA, PROMPT_SUMMARIZE, PROMPT_TRANSCRIBE, PROMPT_VISUAL_QA
-from .providers.router import MultimodalRouter
 
 # Concurrency semaphore to throttle ffmpeg processes across async tasks
 _ASYNC_FFMPEG_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_FFMPEG)
@@ -43,233 +48,6 @@ mcp = MCPServer(
     "OmniMedia-Server",
     instructions="通用反重力式多模态音视频直读 MCP 服务。原生支持全模态大模型对音频、视频直接进行理解、长文重构与抗幻觉问答。",
 )
-
-router = MultimodalRouter()
-
-# Progress milestones (kept as module constants instead of scattered literals).
-_PCT_START = 0.05
-_PCT_PREP = 0.15
-_PCT_DONE = 1.0
-
-# Prompt templates per mode. 'custom' intentionally has no canned prompt: it
-# relies entirely on the caller-supplied instruction.
-_MODE_PROMPTS = {
-    "transcribe": PROMPT_TRANSCRIBE,
-    "summarize": PROMPT_SUMMARIZE,
-    "qa": PROMPT_QA,
-}
-_CUSTOM_FALLBACK_PROMPT = "请详细分析并提炼此音视频的核心内容。"
-
-
-def _mode_prompt(mode: str, visual: bool) -> str:
-    """Return the base prompt for a validated mode, prepending the visual QA
-    preamble when visual analysis is requested."""
-    base = _MODE_PROMPTS.get(mode, _CUSTOM_FALLBACK_PROMPT)
-    if visual:
-        base = f"{PROMPT_VISUAL_QA}\n\n{base}"
-    return base
-
-
-def _pagination_note(start_sec: float, end_sec: float, total_duration: float) -> str:
-    """Build the human-readable continuation hint appended after a slice read.
-
-    Returns an empty string when nothing was sliced.
-    """
-    if total_duration <= 0:
-        return ""
-    start_fmt = MediaPreprocessor.format_time_str(start_sec)
-    end_fmt = MediaPreprocessor.format_time_str(end_sec)
-    total_fmt = MediaPreprocessor.format_time_str(total_duration)
-    if end_sec < total_duration:
-        return (
-            f"\n\n---\n"
-            f"> ⏱️ **分页状态**: 已读取分卷 `[{start_fmt} - {end_fmt}]` / 总时长 `{total_fmt}`\n"
-            f"> 💡 **续读下一分卷参数**: `start_time=\"{end_fmt}\"`"
-        )
-    return (
-        f"\n\n---\n"
-        f"> ⏱️ **分页状态**: 已读取分卷 `[{start_fmt} - {end_fmt}]` / 总时长 `{total_fmt}` (全篇已读完)"
-    )
-
-
-@mcp.tool()
-async def read_media(
-    file_path: Annotated[str, Field(description="本地音视频文件的绝对路径")],
-    instruction: Annotated[
-        Optional[str], Field(description="自定义附加提示词（可选）；custom 模式下为必填")
-    ] = None,
-    mode: Annotated[
-        str, Field(description="任务预设: 'transcribe' | 'summarize' | 'qa' | 'custom'")
-    ] = "transcribe",
-    provider: Annotated[
-        str, Field(description="模型提供商: 'auto' | 'gemini' | 'mimo' | 'openai' | 'qwen' | 'deepseek' | 'minimax'")
-    ] = "auto",
-    visual: Annotated[bool, Field(description="是否分析视频画面（需视频文件；音频文件请保持 False）")] = False,
-    start_time: Annotated[
-        Optional[str], Field(description="分页切片起始时间戳，如 '00:15:00' 或秒数（可选）")
-    ] = None,
-    duration_minutes: Annotated[
-        Optional[float], Field(description="本次读取时长预算（分钟，可选，需 > 0）")
-    ] = None,
-    ctx: Context = None,
-) -> str:
-    """【云端委托代读模式】读取本地音视频文件，委托外部大模型 API 进行转录或总结。
-
-    提示：若宿主模型本身具备原生音频多模态能力（如 Gemini、GPT-4o Audio、Codex），
-    请优先调用 `read_audio` 工具，以获得零外部 API 凭证消耗、低延迟的原生听音感知。
-
-    Args:
-        file_path: 本地音视频绝对路径（支持 mp4/mkv/mov/avi/flv/webm/mp3/wav/m4a/aac/flac 等）。
-        instruction: 自定义附加提示词（可选）。mode='custom' 时必须提供。
-        mode: 任务预设 — 'transcribe'(逐字稿) / 'summarize'(教材级大笔记) / 'qa'(问答) / 'custom'(纯自定义指令)。
-        provider: 模型提供商 — 'auto' 自动优选，或显式 'gemini'/'mimo'/'openai'/'qwen'/'deepseek'/'minimax'。
-        visual: 是否分析视频画面（黑板/PPT/屏幕代码）。默认 False（提取 16kHz 纯人声）；对纯音频文件置 True 会报错。
-        start_time: 分页切片起始时间戳（如 '00:00:00' / '00:15:00' 或秒数）。
-        duration_minutes: 本次读取时长预算（分钟）。超出自动分卷并在文末生成下一分卷续读参数。
-
-    Returns:
-        Provider 生成的文本内容，含来源标注与（若切片）分页续读提示。
-
-    Raises:
-        ValueError: 参数非法（不支持的 mode、非文件路径、非媒体扩展名、负数时间等）。
-        FileNotFoundError: 媒体文件不存在。
-        RuntimeError: 处理过程失败（含底层原因链）。
-    """
-    # ---- Input validation: illegal inputs raise so the framework flags isError ----
-    mode_key = (mode or "transcribe").strip().lower()
-    if mode_key not in MODE_WHITELIST:
-        raise ValueError(
-            f"不支持的 mode: '{mode}'。支持: {sorted(MODE_WHITELIST)}"
-        )
-    if mode_key == "custom" and not (instruction and instruction.strip()):
-        raise ValueError("mode='custom' 时需提供非空 instruction。")
-
-    path = Path(file_path).resolve()
-    if not path.exists():
-        raise FileNotFoundError(f"媒体文件不存在: `{file_path}`")
-    if not path.is_file():
-        raise ValueError(f"路径不是文件: `{file_path}`")
-    if path.suffix.lower() not in MEDIA_EXTS:
-        raise ValueError(
-            f"不支持的文件类型: '{path.suffix}'。支持: {sorted(MEDIA_EXTS)}"
-        )
-
-    if duration_minutes is not None and duration_minutes <= 0:
-        raise ValueError(f"duration_minutes 必须 > 0，收到: {duration_minutes}")
-    # parse_time_str raises ValueError on negative/invalid timestamps.
-    start_sec = MediaPreprocessor.parse_time_str(start_time) or 0.0
-
-    base_prompt = _mode_prompt(mode_key, visual)
-    if instruction and instruction.strip():
-        full_prompt = f"{base_prompt}\n\n【用户专属指示】：\n{instruction}"
-    else:
-        full_prompt = base_prompt
-
-    # Progress helper (context is optional; ignored when injected ctx is absent)
-    def progress_callback(pct: float, msg: str):
-        if ctx:
-            asyncio.create_task(ctx.report_progress(progress=pct, total=1.0))
-            ctx.info(f"[{int(pct * 100)}%] {msg}")
-
-    progress_callback(_PCT_START, f"开始分析媒体: {path.name}")
-
-    try:
-        chosen_provider = router.get_provider(provider)
-        # Media probing spawns ffprobe/ffmpeg subprocesses -> keep off the loop.
-        meta = await asyncio.to_thread(MediaInspector.probe, path)
-        total_duration = meta.duration_seconds
-
-        if visual and not meta.has_video:
-            raise ValueError(
-                "visual=True 需要含视频轨道的文件；当前媒体未检测到视频画面。"
-                "对纯音频文件请改用 visual=False。"
-            )
-
-        # Parse slicing parameters
-        is_sliced = False
-        slice_dur_sec = None
-        if duration_minutes is not None:
-            slice_dur_sec = float(duration_minutes) * 60.0
-            end_sec = min(total_duration, start_sec + slice_dur_sec) if total_duration > 0 else start_sec + slice_dur_sec
-            is_sliced = True
-        elif start_sec > 0:
-            end_sec = total_duration
-            if total_duration > start_sec:
-                slice_dur_sec = total_duration - start_sec
-            is_sliced = True
-        else:
-            end_sec = total_duration
-
-        is_video_container = path.suffix.lower() in VIDEO_EXTS
-
-        with ManagedTempDir(prefix="omni_proc_") as tmp_dir:
-            if is_sliced:
-                if not visual:
-                    progress_callback(_PCT_PREP, f"提取切片音频 [{MediaPreprocessor.format_time_str(start_sec)} - {MediaPreprocessor.format_time_str(end_sec)}]...")
-                    proc_audio = tmp_dir / f"{path.stem}_slice_{int(start_sec)}_{int(end_sec)}.m4a"
-                    await asyncio.to_thread(
-                        MediaPreprocessor.extract_optimized_audio,
-                        path,
-                        output_file=proc_audio,
-                        start_time=start_sec,
-                        duration_seconds=slice_dur_sec,
-                    )
-                    res = await chosen_provider.process(
-                        media_path=proc_audio,
-                        prompt=full_prompt,
-                        visual=False,
-                        on_progress=progress_callback,
-                    )
-                else:
-                    progress_callback(_PCT_PREP, f"切片视频画面 [{MediaPreprocessor.format_time_str(start_sec)} - {MediaPreprocessor.format_time_str(end_sec)}]...")
-                    proc_video = tmp_dir / f"{path.stem}_slice_{int(start_sec)}_{int(end_sec)}.mp4"
-                    await asyncio.to_thread(
-                        MediaPreprocessor.slice_video,
-                        path,
-                        output_file=proc_video,
-                        start_time=start_sec,
-                        duration_seconds=slice_dur_sec,
-                    )
-                    res = await chosen_provider.process(
-                        media_path=proc_video,
-                        prompt=full_prompt,
-                        visual=True,
-                        on_progress=progress_callback,
-                    )
-            elif not visual and is_video_container:
-                progress_callback(_PCT_PREP, "极速提取 16kHz 单声道纯人声音频...")
-                audio_file = tmp_dir / f"{path.stem}_16k.m4a"
-                await asyncio.to_thread(
-                    MediaPreprocessor.extract_optimized_audio,
-                    path,
-                    audio_file,
-                )
-                res = await chosen_provider.process(
-                    media_path=audio_file,
-                    prompt=full_prompt,
-                    visual=False,
-                    on_progress=progress_callback,
-                )
-            else:
-                res = await chosen_provider.process(
-                    media_path=path,
-                    prompt=full_prompt,
-                    visual=visual,
-                    on_progress=progress_callback,
-                )
-
-        pagination_note = _pagination_note(start_sec, end_sec, total_duration) if is_sliced else ""
-
-        header = f"<!-- OmniMedia: Provider={res.provider_name} | Model={res.model_name} -->\n\n"
-        return f"{header}{res.text}{pagination_note}"
-
-    except ValueError:
-        # Validation/domain errors (unsupported provider, pure-audio+visual,
-        # empty result) surface as-is so clients can recover.
-        raise
-    except Exception as e:
-        raise RuntimeError(f"媒体处理失败: {e}") from e
-
 
 @mcp.tool()
 async def read_audio(
@@ -514,7 +292,7 @@ async def read_audio(
 async def inspect_media(
     file_path: Annotated[str, Field(description="本地音视频文件绝对路径")],
 ) -> str:
-    """毫秒级探测音视频媒体文件的时长、编码、轨道、体积，以及在各类多模态模型下的 Token 预估。
+    """毫秒级探测音视频媒体文件的时长、编码、轨道、体积与规格。
 
     Args:
         file_path: 本地音视频文件绝对路径。
@@ -529,6 +307,9 @@ async def inspect_media(
         raise FileNotFoundError(f"媒体文件不存在: `{file_path}`")
     if not path.is_file():
         raise ValueError(f"路径不是文件: `{file_path}`")
+    ext = path.suffix.lower()
+    if ext not in MEDIA_EXTS:
+        raise ValueError(f"不支持的文件扩展名: '{ext}'。支持的媒体扩展名: {sorted(MEDIA_EXTS)}")
 
     try:
         meta = await asyncio.to_thread(MediaInspector.probe, path)
@@ -537,104 +318,6 @@ async def inspect_media(
         raise
     except Exception as e:
         raise RuntimeError(f"探测失败: {e}") from e
-
-
-@mcp.tool()
-async def ask_media(
-    file_path: Annotated[str, Field(description="本地音视频文件绝对路径")],
-    question: Annotated[str, Field(description="针对音视频内容的提问（非空）")],
-    provider: Annotated[
-        str, Field(description="模型提供商: 'auto' | 'gemini' | 'mimo' | 'openai' | 'qwen' | 'deepseek' | 'minimax'")
-    ] = "auto",
-    visual: Annotated[bool, Field(description="是否需要看视频画面回答（需视频文件）")] = False,
-    ctx: Context = None,
-) -> str:
-    """基于音视频内容进行抗幻觉事实精准问答（Strict Grounding）。
-
-    Args:
-        file_path: 本地音视频文件绝对路径。
-        question: 您想向音视频提出的具体问题（例如：“第15分钟推导的核心结论是什么？”）。
-        provider: 模型提供商（'auto' 或显式厂商）。
-        visual: 是否需要看视频画面回答。
-
-    Raises:
-        ValueError: question 为空，或参数非法。
-        FileNotFoundError: 文件不存在。
-        RuntimeError: 处理过程失败。
-    """
-    if not (question and question.strip()):
-        raise ValueError("question 不能为空。")
-    prompt = f"【用户提问】：\n{question}"
-    return await read_media(
-        file_path=file_path,
-        instruction=prompt,
-        mode="qa",
-        provider=provider,
-        visual=visual,
-        ctx=ctx,
-    )
-
-
-@mcp.tool()
-async def probe_models(
-    category: Annotated[
-        str, Field(description="要查看的模型类别: 'all' | 'audio' | 'video'")
-    ] = "all",
-) -> str:
-    """查看主流多模态模型的音视频能力静态基准快照与本地 API Key 激活状态。
-
-    注：本工具基于内置静态基准数据（源自 Video-MME / Artificial Analysis /
-    厂商官方规格的**非实时快照**），不执行网络探测；"激活状态"为本地实时读取。
-
-    Args:
-        category: 类别 — 'all'（全部）/ 'audio'（能处理音频）/ 'video'（能处理视频）。
-
-    Raises:
-        ValueError: category 不在支持范围内。
-    """
-    return BenchmarkProber.generate_report(category=category)
-
-
-# ==========================================
-# Resources
-# ==========================================
-
-
-@mcp.resource("media://supported-models")
-def get_supported_models_resource() -> str:
-    """获取所有受支持的多模态模型规格与参数配置清单。"""
-    return BenchmarkProber.generate_report()
-
-
-@mcp.resource("media://system-status")
-def get_system_status_resource() -> str:
-    """获取本地 FFmpeg 状态及已配置激活的 API 凭证列表。"""
-    env_status = BenchmarkProber.get_live_environment_status()
-    active_keys = [k for k, v in env_status.items() if v]
-    missing_keys = [k for k, v in env_status.items() if not v]
-
-    return f"""### 🛠️ OmniMedia 系统运行环境诊断:
-- **已激活环境变量**: {', '.join(active_keys) if active_keys else '无 (建议设置 GEMINI_API_KEY)'}
-- **未配置环境变量**: {', '.join(missing_keys)}
-- **可用 Provider 列表**: {', '.join(router.list_available_providers())}
-"""
-
-
-# ==========================================
-# Prompts
-# ==========================================
-
-
-@mcp.prompt("transcribe-lecture")
-def prompt_transcribe_lecture() -> str:
-    """技术网课/学术讲座高保真逐字转录模板。"""
-    return PROMPT_TRANSCRIBE
-
-
-@mcp.prompt("generate-cheatsheet")
-def prompt_generate_cheatsheet() -> str:
-    """考前速查/架构复习大笔记重构模板。"""
-    return PROMPT_SUMMARIZE
 
 
 def main():

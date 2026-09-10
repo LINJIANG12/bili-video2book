@@ -1,6 +1,6 @@
 ---
 name: omni-media
-description: Universal Multimodal Audio/Video Native Reading and Analysis Skill for AI Agents. Connects directly to multi-gigabyte media for transcription, structured note reconstruction, and grounded Q&A without local speech-to-text weight bloat.
+description: Universal Multimodal Audio/Video Native Reading and Analysis Skill for AI Agents. Hands the host model native audio slices to listen to, so multi-gigabyte media can be transcribed and reconstructed without local speech-to-text weights and without any external API credentials.
 triggers:
   - 音频直读
   - 读音频
@@ -10,18 +10,18 @@ triggers:
   - 网课笔记重构
   - 媒体探测
   - read_audio
-  - read_media
   - inspect_media
-  - ask_media
 ---
 
 # OmniMedia Skill: 多模态音视频原生直读与理解指南
 
-本技能为具备多模态能力的智能体（如 Codex、Antigravity、Gemini、GPT-4o Audio）提供对本地音视频文件的原生直接直读与理解能力。无需调用第三方付费 ASR，直接利用模型本体的音频模态感知长篇网课、学术讲座、会议录音及屏幕演示。
+本技能为具备多模态能力的智能体（如 Codex、Antigravity、Gemini、GPT-4o Audio）提供对本地音视频文件的原生直接直读与理解能力。**无需调用第三方付费 ASR，也无需配置任何 API Key**：直接利用宿主模型本体的音频模态感知长篇网课、学术讲座、会议录音及屏幕演示。
+
+---
 
 ## 1. 核心工具集说明
 
-### `read_audio` (⭐ 原生多模态首选直读工具)
+### `read_audio` (⭐ 唯一直读工具)
 直接读取本地音视频文件的音频流，返回原生音频数据块或高保真切片文件，供宿主对话模型直接感知。
 - **参数列表**:
   - `file_path` (string, 必需): 本地音视频绝对路径。
@@ -33,18 +33,12 @@ triggers:
     - `'auto'`：（默认）根据文件大小、编码与时长智能路由。
 
 ### `inspect_media`
-毫秒级探测音视频元数据、音轨编码及多模态模型（Gemini / GPT-4o 等）的 Token 预算消耗。
+毫秒级探测音视频元数据、音轨编码、体积与规格。
 - **参数列表**:
   - `file_path` (string, 必需): 本地音视频文件路径。
 
-### `read_media` (云端委托代读备选)
-委托云端模型 API（Gemini / OpenAI / Qwen 等）对媒体进行转录或总结。**注：仅当宿主模型为纯文本模型且无法直接感知音频时作为降级备选使用。**
-
-### `ask_media`
-针对音视频事实细节进行定向抗幻觉问答（云端代读通道）。
-
-### `probe_models`
-获取主流多模态模型音视频能力基准矩阵及本地环境变量配置状态。
+> **已移除的旧通道**：早期版本提供 `read_media` / `ask_media` / `probe_models`（把媒体委托给云端模型 API 代读，需配置 6 家 provider 的 API Key）。
+> 该设计已彻底废弃并移除：宿主模型原生听音延迟更低、质量更好，且零凭证消耗。
 
 ---
 
@@ -65,7 +59,10 @@ triggers:
 - 调用 `read_audio(file_path="D:/meeting.mp3", output_mode="inline")`。
 - 模型在单轮工具调用中直接接收到 `Audio` 块并立即输出分析结果。
 
-### 工作流 C：纯文本宿主降级云端代读
-若宿主完全无多模态能力（如旧版纯文本 LLM）：
-- 先调用 `inspect_media(file_path)` 检查时长；
-- 调用 `read_media(file_path=..., mode="summarize", duration_minutes=15)`，由外部 API 返回文本摘要。
+---
+
+## 3. 环境要求
+
+- 系统 `ffmpeg`（含 `ffprobe`）需在 `PATH` 中，用于切片与探测；
+- Python 依赖仅 `mcp>=1.0.0`；
+- **无需任何 API Key 或联网凭证**。

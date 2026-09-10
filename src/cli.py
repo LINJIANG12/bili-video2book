@@ -3,10 +3,15 @@
 """Command-Line Interface for Bilibili Audio & Knowledge Extraction.
 
 Commands:
-  parse     - Parse URL/BVID, classify video type, and inspect sub-videos
-  audio     - Fetch audio stream URL, download m4a, and optionally chunk via ffmpeg
-  clean     - Clean spoken transcript and eliminate filler phrases
-  prompt    - Build revision note and tutorial article prompts for AI agent
+  parse            - Parse URL/BVID, classify video type, and inspect sub-videos
+  audio            - Fetch audio stream URL, download m4a, and optionally chunk via ffmpeg
+  transcribe       - Export per-episode ARTICLE_TASK (zero intermediate transcript)
+  pipeline         - Two-stage orchestration: gather audio, then dispatch task-files
+  cluster-notes    - Export module synthesis task-files from extracted knowledge kernels
+  cluster-articles - Consolidate single-episode articles into modular textbooks
+  dedup            - Synchronize duplicate audio assets to save LLM tokens
+  login / logout   - Persist or clear the Bilibili SESSDATA credential
+  info             - Show environment & toolchain readiness status
 """
 
 import argparse
@@ -32,6 +37,7 @@ from src.core.fetcher import AudioFetcher
 from src.core.audio_chunker import AudioChunker
 from src.core.workspace import TaskWorkspace, sanitize_filename
 from src.core.kernel_extractor import KernelExtractor
+from src.core.credentials import SessdataStore, resolve_sessdata, store_path
 from src.core.pipeline import (
     PipelineCoordinator,
     PipelineGateError,
@@ -628,6 +634,34 @@ def cmd_dedup(args):
     print("=" * 65)
 
 
+def cmd_login(args):
+    """持久化保存 SESSDATA，之后所有命令无需再传 --sessdata。
+
+    刻意不提供交互式输入：本工具主要供 Agent 自动化调度，等待人工键入的分支
+    在非交互环境下会直接卡死。
+    """
+    value = (getattr(args, "sessdata", None) or "").strip()
+    if not value:
+        print("[!] 未提供 SESSDATA，拒绝写入空凭证。", file=sys.stderr)
+        print('    用法：python src/cli.py login --sessdata "<你的 SESSDATA>"', file=sys.stderr)
+        print("    获取：浏览器登录 bilibili.com → F12 → 应用/存储 → Cookie → 复制 SESSDATA 的值", file=sys.stderr)
+        sys.exit(1)
+
+    path = SessdataStore.save(value)
+    print(f"[✓] SESSDATA 已持久化保存: {path}")
+    print(f"    指纹: {SessdataStore.mask(value)}")
+    print("[i] 该文件已被 .gitignore 排除，不会进入版本库。")
+    print("[i] 撤销保存请运行：python src/cli.py logout")
+
+
+def cmd_logout(args):
+    """清除本地保存的 SESSDATA。"""
+    if SessdataStore.clear():
+        print("[✓] 已清除本地保存的 SESSDATA。")
+    else:
+        print("[*] 本地没有保存过 SESSDATA，无需清除。")
+
+
 def cmd_info(args):
     """中文注释：做实 info：WBI 有效期/sessdata 有无/412 状态/断点续跑示例。"""
     import shutil
@@ -661,9 +695,17 @@ def cmd_info(args):
             print("• WBI Key：无记录（尚未请求，首次调用自动获取）")
     except Exception as err:
         print(f"• WBI Key：无记录（{err}）")
-    # 中文注释：sessdata 只显示有/无，脱敏不打印值
+    # 中文注释：sessdata 只显示来源与脱敏指纹，绝不回显完整值
     sess = getattr(args, "sessdata", None)
-    print(f"• SESSDATA：{'有（已传入，脱敏不显示）' if sess else '无（未传入 --sessdata）'}")
+    src = getattr(args, "sessdata_source", None)
+    if sess:
+        print(f"• SESSDATA：有（来源：{src}，指纹：{SessdataStore.mask(sess)}）")
+    else:
+        print("• SESSDATA：无（未传入 --sessdata，本地也无存档）")
+    if SessdataStore.load():
+        print(f"• 凭证存档：已保存于 {store_path()}")
+    else:
+        print('• 凭证存档：无（可用 python src/cli.py login --sessdata "<值>" 持久化保存）')
     # 中文注释：上次 412/熔断状态
     print("【上次 412/熔断状态】")
     try:
@@ -683,8 +725,9 @@ def cmd_info(args):
     print("3. 宿主 Agent 主程序以 5 个并发通道（Task子代理或并行生成）读取任务书，直接撰写落盘！")
     print("=" * 65)
     print("【可复制的断点续跑命令示例】：")
-    print('python src/cli.py pipeline "<链接>" --all --sessdata YOUR_SESSDATA')
-    print('python src/cli.py pipeline "<链接>" --range 1-10 --sessdata YOUR_SESSDATA')
+    print('python src/cli.py login --sessdata "<你的 SESSDATA>"   # 一次持久化，后续命令免传')
+    print('python src/cli.py pipeline "<链接>" --all')
+    print('python src/cli.py pipeline "<链接>" --range 1-10')
     print("=" * 65)
 
 
@@ -745,8 +788,14 @@ def main():
     # info / agent-info
     p_info = subparsers.add_parser("info", aliases=["agent-info"], help="Show environment & toolchain readiness status")
     p_info.add_argument("--refresh", action="store_true", help="Clear cached status")
-    # 中文注释：sessdata 仅判有/无，脱敏不打印
-    p_info.add_argument("--sessdata", help="Optional SESSDATA cookie (only shows 有/无)", default=None)
+    # 中文注释：sessdata 仅显示来源与脱敏指纹
+    p_info.add_argument("--sessdata", help="Optional SESSDATA cookie (only shows source & masked fingerprint)", default=None)
+
+    # login / logout：SESSDATA 持久化
+    p_login = subparsers.add_parser("login", help="Persist Bilibili SESSDATA so later commands need no --sessdata")
+    p_login.add_argument("--sessdata", help="SESSDATA cookie value (required; no interactive prompt)", default=None)
+
+    subparsers.add_parser("logout", help="Remove the persisted SESSDATA")
 
     # cluster-notes
     p_cl = subparsers.add_parser("cluster-notes", help="Cluster multi-P course into coherent knowledge block notes")
@@ -787,6 +836,15 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    # 凭证解析：命令行显式传入优先于本地存档；login 需拿到原始值以区分“未传”。
+    raw_sessdata = (getattr(args, "sessdata", None) or "").strip()
+    if args.subcommand == "login":
+        args.sessdata = raw_sessdata or None
+        args.sessdata_source = "命令行参数" if raw_sessdata else None
+    else:
+        args.sessdata = resolve_sessdata(raw_sessdata)
+        args.sessdata_source = "命令行参数" if raw_sessdata else ("本地存档" if args.sessdata else None)
+
     dispatch = {
         "parse": cmd_parse,
         "audio": cmd_audio,
@@ -795,6 +853,8 @@ def main():
         "cluster-notes": cmd_cluster_notes,
         "cluster-articles": cmd_cluster_articles,
         "dedup": cmd_dedup,
+        "login": cmd_login,
+        "logout": cmd_logout,
         "agent-info": cmd_agent_info,
         "info": cmd_info,
     }

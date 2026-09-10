@@ -25,20 +25,12 @@ def strip_json_comments(text: str) -> str:
 
 
 def get_default_env_vars() -> Dict[str, str]:
-    """Returns active provider API keys and environment variables."""
-    keys = [
-        "GEMINI_API_KEY",
-        "MIMO_API_KEY",
-        "OPENAI_API_KEY",
-        "DASHSCOPE_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "MINIMAX_API_KEY",
-    ]
+    """Returns the environment the spawned MCP server needs from its host.
+
+    Only PYTHONPATH is injected: audio is listened to natively by the host model,
+    so the server requires no provider API credentials at all.
+    """
     env_vars: Dict[str, str] = {}
-    for k in keys:
-        v = os.environ.get(k)
-        if v:
-            env_vars[k] = v
     # Inject PYTHONPATH to current module's root
     proj_root = str(Path(__file__).resolve().parent.parent.parent)
     env_vars["PYTHONPATH"] = proj_root
@@ -55,12 +47,12 @@ _SECRET_ENV_LINE_RE = re.compile(
 
 
 def _mask_secrets_in_diff(diff: str) -> str:
-    """Redacts provider API-key values inside a unified-diff text.
+    """Redacts any API-key value inside a unified-diff text.
 
-    ``preview_apply``/``preview_unapply`` render the new host JSONC (which injects
-    real provider API keys into the env block).  Returning that raw to the caller
-    would echo secrets to the terminal/agent.  This masks any ``*_API_KEY`` value
-    while preserving the surrounding diff structure.
+    The host config being previewed may already hold credentials for other MCP
+    servers (this tool injects none).  Printing that raw would echo someone
+    else's secrets to the terminal/agent, so mask every ``*_API_KEY`` value while
+    preserving the surrounding diff structure.
     """
     if not diff:
         return diff

@@ -86,7 +86,7 @@ cd omni-media-mcp && pip install -e .
 python -m omni_media_mcp.cli apply --target zcode
 ```
 
-> Registration writes configured provider API keys into the host config file; keep it out of version control.
+> **No API key required**: audio is listened to natively by the host multimodal model. Registration only writes the server command and `PYTHONPATH` — no credentials are involved. The only external dependency is system `ffmpeg`.
 
 ### 3. Install as an AI Agent Skill (Recommended)
 
@@ -159,10 +159,24 @@ python scripts/queue_tracker.py --next 5
 ## Bilibili SESSDATA Configuration
 
 For large multi-P courses, providing a login cookie prevents HTTP 412 rate-limiting:
+
 1. Log in to bilibili.com in your browser;
 2. Press `F12` -> Application -> Cookies -> `https://www.bilibili.com`;
 3. Copy the value of the `SESSDATA` entry;
-4. Append `--sessdata "<SESSDATA>"` to your command.
+4. Pick either usage:
+
+```bash
+# Option 1: one-off (applies to this run only)
+bili-video2book pipeline "<url>" --all --sessdata "<SESSDATA>"
+
+# Option 2: persist it once (recommended; later commands need no --sessdata)
+python src/cli.py login --sessdata "<SESSDATA>"
+bili-video2book pipeline "<url>" --all
+python src/cli.py info     # show credential source and masked fingerprint
+python src/cli.py logout   # remove the stored credential
+```
+
+> **Security note**: the persisted credential is stored in plaintext at `output/.sessdata.json`, which is excluded by `.gitignore` and never enters version control; an explicit `--sessdata` argument always takes precedence over the stored value. SESSDATA is equivalent to your Bilibili login session — never copy, upload, or share that file.
 
 ---
 

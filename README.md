@@ -86,7 +86,7 @@ cd omni-media-mcp && pip install -e .
 python -m omni_media_mcp.cli apply --target zcode
 ```
 
-> 接入会把已配置的 provider API Key 写入宿主配置文件，请勿将其纳入版本控制。
+> **无需任何 API Key**：音频由宿主多模态模型原生聆听，接入只写入服务启动命令与 `PYTHONPATH`，不涉及任何凭证。唯一的外部依赖是系统 `ffmpeg`。
 
 ### 3. 作为 AI Agent Skill 挂载（推荐）
 
@@ -159,10 +159,24 @@ python scripts/queue_tracker.py --next 5
 ## 凭证说明：B 站 SESSDATA 配置
 
 在批量抓取多 P 长篇网课时，建议提供登录凭证，避免频繁请求触发 B 站 412 频控限制：
+
 1. 在浏览器登录 bilibili.com；
 2. 按 `F12` 打开开发者工具 -> Application -> Cookies -> `https://www.bilibili.com`；
 3. 复制 `SESSDATA` 项对应的值；
-4. 在命令中追加 `--sessdata "<SESSDATA>"` 参数即可。
+4. 二选一使用：
+
+```bash
+# 方式一：一次性传入（仅作用于本次执行）
+bili-video2book pipeline "<链接>" --all --sessdata "<SESSDATA>"
+
+# 方式二：持久化保存（推荐，保存一次后续命令免传）
+python src/cli.py login --sessdata "<SESSDATA>"
+bili-video2book pipeline "<链接>" --all
+python src/cli.py info     # 查看凭证来源与脱敏指纹
+python src/cli.py logout   # 撤销保存
+```
+
+> **安全提示**：持久化的凭证以明文存于 `output/.sessdata.json`，该路径已被 `.gitignore` 排除，不会进入版本库；命令行 `--sessdata` 参数优先级始终高于本地存档。SESSDATA 等同你的 B 站登录态，请勿复制、上传或分享该文件。
 
 ---
 

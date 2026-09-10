@@ -43,7 +43,8 @@ def check_imports():
 
 def check_cli_help():
     for sub in ("parse", "audio", "transcribe",
-                "pipeline", "cluster-notes", "cluster-articles", "dedup", "info"):
+                "pipeline", "cluster-notes", "cluster-articles", "dedup",
+                "login", "logout", "info"):
         res = subprocess.run(
             [sys.executable, str(PROJECT_ROOT / "src" / "cli.py"), sub, "--help"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60,
@@ -121,28 +122,30 @@ def check_subprocess_timeouts():
                 assert "timeout=" in line, f"{rel} 存在无超时的 subprocess.run: {line.strip()}"
 
 
-def check_mcp_error_contract():
-    """MCP 工具对非法入参必须抛类型化异常，而非返回失败字符串。"""
+def check_mcp_tool_contract():
+    """MCP 工具契约：非法入参抛类型化异常，且废弃的云端委托链路必须已彻底移除。"""
     from omni_media_mcp import server
     from omni_media_mcp.core.limits import PROBE_TIMEOUT_SEC
-    from omni_media_mcp.core.preprocessor import MediaPreprocessor
-    import inspect
 
     assert PROBE_TIMEOUT_SEC > 0
-    assert "codec" in inspect.signature(MediaPreprocessor.extract_optimized_audio).parameters, \
-        "extract_optimized_audio 应支持 codec 参数（供 OpenAI mp3 转码复用）"
+
+    # 云端委托（需 API Key 的 read_media/ask_media/probe_models 及 provider/benchmark 层）
+    # 已废弃：宿主模型原生听音取代了它，这些入口必须不复存在。
+    for gone in ("read_media", "ask_media", "probe_models"):
+        assert not hasattr(server, gone), f"{gone} 属废弃的云端委托链路，应已移除"
+    for live in ("read_audio", "inspect_media"):
+        assert hasattr(server, live), f"{live} 是当前唯一入口，不得缺失"
 
     missing = str(PROJECT_ROOT / "definitely-missing.m4a")
     non_media = str(PROJECT_ROOT / "pyproject.toml")
 
     async def _run():
         cases = [
-            (server.read_media(file_path=missing), FileNotFoundError),
-            (server.read_media(file_path=non_media, mode="transcribe"), ValueError),
-            (server.read_media(file_path=non_media, mode="bogus-mode"), ValueError),
             (server.read_audio(file_path=missing), FileNotFoundError),
             (server.read_audio(file_path=non_media), ValueError),
+            (server.read_audio(file_path=non_media, output_mode="bogus"), ValueError),
             (server.inspect_media(file_path=missing), FileNotFoundError),
+            (server.inspect_media(file_path=non_media), ValueError),
         ]
         for coro, expected in cases:
             try:
@@ -163,15 +166,35 @@ def check_dead_modules_removed():
         "src/generator/classifier.py",
         "src/generator/doc_builder.py",
         "omni-media-mcp/omni_media_mcp/installer.py",
+        "omni-media-mcp/omni_media_mcp/providers",
+        "omni-media-mcp/omni_media_mcp/benchmarks",
+        "omni-media-mcp/omni_media_mcp/prompts.py",
         "tests",
         "omni-media-mcp/tests",
-        ".aide",
-        ".workbuddy",
         "MCP_TOOL_AUDIT_REPORT.md",
         "config.example.json",
         "scripts/validate_skill.py",
     ):
         assert not (PROJECT_ROOT / rel).exists(), f"{rel} 应已删除"
+
+
+def check_host_artifacts_ignored():
+    """宿主/编辑器旁路目录必须被 .gitignore 覆盖且从未入库。
+
+    .workbuddy、.zcode 这类目录由编辑器在会话中自动写入（含对话记忆），
+    既不该被"必须不存在"式断言约束（宿主会重建），也绝不能进入版本库。
+    """
+    import subprocess as _sp
+
+    ignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+    for name in (".workbuddy", ".aide", ".zcode", "output", ".sessdata.json"):
+        assert name in ignore, f"{name} 未被 .gitignore 覆盖"
+
+    tracked = _sp.run(
+        ["git", "ls-files", "--", ".workbuddy", ".aide", ".zcode"],
+        cwd=str(PROJECT_ROOT), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
+    )
+    assert not tracked.stdout.strip(), f"宿主旁路目录已被纳入版本控制: {tracked.stdout.strip()}"
 
 
 def check_skill_copies_in_sync():
@@ -309,6 +332,58 @@ def check_dedup_reuses_without_subtitles():
         assert dst.read_text(encoding="utf-8") == article, "复用源不是正式长文（任务书被误拷）"
 
 
+def check_sessdata_store_safety():
+    """SESSDATA 持久化：往返一致、脱敏不泄露，且存档路径必须落在版本库之外。"""
+    import subprocess as _sp
+    import tempfile
+
+    from src.core.credentials import DEFAULT_STORE_NAME, SessdataStore, resolve_sessdata, store_path
+
+    secret = "abc123def456ghi789"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Path(tmp) / "store.json"
+
+        assert SessdataStore.load(path=store) is None, "无存档时不得凭空返回凭证"
+        try:
+            SessdataStore.save("   ", path=store)
+            raise AssertionError("空 SESSDATA 未被拒绝")
+        except ValueError:
+            pass
+
+        SessdataStore.save(secret, path=store)
+        assert SessdataStore.load(path=store) == secret, "存档往返不一致"
+        assert secret not in SessdataStore.mask(secret), "脱敏展示泄露了完整凭证"
+
+        assert SessdataStore.clear(path=store) is True
+        assert SessdataStore.clear(path=store) is False, "重复清除应返回 False"
+        assert SessdataStore.load(path=store) is None
+
+    # 显式传入优先于本地存档；空白视作未传入
+    assert resolve_sessdata(secret) == secret, "显式传入未优先生效"
+    assert resolve_sessdata("   ") == SessdataStore.load(), "空白显式值应回退到本地存档"
+
+    # 默认存档路径必须被 .gitignore 覆盖，且绝不能已进入版本库
+    assert DEFAULT_STORE_NAME in (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8"), \
+        f"{DEFAULT_STORE_NAME} 未被 .gitignore 覆盖"
+    tracked = _sp.run(
+        ["git", "ls-files", "--", DEFAULT_STORE_NAME],
+        cwd=str(PROJECT_ROOT), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
+    )
+    assert not tracked.stdout.strip(), f"凭证存档已被纳入版本控制: {tracked.stdout.strip()}"
+    assert store_path().name == DEFAULT_STORE_NAME
+
+
+def check_cache_paths_anchored():
+    """缓存/凭证文件路径必须锚定仓库根，不得随当前所在目录漂移。"""
+    from src.core.credentials import store_path
+    from src.core.wbi import WbiSigner
+
+    for label, p in (("WBI 密钥", WbiSigner._解析密钥文件路径()), ("凭证存档", store_path())):
+        assert p.is_absolute(), f"{label}路径不是绝对路径: {p}"
+        assert PROJECT_ROOT in p.parents, f"{label}路径未锚定仓库根: {p}"
+
+
 def main():
     print("=" * 62)
     print("bili-video2book / omni-media-mcp 自检")
@@ -320,10 +395,13 @@ def main():
     check("ArticleIntegrator 无硬编码课程数据", check_integrator_no_hardcoded_course)
     check("零中间逐字稿入口切换", check_zero_transcript_pipeline)
     check("子进程硬超时就位", check_subprocess_timeouts)
-    check("MCP 错误契约与入参校验", check_mcp_error_contract)
+    check("MCP 工具契约与废弃链路移除", check_mcp_tool_contract)
     check("任务书导出门禁端到端", check_task_file_export_end_to_end)
     check("阶段一门禁不误认任务书", check_stage1_gate_ignores_task_files)
     check("重复分集免字幕复用", check_dedup_reuses_without_subtitles)
+    check("SESSDATA 存档安全（脱敏/不入库）", check_sessdata_store_safety)
+    check("缓存与凭证路径锚定仓库根", check_cache_paths_anchored)
+    check("宿主旁路目录不入库", check_host_artifacts_ignored)
     check("死代码与验证产物已移除", check_dead_modules_removed)
     check("两份 SKILL 同步", check_skill_copies_in_sync)
     print("=" * 62)

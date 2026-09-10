@@ -99,17 +99,11 @@ class MediaPreprocessor:
         start_time: Optional[str | int | float] = None,
         duration_seconds: Optional[float] = None,
         bitrate: str = AUDIO_BITRATE_VOICE,
-        codec: str = "aac",
     ) -> Path:
-        """Extracts 16kHz mono audio (1:1 optimal for Gemini and speech LLMs).
+        """Extracts 16kHz mono audio (optimal for host multimodal speech perception).
 
         Supports optional start_time and duration_seconds slicing.
         Safeguarded by concurrency semaphore and atomic file staging.
-
-        Args:
-            codec: Output audio codec. Defaults to ``aac`` (for .m4a). Pass
-                ``libmp3lame`` together with an ``.mp3`` output path when a
-                provider only accepts mp3/wav (e.g. OpenAI input_audio).
         """
         src = Path(input_file).resolve()
         if not src.exists():
@@ -137,7 +131,7 @@ class MediaPreprocessor:
 
         cmd.extend([
             "-vn",          # strip video
-            "-acodec", codec,
+            "-acodec", "aac",
             "-ar", "16000",  # 16kHz
             "-ac", "1",      # mono channel
             "-b:a", str(bitrate),   # voice bitrate

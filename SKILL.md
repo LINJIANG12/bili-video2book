@@ -38,11 +38,23 @@ metadata:
 
 当处理 B 站（bilibili.com 或 BV 号）合集任务时，建议提供 `SESSDATA` 登录凭证，以保障高并发抓取稳定性并避免触发 412 频控限制。本地音视频或非 B 站任务自动跳过此项。
 
-### 获取与使用方式
+### 获取方式
 1. 浏览器访问 bilibili.com 登录；
 2. 按 `F12` 打开开发者工具 -> Application（应用） -> Cookies -> `https://www.bilibili.com`；
-3. 复制 `SESSDATA` 对应的值；
-4. 执行命令时追加 `--sessdata "<SESSDATA>"` 参数（仅保留于当前进程环境）。
+3. 复制 `SESSDATA` 对应的值。
+
+### 使用方式（二选一）
+1. **一次性**：命令追加 `--sessdata "<SESSDATA>"`，仅作用于本次执行；
+2. **持久化（推荐）**：执行一次 `python src/cli.py login --sessdata "<SESSDATA>"`，之后所有命令自动使用，无需重复传参。
+
+```bash
+python src/cli.py login --sessdata "<SESSDATA>"   # 保存凭证
+python src/cli.py info                            # 查看凭证来源与脱敏指纹
+python src/cli.py logout                          # 撤销保存
+```
+
+> [!WARNING]
+> **凭证安全须知**：持久化的 SESSDATA 以明文存于 `output/.sessdata.json`，该路径已被 `.gitignore` 排除（另有显式规则兜底），不会进入版本库；命令行参数 `--sessdata` 的优先级始终高于本地存档。SESSDATA 等同你的 B 站登录态，请勿复制、上传或分享该文件；若怀疑泄露，请到 B 站退出登录使其失效，并运行 `logout` 清除本地存档。
 
 ---
 
@@ -217,6 +229,10 @@ python src/cli.py cluster-notes "<链接或本地路径>" --style minimal --repl
 # 8. 环境与工具链自检
 python scripts/selfcheck.py
 python src/cli.py info
+
+# 9. 登录凭证：持久化保存 SESSDATA（保存一次，后续命令免传）
+python src/cli.py login --sessdata "<SESSDATA>"
+python src/cli.py logout
 ```
 
 > 阶段一的音频切片依赖 MCP 工具 `omni-media:read_audio`，接入方式见 README 的安装章节。

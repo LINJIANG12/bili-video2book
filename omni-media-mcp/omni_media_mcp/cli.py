@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
-import os
 import shutil
 import subprocess
 import sys
@@ -12,9 +10,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from .adapters.registry import ADAPTER_MAP, get_adapter, get_all_adapters, list_supported_targets
-from .benchmarks.probe import BenchmarkProber
 from .core.inspector import MediaInspector
-from .server import ask_media, mcp, read_media
+from .server import mcp
 
 
 def color_text(text: str, color_code: str) -> str:
@@ -37,7 +34,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Diagnoses environment, tools, API keys, and target host configurations."""
+    """Diagnoses environment, tools and target host configurations."""
     print("=" * 65)
     print("📊 OmniMedia 系统运行与宿主挂载状态诊断")
     print("=" * 65)
@@ -75,24 +72,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     else:
         print(f"  {TAG_WARN} FFprobe: 未找到独立 ffprobe（将回退使用 ffmpeg 探测）")
 
-    # 2. Providers API Keys
-    print("\n[ 多模态模型凭证状态 ]")
-    env_keys = [
-        ("GEMINI_API_KEY", "Google Gemini 2.5/3.0 全模态 (推荐主力)"),
-        ("MIMO_API_KEY", "Xiaomi MiMo-V2.5 1M 长文本全模态"),
-        ("OPENAI_API_KEY", "OpenAI GPT-4o / GPT-5 input_audio"),
-        ("DASHSCOPE_API_KEY", "Alibaba Qwen2.5-VL / Qwen-Omni"),
-        ("DEEPSEEK_API_KEY", "DeepSeek-V4-Flash 视觉多模态"),
-        ("MINIMAX_API_KEY", "MiniMax H3 / abab 7 音频模型"),
-    ]
-
-    for key, desc in env_keys:
-        val = os.environ.get(key)
-        if val:
-            masked = f"{val[:4]}...{val[-4:]}" if len(val) > 8 else "***"
-            print(f"  {TAG_PASS} {key}: 已配置 ({masked}) - {desc}")
-        else:
-            print(f"  {TAG_INFO} {key}: 未配置 - {desc}")
+    # 2. Native listening requires no credentials whatsoever
+    print()
+    print("[ 凭证需求 ]")
+    print(f"  {TAG_PASS} 无需任何 API Key：音频由宿主多模态模型原生聆听 (read_audio)，零外部凭证消耗。")
 
     # 3. Host Adapters
     print("\n[ 宿主工具箱接入状态 ]")
@@ -136,14 +119,6 @@ def cmd_apply(args: argparse.Namespace) -> int:
         print(color_text(diff, "33"))
 
         if not yes:
-            # The registered host config embeds provider API keys in its env
-            # block so the spawned MCP server can read them (it does not inherit
-            # this shell's env). Warn the user before writing keys to disk.
-            print(color_text(
-                f"{TAG_WARN} 注意: 本次接入会把已配置的 provider API Key 明文写入 {adapter.get_config_path()}，"
-                "请确保该文件不纳入版本控制。",
-                "33",
-            ))
             try:
                 ans = input(f"是否确认将 omni-media 接入 {adapter.display_name}? [y/N]: ").strip().lower()
             except (KeyboardInterrupt, EOFError):
@@ -220,64 +195,6 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_read(args: argparse.Namespace) -> int:
-    """Directly reads media file via multimodal models in terminal."""
-    async def _run():
-        return await read_media(
-            file_path=args.file,
-            instruction=args.instruction,
-            mode=args.mode,
-            provider=args.provider,
-            visual=args.visual,
-            start_time=args.start_time,
-            duration_minutes=args.duration_minutes,
-        )
-
-    try:
-        res = asyncio.run(_run())
-    except (ValueError, FileNotFoundError) as e:
-        print(f"{TAG_FAIL} 参数/文件错误: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:
-        print(f"{TAG_FAIL} 读取失败: {e}", file=sys.stderr)
-        return 1
-    print(res)
-    return 0
-
-
-def cmd_ask(args: argparse.Namespace) -> int:
-    """Asks a specific question against media file in terminal."""
-    async def _run():
-        return await ask_media(
-            file_path=args.file,
-            question=args.question,
-            provider=args.provider,
-            visual=args.visual,
-        )
-
-    try:
-        res = asyncio.run(_run())
-    except (ValueError, FileNotFoundError) as e:
-        print(f"{TAG_FAIL} 参数/文件错误: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:
-        print(f"{TAG_FAIL} 处理失败: {e}", file=sys.stderr)
-        return 1
-    print(res)
-    return 0
-
-
-def cmd_probe(args: argparse.Namespace) -> int:
-    """Prints multimodal models benchmark and capability matrix."""
-    try:
-        report = BenchmarkProber.generate_report(category=args.category)
-    except ValueError as e:
-        print(f"{TAG_FAIL} {e}", file=sys.stderr)
-        return 1
-    print(report)
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="omni-media",
@@ -290,7 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.set_defaults(func=cmd_serve)
 
     # 2. status
-    p_status = subparsers.add_parser("status", help="诊断环境、依赖、凭据与宿主接入状态")
+    p_status = subparsers.add_parser("status", help="诊断环境、依赖与宿主接入状态")
     p_status.set_defaults(func=cmd_status)
 
     # 3. apply
@@ -321,54 +238,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_inspect = subparsers.add_parser("inspect", help="毫秒级探测音视频元数据与 Token 预估")
     p_inspect.add_argument("file", help="本地音视频文件路径")
     p_inspect.set_defaults(func=cmd_inspect)
-
-    # 6. read
-    p_read = subparsers.add_parser("read", help="终端直接调用多模态模型阅读音视频")
-    p_read.add_argument("file", help="本地音视频文件路径")
-    p_read.add_argument("--instruction", "-i", default=None, help="附加指示词")
-    p_read.add_argument(
-        "--mode",
-        "-m",
-        default="transcribe",
-        choices=["transcribe", "summarize", "qa", "custom"],
-        help="处理预设模式 (默认: transcribe)",
-    )
-    p_read.add_argument(
-        "--provider",
-        "-p",
-        default="auto",
-        choices=["auto", "gemini", "mimo", "openai", "qwen", "deepseek", "minimax"],
-        help="模型提供商 (默认: auto)",
-    )
-    p_read.add_argument("--visual", "-v", action="store_true", help="开启视频画面理解分析")
-    p_read.add_argument("--start-time", "-s", default=None, help="起始时间戳 (如 '00:15:00')")
-    p_read.add_argument("--duration-minutes", "-d", type=float, default=None, help="读取时长预算 (分钟)")
-    p_read.set_defaults(func=cmd_read)
-
-    # 7. ask
-    p_ask = subparsers.add_parser("ask", help="针对音视频内容进行抗幻觉问答")
-    p_ask.add_argument("file", help="本地音视频文件路径")
-    p_ask.add_argument("question", help="具体提问内容")
-    p_ask.add_argument(
-        "--provider",
-        "-p",
-        default="auto",
-        choices=["auto", "gemini", "mimo", "openai", "qwen", "deepseek", "minimax"],
-        help="模型提供商 (默认: auto)",
-    )
-    p_ask.add_argument("--visual", "-v", action="store_true", help="开启视频画面理解")
-    p_ask.set_defaults(func=cmd_ask)
-
-    # 8. probe
-    p_probe = subparsers.add_parser("probe", help="查看多模态模型评测矩阵与官方基准")
-    p_probe.add_argument(
-        "--category",
-        "-c",
-        default="all",
-        choices=["all", "audio", "video"],
-        help="分类过滤 (all, audio, video)",
-    )
-    p_probe.set_defaults(func=cmd_probe)
 
     return parser
 

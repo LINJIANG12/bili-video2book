@@ -48,7 +48,10 @@ downloads/
 # Sensitive tokens & internal drafts
 config.json
 .env
+.sessdata.json
 .zcode/
+.workbuddy/
+.aide/
 temp_bilinote/
 
 
