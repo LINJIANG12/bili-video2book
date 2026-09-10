@@ -1,0 +1,243 @@
+"""Task-file Reclaim: 回收已完成的派发任务书（*_TASK.md）。
+
+架构定位：任务书（`PXX_*_TASK.md` / `PXX_*_KERNEL_TASK.md` / `模块XX_*_TASK.md`）是工具层
+写给宿主 Agent 的**临时派发物**；Agent 读完后把成品落到 `articles/` / `subtitles/kernels/` /
+`notes/`。旧版本只负责写、不负责收，于是任务书从第一门课堆到第 N 门课，目录里混着大量废纸，
+并且把 `queue_tracker` 的「模块笔记 N 部」计数也带偏了。
+
+本模块补齐「收」的这一半：
+- **只回收成品已落盘**的任务书；成品未产出的任务书一律保留；
+- 每个类别保留编号最小的 1 份作为**提示词范本**（供人/Agent 随时翻阅写法）；
+- `topic_plan_TASK.md` 全库唯一，永不回收。
+"""
+
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+# 类别标识
+CATEGORY_ARTICLES = "articles"
+CATEGORY_KERNELS = "kernels"
+CATEGORY_NOTES = "notes"
+
+CATEGORY_LABELS = {
+    CATEGORY_ARTICLES: "单集文章任务书",
+    CATEGORY_KERNELS: "知识元任务书",
+    CATEGORY_NOTES: "模块笔记任务书",
+}
+
+# 成品体积门槛：与阶段一门禁一致，避免把空壳文件误判为成品
+MIN_PRODUCT_BYTES = 1000
+
+_EPISODE_RE = re.compile(r"^P(\d+)_")
+_MODULE_RE = re.compile(r"^模块(\d+)_")
+
+
+def _episode_no(name: str) -> Optional[int]:
+    m = _EPISODE_RE.match(name)
+    return int(m.group(1)) if m else None
+
+
+def _module_no(name: str) -> Optional[int]:
+    m = _MODULE_RE.match(name)
+    return int(m.group(1)) if m else None
+
+
+def _iter_tasks(ws: Any, category: str) -> List[Path]:
+    """列出某类别的任务书，按编号升序（编号缺失者排到最后）。"""
+    if category == CATEGORY_ARTICLES:
+        files = [f for f in ws.articles_dir.glob("P*_TASK.md") if _episode_no(f.name) is not None]
+    elif category == CATEGORY_KERNELS:
+        kernels_dir = ws.subtitles_dir / "kernels"
+        if not kernels_dir.exists():
+            return []
+        files = [f for f in kernels_dir.glob("P*_KERNEL_TASK.md") if _episode_no(f.name) is not None]
+    elif category == CATEGORY_NOTES:
+        files = [f for f in ws.notes_dir.glob("模块*_TASK.md") if _module_no(f.name) is not None]
+    else:  # pragma: no cover - 防御式分支
+        return []
+
+    def 排序键(f: Path) -> int:
+        num = _episode_no(f.name) if category != CATEGORY_NOTES else _module_no(f.name)
+        return num if num is not None else 10**9
+
+    return sorted(files, key=排序键)
+
+
+def _article_product_ready(ws: Any, task_file: Path) -> bool:
+    """文章成品是否已落盘（复用宽容定位，兼容旧工作区无 `_精读文章` 后缀的命名）。"""
+    from .kernel_extractor import KernelExtractor
+
+    page = _episode_no(task_file.name)
+    if page is None:
+        return False
+    article = KernelExtractor.find_article(ws, page)
+    return article is not None and article.stat().st_size >= MIN_PRODUCT_BYTES
+
+
+def _kernel_product_ready(ws: Any, task_file: Path) -> bool:
+    """知识元成品是否已落盘（契约：合法 JSON + status == extracted + 含实质条目）。"""
+    from .kernel_extractor import KernelExtractor
+
+    # P01_xxx_KERNEL_TASK.md -> P01_xxx_kernel.json（同名换后缀）
+    stem = task_file.name
+    if stem.endswith("_KERNEL_TASK.md"):
+        stem = stem[: -len("_KERNEL_TASK.md")]
+    kernel_json = (ws.subtitles_dir / "kernels") / f"{stem}_kernel.json"
+    return KernelExtractor.load_kernel(kernel_json) is not None
+
+
+def _note_product_ready(ws: Any, task_file: Path) -> bool:
+    """模块笔记成品是否已落盘（同名换 `_笔记.md`，回退按模块编号前缀匹配）。"""
+    # 模块01_xxx_TASK.md -> 模块01_xxx_笔记.md
+    if task_file.name.endswith("_TASK.md"):
+        exact = ws.notes_dir / (task_file.name[: -len("_TASK.md")] + "_笔记.md")
+        if exact.exists() and exact.stat().st_size >= MIN_PRODUCT_BYTES:
+            return True
+
+    module_no = _module_no(task_file.name)
+    if module_no is None:
+        return False
+    for candidate in ws.notes_dir.glob(f"模块{module_no:02d}_*.md"):
+        if candidate.name.endswith("_TASK.md"):
+            continue
+        if candidate.stat().st_size >= MIN_PRODUCT_BYTES:
+            return True
+    return False
+
+
+def _product_ready(ws: Any, category: str, task_file: Path) -> bool:
+    if category == CATEGORY_ARTICLES:
+        return _article_product_ready(ws, task_file)
+    if category == CATEGORY_KERNELS:
+        return _kernel_product_ready(ws, task_file)
+    return _note_product_ready(ws, task_file)
+
+
+def reclaim_task_file(task_file: Path, dry_run: bool = False) -> bool:
+    """回收单个任务书；返回是否实际删除成功（dry_run 时返回可删与否）。"""
+    if not task_file.exists():
+        return False
+    if dry_run:
+        return True
+    try:
+        task_file.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def cleanup_completed_tasks(
+    ws: Any,
+    keep_per_category: int = 1,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """回收各分类中「成品已落盘」的任务书，每类保留编号最小的 N 份作范本。
+
+    返回：{"deleted": [...], "kept": [...], "skipped_pending": [...], "counts": {...}}
+    路径一律以仓库相对路径呈现，便于日志阅读。
+    """
+    from .workspace import TaskWorkspace
+
+    keep_n = max(0, int(keep_per_category))
+    deleted: List[str] = []
+    kept: List[str] = []
+    skipped: List[str] = []
+    counts: Dict[str, Dict[str, int]] = {}
+
+    def 相对(p: Path) -> str:
+        return TaskWorkspace.to_relative(p)
+
+    for category in (CATEGORY_ARTICLES, CATEGORY_KERNELS, CATEGORY_NOTES):
+        tasks = _iter_tasks(ws, category)
+        cat_kept: List[str] = []
+        cat_deleted = 0
+        cat_skipped = 0
+
+        for idx, task_file in enumerate(tasks):
+            if idx < keep_n:
+                cat_kept.append(相对(task_file))
+                continue
+            if _product_ready(ws, category, task_file):
+                if reclaim_task_file(task_file, dry_run=dry_run):
+                    cat_deleted += 1
+                    deleted.append(相对(task_file))
+                else:
+                    cat_skipped += 1
+                    skipped.append(相对(task_file))
+            else:
+                cat_skipped += 1
+                skipped.append(相对(task_file))
+
+        kept.extend(cat_kept)
+        counts[category] = {
+            "total": len(tasks),
+            "kept": len(cat_kept),
+            "deleted": cat_deleted,
+            "skipped_pending": cat_skipped,
+        }
+
+    return {
+        "deleted": deleted,
+        "kept": kept,
+        "skipped_pending": skipped,
+        "counts": counts,
+        "dry_run": dry_run,
+    }
+
+
+def reclaim_kernel_task(ws: Any, page: int, keep_episode: int = 1) -> Optional[str]:
+    """单集知识元任务书即时回收（知识元成品已落盘且非范本时）。"""
+    if page <= keep_episode:
+        return None
+    for task_file in _iter_tasks(ws, CATEGORY_KERNELS):
+        if _episode_no(task_file.name) == page and _kernel_product_ready(ws, task_file):
+            if reclaim_task_file(task_file):
+                return str(task_file)
+    return None
+
+
+def reclaim_module_note_task(ws: Any, block_id: int, keep_module: int = 1) -> Optional[str]:
+    """模块笔记任务书即时回收（笔记成品已落盘且非范本时）。"""
+    if block_id <= keep_module:
+        return None
+    for task_file in _iter_tasks(ws, CATEGORY_NOTES):
+        if _module_no(task_file.name) == block_id and _note_product_ready(ws, task_file):
+            if reclaim_task_file(task_file):
+                return str(task_file)
+    return None
+
+
+def find_workspaces(base_dir: Any = "output") -> List[Any]:
+    """枚举 base_dir 下所有可用工作区（含 parts.json/manifest.json 或任一产物子目录）。
+
+    基目录解析：相对路径先按当前工作目录解析；若当前目录下不存在而**仓库根目录**下存在，
+    则回退到仓库根——这样从任意目录调用脚本都能找到工作区（README/SKILL 推荐直接跑 scripts/）。
+    """
+    from .workspace import TaskWorkspace
+
+    base = Path(base_dir)
+    if not base.is_absolute():
+        candidate = (Path.cwd() / str(base_dir)).resolve()
+        if not candidate.exists():
+            alt = (TaskWorkspace.REPO_ROOT / str(base_dir)).resolve()
+            if alt.exists():
+                candidate = alt
+        base = candidate
+    if not base.exists():
+        return []
+
+    workspaces: List[Any] = []
+    for child in sorted(base.iterdir()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        has_parts = (child / "parts.json").exists() or (child / "manifest.json").exists()
+        has_artifacts = any((child / name).is_dir() for name in ("articles", "notes", "subtitles", "textbooks"))
+        if not (has_parts or has_artifacts):
+            continue
+        try:
+            # 直接绑定已存在目录（长目录名不会被 sanitize_name 截断）
+            workspaces.append(TaskWorkspace.from_existing(child))
+        except Exception:
+            continue
+    return workspaces

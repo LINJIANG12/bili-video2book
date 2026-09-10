@@ -28,7 +28,7 @@
 | :--- | :--- | :--- | :--- |
 | **单集教材长文** | `output/<task>/articles/` | 单集深入自学、替代长视频 | 完整还原核心原理推导、代码实现与演算过程；文末配备 2~3 道自测题与溯源解析。**模块整编时严格保留，不予删除**。 |
 | **模块合辑教材** | `output/<task>/textbooks/` | 系统章节精读、全卷通读 | 跨分集知识整合，消除单集孤立感；增加章节承上启下的过渡桥梁段落，形成体系化教材。 |
-| **模块复习笔记** | `output/<task>/notes/` | 考前复习、日常速查、脑图构建 | 需显式指定 `--style`（系统不设默认）；推荐 `minimal` 对齐 CS-Xmind-Note 考研思维导图规范，多级列表展开结合单行核心定义，原生支持 VS Code Markmap 与 XMind 导入。 |
+| **模块复习笔记** | `output/<task>/notes/` | 考前复习、日常速查、脑图构建 | **由子智能体基于模块单集长文重写生成**（非知识元拼接）；需显式指定 `--style`（系统不设默认），推荐 `minimal` 对齐 CS-Xmind-Note 考研思维导图规范；须满足「笔记结构规范 v2」七个必备构件与四条禁令，原生支持 VS Code Markmap 与 XMind 导入。 |
 
 ---
 
@@ -54,16 +54,21 @@
   └── 阶段门禁：所有分集全部竣工且无未完成任务时，阶段一结束
           │
           ▼
-【阶段二：按模块统一收敛整编】
+【阶段二：按模块统一收敛整编（两趟门禁）】
   确认单集文章 (articles/) 全部就绪后，按模块拓扑聚合：
-  ├── 模块合辑教材：调用 cluster-articles 生成各模块教材全书 (textbooks/)
-  ├── 思维导图笔记：调用 cluster-notes --style minimal 生成考纲导图笔记 (notes/)
-  └── 交付校验：核对各轨资产完整性与目录索引
+  ├── ① 规划：cluster-notes 首跑导出 topic_plan_TASK.md ➔ Agent 写 topic_plan.json ➔ 重跑
+  ├── ② 笔记：逐模块导出 notes/模块XX_*_TASK.md（专属提示词 + 本模块文章路径清单）
+  │        ➔ 主 Agent 派子智能体（一个模块一个），逐篇读完该模块长文后撰写模块笔记
+  ├── ③ 教材：cluster-articles 以 articles/ 整编为模块合辑教材 (textbooks/)
+  ├── 质检：note_quality_check.py（笔记成色）+ render_compat_check.py（渲染合规）
+  └── 收尾：cleanup 回收任务书（每类留 1 份范本）+ sync 按磁盘对账回填清单
 ```
 
 > **动态队列追踪工具**：配套提供 `python scripts/queue_tracker.py`（支持 `--next N`、`--json`、`--summary`），用于实时监测全局队列出队状态与阶段门禁流转。
 >
-> 逐步操作规范（含阶段二三步门禁与任务书对照表）见 [SKILL.md](SKILL.md)；自检命令为 `python scripts/selfcheck.py`。
+> **交付前机器质检**：`python scripts/note_quality_check.py --strict` 把「套话填充 / 分集平铺标题 / 行内残缺引用 / 分集口吻」四类必查项与「断句 / 结构缺件」两类提示项变成可复算指标；`python scripts/render_compat_check.py --strict` 检查 GitHub 告警块、围栏外裸字符画与围栏配对。
+>
+> 逐步操作规范（含阶段二门禁与子智能体派发规范、任务书对照表）见 [SKILL.md](SKILL.md)；自检命令为 `python scripts/selfcheck.py`。
 
 ---
 
@@ -153,6 +158,25 @@ python scripts/queue_tracker.py
 # 获取待处理队列中接下来的 5 个分集及路径
 python scripts/queue_tracker.py --next 5
 ```
+
+### 场景六：交付前质检与收尾
+```bash
+# 笔记成色体检：套话填充 / 分集平铺标题 / 行内残缺引用 / 分集口吻 / 断句 / 结构缺件
+python scripts/note_quality_check.py --strict
+
+# 渲染合规体检：GitHub 告警块 / 围栏外裸字符画 / 围栏配对 / 语言标识
+python scripts/render_compat_check.py --strict
+
+# 任务书回收：成品产出后才回收，每类保留 1 份范本（先 --dry-run 预演）
+python src/cli.py cleanup --dry-run
+python src/cli.py cleanup
+
+# 账本对账：以磁盘产物为唯一真相回填 manifest.json
+python src/cli.py sync
+```
+
+> **任务书是临时派发物**：`*_TASK.md` 在成品产出后由 `cleanup`（或 pipeline 收尾）自动回收，
+> 每个类别保留编号最小的 1 份作为提示词范本；`topic_plan_TASK.md` 永不回收。
 
 ---
 

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Python 3.8+, ffmpeg in PATH, Multimodal LLM Agent (Antigravity, ChatGPT/Codex)
 metadata:
   author: LINJIANG12
-  version: 1.6.0
+  version: 1.7.0
   category: learning-and-education
 ---
 
@@ -82,14 +82,17 @@ python src/cli.py logout                          # 撤销保存
   └── 5. 验收门禁：python scripts/queue_tracker.py 确认 100% 达标后方可放行
           │
           ▼
-【阶段二：按模块统一收敛整编（三步门禁，需 Agent 往返）】
+【阶段二：按模块统一收敛整编（两趟门禁，需 Agent + 子智能体往返）】
   单集文章全部就绪后，通过官方 CLI 聚合（严禁手工写脚本拼接）：
-  ├── ① 规划：python src/cli.py cluster-notes "<链接>" --style minimal
+  ├── ① 规划（第一趟）：python src/cli.py cluster-notes "<链接>" --style minimal
   │      首跑导出 topic_plan_TASK.md ➔ Agent 写入 topic_plan.json ➔ 重跑
-  ├── ② 知识元：重跑后工具链导出 subtitles/kernels/PXX_*_KERNEL_TASK.md
-  │      ➔ Agent 逐集写入 PXX_*_kernel.json（须含 "status": "extracted"）➔ 重跑
-  ├── ③ 融合：知识元齐备后自动导出 notes/模块XX_*_TASK.md ➔ Agent 撰写模块笔记
+  ├── ② 笔记（第二趟）：规划就绪后自动逐模块导出 notes/模块XX_*_TASK.md
+  │      ➔ 主 Agent 派子智能体（一模块一个）逐篇读完该模块 articles/ 后撰写模块笔记
   ├── 模块合辑教材：python src/cli.py cluster-articles "<链接或路径>"  --> 生成 textbooks/
+  ├── 质检门禁：python scripts/note_quality_check.py --strict（笔记成色）
+  │            python scripts/render_compat_check.py --strict（渲染合规）
+  ├── 收尾：python src/cli.py cleanup（回收任务书，每类留 1 份范本）
+  │        python src/cli.py sync（按磁盘对账回填 manifest）
   └── 交付纪律：articles/ 下单集教材长文必须 100% 完整保留，供逐讲查阅
 ```
 
@@ -129,7 +132,7 @@ python scripts/queue_tracker.py --summary    # 单行状态：TOTAL/DONE/PENDING
 
 ---
 
-## 5. 阶段二：模块整编执行规范（三步门禁）
+## 5. 阶段二：模块整编执行规范（两趟门禁 + 子智能体派发）
 
 阶段二由工具链与 Agent 交替推进：`cluster-notes` 需按门禁**分次重跑**，每次重跑都会自动复用已产出的文件，不会重复劳动。
 
@@ -151,25 +154,30 @@ Agent 需读取任务书中的规划提示词，产出 JSON Array 并写入目�
 
 若规划缺失或非法，工具链会重新导出任务书并以 `exit 2` 退出，**不会**采用任何本地关键词聚类结果。
 
-### 5.2 第二步：知识元抽取（KERNEL_TASK）
+### 5.2 第二步：模块笔记融合（MODULE_NOTE_TASK，文章直供）
 
-规划就绪后重跑同一命令，工具链会为每个模块的每一集导出知识元任务书：
-
-- **任务书**：`output/<task>/subtitles/kernels/PXX_*_KERNEL_TASK.md`
-- **目标文件**：`output/<task>/subtitles/kernels/PXX_*_kernel.json`
-
-Agent 需以该集 `articles/PXX_*_精读文章.md` 为语料，按任务书提示词抽取知识元并写入 JSON，且**必须包含** `"status": "extracted"`（缺少该字段或字段值不符将不被识别）。
-
-> [!IMPORTANT]
-> **知识元门禁**：任一集知识元缺失时，该模块的笔记合成会被跳过并打印待办；工具链不会用机械截断或启发式内容冒充知识元。
-
-### 5.3 第三步：模块笔记融合（SYNTHESIS_PROMPT）
-
-相关分集的知识元齐备后重跑同一命令，自动导出融合任务书：
+规划就绪后重跑同一命令，工具链逐模块校验**该模块各集单集精读长文是否齐备**，齐备即导出模块笔记任务书：
 
 - **任务书**：`output/<task>/notes/模块XX_<主题>_TASK.md`
+- **目标文件**：`output/<task>/notes/模块XX_<主题>_笔记.md`
+- **语料**：该模块各集 `articles/PXX_*_精读文章.md`（任务书中列出**路径清单 + 字节数**）
 
-Agent 依据任务书内的 `SYNTHESIS_PROMPT` 与 `--style` 指定风格撰写模块笔记，落盘至 `output/<task>/notes/`。
+Agent 需按任务书内的 `MODULE_NOTE_PROMPT`（专属提示词）撰写，并逐条落实其中的**结构禁令**、**零套话禁令**与**视觉规范 v2**。若某模块尚有分集没有长文，该模块会被跳过并打印待办，其余模块照常推进。
+
+> [!IMPORTANT]
+> **语料纪律（v1.7 起）**：模块笔记的唯一事实来源是**单集精读长文**；知识元（kernel）已从「前置门禁」降级为「可选索引」——默认不参与，只有显式追加 `--kernel-index` 时才会把历史知识元作为定位索引注入。原因是空壳知识元会把笔记质量一并拖垮。
+
+### 5.3 子智能体派发规范（推荐做法）
+
+模块笔记的撰写工作量大且各模块彼此独立，**推荐由主 Agent 派子智能体并行产出**（一个模块一个子智能体）：
+
+| 环节 | 做法 |
+| :--- | :--- |
+| 派发粒度 | **一个模块 = 一个子智能体**，互不交叉，避免上下文互相污染 |
+| 输入 | 子智能体自行读取该模块的任务书 + 按清单**逐篇整篇读完**该模块全部 `articles/`（主 Agent 不代读） |
+| 输出 | 子智能体只写 `notes/模块XX_*_笔记.md`，**不回传正文**；回报固定一行：`模块XX \| 文件路径 \| 字节数 \| 覆盖分集 \| 套话0/分集标题0/断句0` |
+| 并发 | 建议 5~6 个并发；模块多时分批派发（例如 5+5+1） |
+| 返修 | 质检不达标时，把质检脚本输出的「文件:行号:原文」贴给该模块子智能体重派，最多 2 轮；仍不达标则由主 Agent 亲自返修该模块 |
 
 ### 5.4 模块合辑教材（无需语义往返）
 
@@ -185,11 +193,24 @@ python src/cli.py cluster-articles "<链接或路径>"
 | :--- | :--- | :--- | :--- |
 | 阶段一 单集长文 | `articles/PXX_*_TASK.md` | `articles/PXX_*_精读文章.md` | 文件 ≥ 1000 字节 |
 | 阶段二① 模块规划 | `topic_plan_TASK.md` | `topic_plan.json` | 1..N 覆盖唯一且合法 |
-| 阶段二② 知识元 | `subtitles/kernels/PXX_*_KERNEL_TASK.md` | `subtitles/kernels/PXX_*_kernel.json` | `status == "extracted"` |
-| 阶段二③ 模块笔记 | `notes/模块XX_*_TASK.md` | `notes/模块XX_*_笔记.md` | 知识元齐备即导出 |
+| 阶段二② 模块笔记 | `notes/模块XX_*_TASK.md` | `notes/模块XX_*_笔记.md` | 该模块各集长文齐备即导出 |
+| 阶段二③ 模块教材 | ——（纯工具整编） | `textbooks/模块XX_*_精读全书.md` | `articles/` 齐备即整编 |
 
 > [!TIP]
-> 所有任务书均为「读完即写盘」模式：工具链只负责准备语料、渲染提示词与校验产物，**真正的语义工作全部由宿主 Agent 完成**。
+> 所有任务书均为「读完即写盘」模式：工具链只负责准备语料、渲染提示词与校验产物，**真正的语义工作全部由宿主 Agent（通常为子智能体）完成**。
+
+### 5.6 交付前质检与收尾（机器门禁）
+
+```bash
+python scripts/note_quality_check.py --strict    # 笔记成色：套话 / 分集标题 / 行内残缺引用 / 分集口吻 / 断句 / 结构缺件
+python scripts/render_compat_check.py --strict   # 渲染合规：GitHub 告警块 / 围栏外字符画 / 围栏配对 / 语言标识
+python src/cli.py cleanup --dry-run              # 任务书回收预演（成品产出后才回收，每类留 1 份范本）
+python src/cli.py sync                           # 按磁盘对账回填 manifest.json
+```
+
+- **笔记成色致命项**（`套话填充 / 空壳标题 / 分集平铺标题 / 行内残缺引用 / 分集口吻`）在两套合格语料上实测均为 0，必须清零；
+- **断句与结构缺件**为启发式警告项，按阈值提示（默认每份 ≤ 4 处断句、7 项结构构件必须齐备）；
+- 任务书是**临时派发物**：成品产出后由 `cleanup` 回收，每个类别保留编号最小的 1 份作为提示词范本；`topic_plan_TASK.md` 永不回收。
 
 ---
 
@@ -222,15 +243,23 @@ python scripts/queue_tracker.py --summary
 python src/cli.py cluster-articles "<链接或本地路径>"
 
 # 7. 阶段二：模块复习笔记（CS-Xmind-Note 精简树状风格）
-#    注意：需按 § 5 的三步门禁分次重跑（规划 ➔ 知识元 ➔ 融合）
+#    注意：需按 § 5 的两趟门禁分次重跑（规划 ➔ 笔记），笔记建议由子智能体按模块并行产出
 python src/cli.py cluster-notes "<链接或本地路径>" --style minimal
-python src/cli.py cluster-notes "<链接或本地路径>" --style minimal --replace  # 替换旧单集笔记
+python src/cli.py cluster-notes "<链接或本地路径>" --style minimal --force         # 强制重导全部模块任务书
+python src/cli.py cluster-notes "<链接或本地路径>" --style minimal --kernel-index  # 可选：注入历史知识元作索引
+python src/cli.py cluster-notes "<链接或本地路径>" --style minimal --replace        # 替换旧单集笔记
 
-# 8. 环境与工具链自检
+# 8. 交付前质检与收尾
+python scripts/note_quality_check.py --strict      # 笔记成色体检（套话/分集标题/断句/结构缺件）
+python scripts/render_compat_check.py --strict     # 渲染合规体检（告警块/裸字符画/围栏配对）
+python src/cli.py cleanup --dry-run                # 任务书回收预演（成品产出后才回收，每类留 1 份范本）
+python src/cli.py sync                             # 按磁盘对账回填 manifest.json
+
+# 9. 环境与工具链自检
 python scripts/selfcheck.py
 python src/cli.py info
 
-# 9. 登录凭证：持久化保存 SESSDATA（保存一次，后续命令免传）
+# 10. 登录凭证：持久化保存 SESSDATA（保存一次，后续命令免传）
 python src/cli.py login --sessdata "<SESSDATA>"
 python src/cli.py logout
 ```
@@ -245,8 +274,8 @@ python src/cli.py logout
 
 | 产物 | 路径 | 说明 |
 | :--- | :--- | :--- |
-| **单集教材长文** | `output/<task>/articles/PXX_*_精读文章.md` | 每集独立长文，含完整推导演算与真实教学案例。模块整编后**严格保留，不予删除** |
-| **模块复习笔记** | `output/<task>/notes/模块XX_*_笔记.md` | 跨集知识点归纳。系统**不设默认风格**，必须显式指定 `--style`（推荐 `minimal`，对齐 408 考研树状导图，支持 Markmap / XMind 导入） |
+| **单集教材长文** | `output/<task>/articles/PXX_*_精读文章.md` | 每集独立长文，含完整推演推导与真实教学案例。模块整编后**严格保留，不予删除** |
+| **模块复习笔记** | `output/<task>/notes/模块XX_*_笔记.md` | 跨集知识点归纳，按 § 7.4 的「笔记结构规范 v2」产出。系统**不设默认风格**，必须显式指定 `--style`（推荐 `minimal`，对齐 408 考研树状导图，支持 Markmap / XMind 导入） |
 | **模块合辑教材** | `output/<task>/textbooks/模块XX_*_精读全书.md` | 按知识模块编排的完整合辑教材，含全景导读与章节逻辑过渡 |
 
 ### 7.1 工作区目录结构
@@ -255,23 +284,62 @@ python src/cli.py logout
 output/<task>/
 ├── audio/                     # 提取的音频与自动切片
 ├── parts.json                 # 分集拓扑缓存（接口受阻时离线自愈依赖）
-├── manifest.json              # 任务清单与断点续跑状态
+├── manifest.json              # 任务清单与断点续跑状态（可用 `cli.py sync` 按磁盘对账回填）
 ├── topic_plan.json            # ① 模块规划（Agent 产出）
-├── topic_plan_TASK.md         # ① 规划任务书
-├── articles/                  # 单集长文 + 各环节任务书
-│   ├── PXX_*_TASK.md          #   单集长文任务书
-│   └── PXX_*_精读文章.md       #   单集长文（最终产物）
-├── subtitles/kernels/         # ② 知识元与任务书
-├── notes/                     # ③ 模块笔记与任务书
-└── textbooks/                 # 模块合辑教材
+├── topic_plan_TASK.md         # ① 规划任务书（课程级唯一，永不回收）
+├── articles/                  # 单集长文 + 派发任务书
+│   ├── PXX_*_TASK.md          #   单集长文任务书（临时派发物，完成后回收，保留 P01 一份范本）
+│   └── PXX_*_精读文章.md       #   单集长文（最终产物，严格保留）
+├── subtitles/kernels/         # 知识元（可选索引；历史工作区遗留，默认不参与笔记生成）
+├── notes/                     # ② 模块笔记 + 派发任务书（每模块保留 1 份任务书范本）
+└── textbooks/                 # ③ 模块合辑教材
 ```
+
+> **任务书回收**：`*_TASK.md` 是工具层写给 Agent 的**临时派发物**，成品产出后由 `cli.py cleanup`
+> （或 pipeline 收尾）自动回收，**每个类别保留编号最小的 1 份**作为提示词范本，便于随时翻阅写法。
+> 成品尚未产出的任务书一律保留，不会误删进行中的派发。
 
 ### 7.2 断点续跑
 
 工具链以磁盘产物为唯一进度依据，重跑同一条命令即可续作：
 
-- 单集长文、模块规划、知识元、模块笔记均按 § 5.5 表格的条件自动复用；
-- 删除 `output/` 下某个产物文件，即视为重新派发该环节；
-- 用 `python scripts/queue_tracker.py --next 5` 查看阶段一待办队列，`--summary` 获取单行状态。
+- 单集长文、模块规划、模块笔记、模块教材均按 § 5.5 表格的条件自动复用；
+- 删除 `output/` 下某个**产物**文件（如 `articles/PXX_*_精读文章.md`），即视为重新派发该环节；
+- 任务书会被自动回收，因此**不要靠删除任务书来重派**；需要重导时用 `--force`；
+- 用 `python scripts/queue_tracker.py --next 5` 查看阶段一待办队列，`--summary` 获取单行状态；
+- 若 `manifest.json` 与实际产物不一致（例如 Agent 直接写盘后清单未回填），执行 `python src/cli.py sync` 按磁盘对账。
 
-详细结构模板、各类型课程开篇示范与排版规范请查阅：[references/delivery_matrix.md](references/delivery_matrix.md)。
+### 7.3 阅读器与渲染兼容
+
+三类交付物默认在 **Typora** 中阅读，同时兼容 VS Code Markmap 与 XMind 导入。交付产物必须遵守以下渲染硬约束：
+
+- 字符画 / 拓扑图 / 框图**必须**放进 ` ```text ` 围栏；裸写在渲染时会被合并空格、彻底错位；
+- 提示类内容统一写 `> **提示**：……` / `> **易错点**：……`，**禁用** `> [!TIP]` 一类的 GitHub 专有告警块（旧版 Typora 会露出字面标记）；
+- 行内公式 `$…$` 需在 **Typora → 偏好设置 → Markdown → 勾选「内联公式」** 后才会正常渲染（这是阅读侧的一次性设置，请向使用者说明）。
+
+> **范围说明**：本规范文档自身出现的告警块（`> [!IMPORTANT]` 等）仅用于提示阅读本文档的人与 Agent；**交付产物一律禁用该语法**，两者不可混淆。
+
+### 7.4 笔记结构规范 v2（交付硬约束）
+
+模块笔记必须**按知识主题**组织，严禁按分集平铺。七个必备构件与四条禁令：
+
+| 必备构件 | 要求 |
+| :--- | :--- |
+| H1 标题 | `# 模块 XX：<主题>（Pxx-Pyy）思维导图速查大笔记` |
+| 元信息抬头 | 紧随 H1 的 3 行引用块：整理自语料 / 风格规范 / 渲染支持 |
+| 知识拓扑树 | 一棵 ` ```text ` 围栏树，`├──`/`└──` 骨架 + `────` 引线**纵向对齐同一列**，一级节点标分集区间 |
+| 主题分节 | `## 1. <主题>` … 每节首行 `> **一句话主旨**：…`（30~60 字） |
+| 概念块 | `* **术语（English，缩写）**` → `* > 定义：…` → 机理/步骤条目 → `* > 易错点：…`（确有才写） |
+| 溯源标注 | 每个概念块末尾 `* > 来源: P03, P05` |
+| 收尾两节 | `## N. 速查卡`（确有横向对比才用 GFM 表格）+ `## N+1. 一句话总纲`（3~5 条） |
+
+| 禁令 | 说明 |
+| :--- | :--- |
+| 禁分集平铺标题 | 任何级别标题都不得是分集编号或分集标题（`### P16 …` / `### 第16讲 …` 一律不合格） |
+| 禁分集口吻 | 正文不得出现「本集」「上一讲」「P16 中提到」「视频里说」（`> 来源:` 标注除外） |
+| 禁套话填充 | 「概念属性与边界」「形式化表述与理论依据明确」「符合全国计算机专业考纲核心知识点」等无信息量句式；每条陈述必须携带具体信息 |
+| 禁中途截断 | 转述与引用必须完整成句；每个结论至少给一条支撑（机理 / 步骤 / 公式 / 例子） |
+
+以上四类禁令可由 `python scripts/note_quality_check.py --strict` 机器验收（在两套人工精修语料上实测均为 0 命中）。
+
+详细结构模板、各类型课程开篇示范与完整渲染兼容规范请查阅：[references/delivery_matrix.md](references/delivery_matrix.md)。

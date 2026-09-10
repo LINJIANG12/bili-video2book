@@ -170,6 +170,12 @@ class KernelExtractor:
         kernel_path = cls.kernel_json_path(ws, page, title)
         cached = cls.load_kernel(kernel_path)
         if cached is not None:
+            # 成品已落盘：顺手回收该集知识元任务书（保持编号最小的一份作范本）
+            try:
+                from .task_cleanup import reclaim_kernel_task
+                reclaim_kernel_task(ws, page)
+            except Exception:
+                pass
             return cached
 
         task_file = cls.export_kernel_task(

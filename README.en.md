@@ -28,7 +28,7 @@ The pipeline delivers three distinct deliverables tailored to different study wo
 | :--- | :--- | :--- | :--- |
 | **Single-Episode Articles** | `output/<task>/articles/` | In-depth self-study replacing long video watching | Step-by-step mathematical and logical derivations, fully annotated code examples, and 2~3 self-test exercises with sourced answers. **Strictly preserved during modular synthesis.** |
 | **Modular Chapter Books** | `output/<task>/textbooks/` | Systematic reading across complete chapters | Merges multi-episode articles into cohesive textbooks with transitional bridge paragraphs and topic summaries. |
-| **Mindmap Review Notes** | `output/<task>/notes/` | Quick review, exams, and mindmap rendering | Requires an explicit `--style` (no default is set); `minimal` follows the CS-Xmind-Note tree structure (multi-level `*` indentation and single-line `* > Definition:` quotes). Natively supports VS Code Markmap and XMind. |
+| **Mindmap Review Notes** | `output/<task>/notes/` | Quick review, exams, and mindmap rendering | **Re-authored by sub-agents from the module's own single-episode articles** (not stitched from knowledge kernels). Requires an explicit `--style` (no default); `minimal` follows the CS-Xmind-Note tree structure and must satisfy the "note structure spec v2" (7 mandatory building blocks + 4 prohibitions). Natively supports VS Code Markmap and XMind. |
 
 ---
 
@@ -54,16 +54,21 @@ The execution architecture separates single-episode generation from modular cons
   └── Phase Gate: Stage 1 concludes only when 100% of episodes are completed
                  │
                  ▼
-【Stage 2: Modular Synthesis & Notes Generation】
+【Stage 2: Modular Synthesis & Notes Generation (two passes)】
   Once all articles/ are ready on disk, consolidates by module boundaries:
-  ├── Chapter Textbooks: Calls cluster-articles to produce textbooks/
-  ├── Mindmap Notes: Calls cluster-notes --style minimal to produce notes/
-  └── Final Delivery: Verifies triple-asset integrity and full index
+  ├── ① Planning: first cluster-notes run exports topic_plan_TASK.md ➔ Agent writes topic_plan.json ➔ re-run
+  ├── ② Notes: exports notes/模块XX_*_TASK.md per module (dedicated prompt + the module's article paths)
+  │        ➔ the main Agent dispatches one sub-agent per module; each reads every module article and writes the note
+  ├── ③ Textbooks: cluster-articles consolidates articles/ into textbooks/
+  ├── Quality gates: note_quality_check.py (note standards) + render_compat_check.py (Typora rendering)
+  └── Housekeeping: cleanup reclaims task-files (one prompt sample kept) + sync reconciles manifest.json
 ```
 
 > **Queue Tracker Tool**: Run `python scripts/queue_tracker.py` (supports `--next N`, `--json`, `--summary`) to inspect sliding pool throughput and phase gating in real time.
 >
-> Step-by-step operating rules (including the Stage-2 three-gate flow and task-file matrix) live in [SKILL.md](SKILL.md); run `python scripts/selfcheck.py` for a self-check.
+> **Pre-delivery gates**: `python scripts/note_quality_check.py --strict` turns "boilerplate filler / per-episode headings / broken inline quotes / episode voice" plus "truncation / missing structure" into recomputable metrics; `python scripts/render_compat_check.py --strict` checks GitHub alert blocks, bare ASCII art outside fences, and fence pairing.
+>
+> Step-by-step operating rules (including the Stage-2 gate flow, sub-agent dispatch rules and task-file matrix) live in [SKILL.md](SKILL.md); run `python scripts/selfcheck.py` for a self-check.
 
 ---
 
@@ -153,6 +158,26 @@ python scripts/queue_tracker.py
 # Retrieve next 5 pending episodes and file targets
 python scripts/queue_tracker.py --next 5
 ```
+
+### Scenario 6: Pre-delivery Quality Gates & Housekeeping
+```bash
+# Note quality gate: boilerplate filler / per-episode headings / broken inline quotes / truncation / missing structure
+python scripts/note_quality_check.py --strict
+
+# Render compatibility gate: GitHub alert blocks / bare ASCII art outside fences / unbalanced fences
+python scripts/render_compat_check.py --strict
+
+# Reclaim dispatch task-files once their products exist (keeps one prompt sample per category)
+python src/cli.py cleanup --dry-run
+python src/cli.py cleanup
+
+# Reconcile manifest.json with what is actually on disk
+python src/cli.py sync
+```
+
+> **Task-files are transient dispatch artifacts**: `*_TASK.md` is reclaimed by `cleanup` (or at the end of
+> `pipeline`) once its product lands, keeping the lowest-numbered sample per category for prompt reference.
+> `topic_plan_TASK.md` is never reclaimed.
 
 ---
 

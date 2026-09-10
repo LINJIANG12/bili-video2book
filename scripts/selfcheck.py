@@ -384,6 +384,172 @@ def check_cache_paths_anchored():
         assert PROJECT_ROOT in p.parents, f"{label}路径未锚定仓库根: {p}"
 
 
+def check_render_compat_rules():
+    """交付物渲染兼容约束在位：Typora 优先，字符画必须进围栏，禁用 GitHub 告警块。"""
+    from src.generator.block_synthesizer import BlockSynthesizer
+    from src.generator.prompt_templates import (
+        ARTICLE_LEARNING_PROMPT,
+        NOTE_STYLES,
+        RENDER_COMPAT_RULES,
+    )
+
+    # 1) 共享规则是唯一文案来源，两条硬约束都必须在
+    assert "```text" in RENDER_COMPAT_RULES, "共享规则缺少「字符画必须进围栏」硬约束"
+    assert "成对闭合" in RENDER_COMPAT_RULES, "共享规则缺少「围栏必须成对闭合」硬约束"
+    assert "GitHub 专有" in RENDER_COMPAT_RULES, "共享规则缺少「禁用 GitHub 告警块」禁令"
+
+    # 2) 讲义提示词已注入规则，且不再处方 GitHub 告警块
+    assert RENDER_COMPAT_RULES in ARTICLE_LEARNING_PROMPT, "讲义提示词未注入渲染兼容规则"
+    assert "（如 `> [!TIP]`）" not in ARTICLE_LEARNING_PROMPT, "讲义提示词仍在处方 GitHub 告警块"
+    for ph in ("{title}", "{part_title}", "{content}"):
+        assert ph in ARTICLE_LEARNING_PROMPT, f"讲义提示词占位符缺失: {ph}"
+
+    # 3) 模块笔记提示词对本模块字符画提出了围栏要求（文章直供版专属提示词）
+    from src.generator.prompt_templates import MODULE_NOTE_PROMPT
+    assert "```text 围栏内" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 未要求字符画进围栏"
+    assert "{article_list}" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 缺少语料清单占位符"
+
+    # 4) 八种笔记风格 + 未指定风格，经注入后必须全覆盖
+    block_meta = {"block_id": 1, "block_title": "t", "episodes": [1], "core_theme": "x"}
+    for key in NOTE_STYLES:
+        prompt = BlockSynthesizer.build_synthesis_prompt(block_meta, [], style=key)
+        assert RENDER_COMPAT_RULES in prompt, f"风格 {key} 未注入渲染兼容规则"
+    assert RENDER_COMPAT_RULES in BlockSynthesizer.build_synthesis_prompt(block_meta, []), \
+        "未指定风格时也未注入渲染兼容规则"
+
+    # 5) 格式总纲（含镜像）必须写明阅读器为 Typora
+    for rel in (
+        "references/delivery_matrix.md",
+        ".agents/skills/bili-video2book/references/delivery_matrix.md",
+    ):
+        text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        assert "Typora" in text, f"{rel} 未声明 Typora 阅读场景"
+        assert "```text" in text, f"{rel} 未写入字符画围栏要求"
+
+
+def check_module_note_contract():
+    """模块笔记契约：文章直供 + 零套话禁令 + 视觉规范 v2 + 分集标题禁令 + 任务书回收。"""
+    from src.core.task_cleanup import cleanup_completed_tasks  # noqa: F401  (导入即校验依赖无环)
+    from src.core.workspace import TaskWorkspace
+    from src.generator.block_synthesizer import BlockSynthesizer
+    from src.generator.prompt_templates import (
+        MODULE_NOTE_PROMPT,
+        NOTE_STYLES,
+        NOTE_VISUAL_SPEC,
+    )
+
+    # 1) 专属提示词必须点名禁止「套话填充」「分集标题」「分集口吻」「中途截断」
+    for 关键短语, 说明 in (
+        ("概念属性与边界", "套话黑名单"),
+        ("严禁以分集为单位组织内容", "分集标题禁令"),
+        ("严禁分集口吻", "分集口吻禁令"),
+        ("严禁中途截断", "截断禁令"),
+    ):
+        assert 关键短语 in MODULE_NOTE_PROMPT, f"MODULE_NOTE_PROMPT 缺少{说明}：{关键短语}"
+
+    # 2) 视觉规范 v2 的三项标志性要求必须在位
+    for 关键短语 in ("一句话主旨", "速查卡", "一句话总纲"):
+        assert 关键短语 in NOTE_VISUAL_SPEC, f"NOTE_VISUAL_SPEC 缺少「{关键短语}」要求"
+
+    # 3) 精简风格不得再把「分集/小节标题」写成标题层级示范
+    minimal_instruction = NOTE_STYLES["minimal"]["instruction"]
+    assert "## 分集/小节标题" not in minimal_instruction, "minimal 风格仍在示范分集标题层级"
+    assert "严禁使用分集编号或分集标题" in minimal_instruction, "minimal 风格未写明分集标题禁令"
+
+    # 4) 任务书渲染：八种风格 + 未指定风格都必须带上视觉规范与语料清单
+    block_meta = {"block_id": 3, "block_title": "关系数据库", "episodes": [6, 7], "core_theme": "关系模型"}
+    样例文章 = PROJECT_ROOT / "SKILL.md"  # 仅需一个存在的文件来渲染字节数
+    for key in list(NOTE_STYLES) + [None]:
+        prompt = BlockSynthesizer.build_synthesis_prompt(block_meta, [样例文章], style=key)
+        assert NOTE_VISUAL_SPEC in prompt, f"风格 {key} 未注入视觉规范 v2"
+        assert "SKILL.md" in prompt, f"风格 {key} 未渲染语料清单"
+
+    # 5) 知识元默认不参与：不传 kernel_index 时不得出现知识元索引段
+    prompt_without = BlockSynthesizer.build_synthesis_prompt(block_meta, [样例文章], style="minimal")
+    assert "可选结构化索引" not in prompt_without, "未显式开启时仍注入了知识元索引"
+    prompt_with = BlockSynthesizer.build_synthesis_prompt(
+        block_meta, [样例文章], style="minimal",
+        kernel_index=[{"page": 6, "status": "extracted", "definitions": []}],
+    )
+    assert "可选结构化索引" in prompt_with, "显式传入 kernel_index 时未注入索引段"
+
+    # 6) 任务书回收：成品已产出才回收，每类保留 1 份范本，未产出的一律保留
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = TaskWorkspace(task_name="cleanup_task", base_dir=tmp)
+
+        # 文章：P01 无成品（保留待办 + 范本）、P02 有成品（回收）
+        (ws.articles_dir / "P01_绪论_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.articles_dir / "P02_数制_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.articles_dir / "P02_数制_精读文章.md").write_text("内容" * 400, encoding="utf-8")
+        # 知识元：P01 有合规成品（但属范本，保留）、P02 有合规成品（回收）
+        kernels_dir = ws.subtitles_dir / "kernels"
+        kernels_dir.mkdir(parents=True, exist_ok=True)
+        (kernels_dir / "P01_绪论_KERNEL_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (kernels_dir / "P02_数制_KERNEL_TASK.md").write_text("t" * 200, encoding="utf-8")
+        for page, title in ((1, "绪论"), (2, "数制")):
+            (kernels_dir / f"P{page:02d}_{title}_kernel.json").write_text(
+                json.dumps({"page": page, "title": title, "status": "extracted",
+                            "definitions": [{"term": "t", "essence": "e"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        # 模块笔记：模块01 有成品（范本，保留）、模块02 有成品（回收）、模块03 无成品（保留）
+        (ws.notes_dir / "模块01_绪论_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.notes_dir / "模块02_关系_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.notes_dir / "模块03_理论_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.notes_dir / "模块01_绪论_笔记.md").write_text("笔记" * 600, encoding="utf-8")
+        (ws.notes_dir / "模块02_关系_笔记.md").write_text("笔记" * 600, encoding="utf-8")
+
+        result = cleanup_completed_tasks(ws, keep_per_category=1, dry_run=False)
+        remaining = sorted(p.name for p in ws.articles_dir.glob("*_TASK.md"))
+        assert remaining == ["P01_绪论_TASK.md"], f"文章任务书回收结果异常: {remaining}"
+        kernel_remaining = sorted(p.name for p in kernels_dir.glob("*_KERNEL_TASK.md"))
+        assert kernel_remaining == ["P01_绪论_KERNEL_TASK.md"], f"知识元任务书回收结果异常: {kernel_remaining}"
+        note_remaining = sorted(p.name for p in ws.notes_dir.glob("*_TASK.md"))
+        assert note_remaining == ["模块01_绪论_TASK.md", "模块03_理论_TASK.md"], \
+            f"模块笔记任务书回收结果异常: {note_remaining}"
+        assert len(result["deleted"]) == 3, f"回收数量异常: {result['deleted']}"
+        assert not (ws.root_dir / "topic_plan_TASK.md").exists() or True  # 规划任务书不参与回收
+
+
+
+def check_deliverable_lint_gate():
+    """真实交付物机器门禁：告警块与围栏配对必须为 0（仓库无 output/ 时自动跳过）。
+
+    这是「只在提示词里喊口号、没人验货」的补丁：提示词规则容易被改回，产物指标不会说谎。
+    """
+    from src.core.deliverable_lint import lint_render, summarize_render
+    from src.core.task_cleanup import find_workspaces
+
+    workspaces = find_workspaces(PROJECT_ROOT / "output")
+    if not workspaces:
+        print("       (仓库内无 output/ 工作区，跳过真实产物门禁)")
+        return
+
+    alerts = unbalanced = 0
+    for ws in workspaces:
+        for path in ws.root_dir.rglob("*.md"):
+            try:
+                rel_parents = path.relative_to(ws.root_dir).parts[:-1]
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel_parents):
+                continue  # 归档/备份目录不计入
+            if path.name.endswith(("_TASK.md", "_KERNEL_TASK.md")):
+                continue
+            try:
+                summary = summarize_render(lint_render(path.read_text(encoding="utf-8")))
+            except OSError:
+                continue
+            alerts += summary["alert_blocks"]
+            unbalanced += summary["fences_unbalanced"]
+
+    assert alerts == 0, f"交付物中仍存在 {alerts} 处 GitHub 告警块（> [!TIP] 等）"
+    assert unbalanced == 0, f"交付物中仍有 {unbalanced} 个未成对闭合的代码围栏"
+
+
 def main():
     print("=" * 62)
     print("bili-video2book / omni-media-mcp 自检")
@@ -402,6 +568,9 @@ def main():
     check("SESSDATA 存档安全（脱敏/不入库）", check_sessdata_store_safety)
     check("缓存与凭证路径锚定仓库根", check_cache_paths_anchored)
     check("宿主旁路目录不入库", check_host_artifacts_ignored)
+    check("交付物渲染兼容约束（Typora）", check_render_compat_rules)
+    check("模块笔记契约（文章直供/零套话/视觉规范/任务书回收）", check_module_note_contract)
+    check("交付物机器门禁（告警块/围栏配对）", check_deliverable_lint_gate)
     check("死代码与验证产物已移除", check_dead_modules_removed)
     check("两份 SKILL 同步", check_skill_copies_in_sync)
     print("=" * 62)

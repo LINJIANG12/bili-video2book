@@ -100,6 +100,29 @@ class TaskWorkspace:
         return cls(task_name=task_name, base_dir=base_dir)
 
     @classmethod
+    def from_existing(cls, path: Union[str, Path]) -> "TaskWorkspace":
+        """绑定一个**已存在**的工作区目录，不做名称清洗。
+
+        必要原因：`create()` 产出的目录名是「清洗后的标题 + _BV号」，拼接后可能超过
+        `sanitize_name` 的 80 字符上限（如吉林大学《微机原理与接口技术》工作区名长达 100+ 字符）。
+        若用 `__init__` 重新清洗，会算出与实际目录不符的路径。此入口只做路径绑定，不创建目录。
+        """
+        目录 = Path(path)
+        if not 目录.is_absolute():
+            目录 = (Path.cwd() / str(path)).resolve()
+        实例 = cls.__new__(cls)
+        实例.task_name = 目录.name
+        实例.base_dir = 目录.parent
+        实例.root_dir = 目录
+        实例.audio_dir = 目录 / "audio"
+        实例.notes_dir = 目录 / "notes"
+        实例.articles_dir = 目录 / "articles"
+        实例.subtitles_dir = 目录 / "subtitles"
+        实例.parts_cache_path = 目录 / "parts.json"
+        实例.manifest_file = 目录 / "manifest.json"
+        return 实例
+
+    @classmethod
     def to_absolute(cls, path: Union[str, Path]) -> Path:
         """相对仓库根目录换算为绝对路径（绝对路径直接归一化返回）。"""
         路径 = Path(str(path))

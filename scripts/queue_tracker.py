@@ -198,7 +198,11 @@ def scan_status(ws: Path, min_article_bytes: int = 1000) -> Dict:
     pending = [p for p in parts if p["page"] not in done_pages]
 
     textbooks = list(textbooks_dir.glob("*.md")) if textbooks_dir.exists() else []
-    notes = list(notes_dir.glob("*.md")) if notes_dir.exists() else []
+    # 任务书（*_TASK.md）是派发用的临时产物，不计入交付资产，否则会把计数虚高
+    notes = (
+        [f for f in notes_dir.glob("*.md") if not f.name.endswith("_TASK.md")]
+        if notes_dir.exists() else []
+    )
 
     return {
         "workspace": str(ws),

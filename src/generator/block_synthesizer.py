@@ -1,82 +1,107 @@
-"""Block Synthesizer: Exports module-level synthesis task-files for Agent-native note authoring.
+"""Block Synthesizer: 导出「模块笔记」融合任务书（文章直供版）。
 
-Architecture: CLI provides tooling only (task-file export); the mature host dialogue model performs
-the real block-note synthesis natively from the exported SYNTHESIS_PROMPT.
+架构定位：工具层只负责**备料与渲染提示词**——把该模块各集单集精读长文（`articles/`）的路径清单、
+模块边界信息、专属提示词（`MODULE_NOTE_PROMPT`）、渲染兼容规则与视觉规范 v2 组装成
+`notes/模块XX_*_TASK.md`，交由宿主 Agent（通常是每模块一个子智能体）原生撰写。
+
+语料变更（v1.7）：模块笔记的唯一事实来源是**单集精读长文**；
+知识元（kernel）已从「前置门禁」降级为「可选索引」（`kernel_index` 显式传入才注入），
+因为空壳知识元会把笔记质量一并拖垮。成品产出后任务书由 task_cleanup 自动回收。
 """
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-from src.generator.prompt_templates import NOTE_STYLES
+from src.generator.prompt_templates import (
+    MODULE_NOTE_PROMPT,
+    NOTE_STYLES,
+    NOTE_VISUAL_SPEC,
+    RENDER_COMPAT_RULES,
+)
+
+# 成品体积门槛：低于该值视为空壳，需重新派发
+MIN_NOTE_BYTES = 1000
 
 
 class BlockSynthesizer:
-    SYNTHESIS_PROMPT = """你是一位擅长高密度知识提炼与体系重构的资深学科主编。
+    @classmethod
+    def _render_article_list(cls, article_paths: Iterable[Any]) -> str:
+        """渲染「唯一事实来源」清单：仓库相对路径 + 字节数，便于 Agent 逐篇 Read。"""
+        lines: List[str] = []
+        for raw in article_paths:
+            path = Path(raw)
+            try:
+                from src.core.workspace import TaskWorkspace
+                shown = TaskWorkspace.to_relative(path)
+            except Exception:
+                shown = path.as_posix()
+            try:
+                size = path.stat().st_size if path.exists() else 0
+            except OSError:
+                size = 0
+            lines.append(f"- {shown}  ({size:,} 字节)")
+        return "\n".join(lines) if lines else "- （本模块尚无单集精读长文，请先补齐 articles/ 后再派发）"
 
-输入是从一个专题模块的多集视频中提取的【高纯度知识元集合】。你的任务不是逐集流水账复述，而是把这些知识元【深度融合】为一份紧凑干练、极高信息密度的【模块复习速查笔记】。同一主题在不同分集中的内容必须合并归拢，消除割裂痕迹，最终成品读起来应像一本权威专著中的自洽章节。
+    @classmethod
+    def collect_block_articles(cls, episodes: Iterable[Dict[str, Any]], ws: Any):
+        """收集本模块各集的单集精读长文，返回 (文章路径列表, 缺文章的分集号列表)。
 
-【模块信息】
-- 模块编号: {block_id}
-- 模块主题: {block_title}
-- 涵盖分集: {episodes_str}
-- 核心议题: {core_theme}
+        复用 KernelExtractor 的宽容定位，兼容历史工作区无 `_精读文章` 后缀的命名。
+        """
+        from src.core.kernel_extractor import KernelExtractor
 
-【知识元集合】
-{kernels_json}
-
-━━━━━━━━━━━━━━━━━━
-一、定位与融合规则
-━━━━━━━━━━━━━━━━━━
-1. **纯粹的复习速查定位**：
-   - 本笔记专精于核心知识骨架与要点速查，**不收录长篇案例记叙，不包含练习测验题**，全篇追求极高信息密度。
-2. **概念本体深度融合（Ontology Merge）**：
-   - 同一概念/主题在多个分集中分散讲解的，必须完整合并到同一条目下统一阐述（核心本质 → 工作机理 → 变体演进 → 局限边界）；
-   - 在每个核心概念条目末尾，用一行小字标注来源分集（如 `> 来源: P01, P03`），方便读者回溯原视频。
-3. **冲突演进处理**：
-   - 若后分集对前分集内容有补充、深化或修正，按最终演化结果统一；若为并列争议观点，客观并列呈现。
-4. **消除跨集割裂痕迹**：
-   - 正文中严禁出现“在上一讲中”、“本集”、“P01中提到”等分集口吻。
-5. **事实边界（Strict Grounding）**：
-   - 所有事实、定义、机制、结论严格来自知识元，严禁引入外部术语、概念或脑补细节；语料未提及的细节写明“未说明”，严禁编造。
-
-━━━━━━━━━━━━━━━━━━
-二、结构与表达（按需生长，拒绝僵化）
-━━━━━━━━━━━━━━━━━━
-1. **章节语境化**：
-   - 根据模块所属领域（技术、学术、游戏、社科等）自适应拟定贴切自然的二级标题（## ），严禁机械套用生硬的工科模板词汇。
-2. **表达工具箱（自然融入，无则坚决不写）**：
-   - **知识拓扑**：在开篇使用清晰紧凑的 ASCII 树状图展现本模块的概念体系与脉络全貌；
-   - **横向对比表格（按需，非必须）**：仅在语料中客观存在 2~N 个天然可比的实体（如不同方案、机制、流派、工具、易混概念）时自然使用 Markdown 表格，列名自适应；**若语料中并无横向对比要素，严禁强行画表，也绝不要输出任何带有“对比”字样的空白小节**；
-   - **易错/反模式清单（按需）**：仅当语料中明确指出了认知误区、避坑要点或失误陷阱时条目化列出，无则不强加。
-
-直接输出完整笔记 Markdown，标题为 `# 模块 {block_id}：{block_title}`，不输出任何前缀废话或分析说明。
-"""
+        found: List[Any] = []
+        missing: List[int] = []
+        for ep in episodes:
+            page = ep.get("page")
+            article = KernelExtractor.find_article(ws, page)
+            if article is None:
+                missing.append(page)
+            else:
+                found.append(article)
+        return found, missing
 
     @classmethod
     def build_synthesis_prompt(
         cls,
         block_meta: Dict[str, Any],
-        kernels: List[Dict[str, Any]],
+        article_paths: Optional[Iterable[Any]] = None,
         style: Optional[str] = None,
+        kernel_index: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
-        """Build the synthesis prompt for the Agent to execute natively (no network in tooling)."""
+        """组装模块笔记撰写提示词（文章直供 + 指定风格 + 渲染与视觉规范）。"""
         eps = sorted(block_meta.get("episodes", []))
-        p_str = f"P{eps[0]:02d}-P{eps[-1]:02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
-        kernels_clean_json = json.dumps(kernels, ensure_ascii=False, indent=2)
+        p_str = f"P{eps[0]:02d}-P{eps[-1]:02d}" if len(eps) > 1 else (f"P{eps[0]:02d}" if eps else "P??")
         b_id_str = f"{block_meta.get('block_id', 1):02d}"
+
+        def 安全(值: Any) -> str:
+            return str(值).replace("{", "(").replace("}", ")")
+
         prompt = (
-            cls.SYNTHESIS_PROMPT
+            MODULE_NOTE_PROMPT
             .replace("{block_id:02d}", b_id_str)
             .replace("{block_id}", b_id_str)
-            .replace("{block_title}", str(block_meta.get("block_title", "知识模块")))
+            .replace("{block_title}", 安全(block_meta.get("block_title", "知识模块")))
             .replace("{episodes_str}", p_str)
-            .replace("{core_theme}", str(block_meta.get("core_theme", "")))
-            .replace("{kernels_json}", kernels_clean_json)
+            .replace("{core_theme}", 安全(block_meta.get("core_theme", "")))
+            .replace("{article_list}", cls._render_article_list(article_paths or []))
         )
         prompt = prompt.replace("{{", "{").replace("}}", "}")
 
-        # Inject selected note style (e.g. minimal / SSHeRun/CS-Xmind-Note)
+        # 可选索引：仅当调用方显式传入知识元时才注入（默认不参与，避免空壳知识元拖垮笔记质量）
+        if kernel_index:
+            compact = json.dumps(kernel_index, ensure_ascii=False, indent=2)
+            prompt += (
+                "\n━━━━━━━━━━━━━━━━━━\n"
+                "六、可选结构化索引（仅供定位，不得作为唯一事实来源）\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "下列知识元索引可能存在缺失或不完整之处；**它只用于帮助你定位主题**，"
+                "一切事实仍以上方单集精读长文为准。索引与长文冲突时，一律以长文为准。\n\n"
+                f"```json\n{compact}\n```\n"
+            )
+
+        # 指定笔记风格
         if style:
             style_key = style.lower().strip()
             for k, v in NOTE_STYLES.items():
@@ -87,10 +112,14 @@ class BlockSynthesizer:
                 st = NOTE_STYLES[style_key]
                 prompt += (
                     f"\n━━━━━━━━━━━━━━━━━━\n"
-                    f"三、指定笔记风格：{st['label']} ({style_key})\n"
+                    f"七、指定笔记风格：{st['label']} ({style_key})\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"{st['instruction']}\n"
                 )
+
+        # 渲染兼容硬约束 + 视觉规范 v2：在此统一注入，八种风格全覆盖
+        prompt += f"\n━━━━━━━━━━━━━━━━━━\n{RENDER_COMPAT_RULES}\n"
+        prompt += f"\n━━━━━━━━━━━━━━━━━━\n{NOTE_VISUAL_SPEC}\n"
         return prompt
 
     @classmethod
@@ -102,54 +131,78 @@ class BlockSynthesizer:
         return f"模块{block_id:02d}_{clean_title}_TASK.md"
 
     @classmethod
+    def get_note_filename(cls, block_meta: Dict[str, Any]) -> str:
+        """Construct the delivered note filename: 模块01_软件工程概述_笔记.md."""
+        return cls.get_task_filename(block_meta)[: -len("_TASK.md")] + "_笔记.md"
+
+    @classmethod
     def synthesize_block(
         cls,
         block_meta: Dict[str, Any],
-        kernels: List[Dict[str, Any]],
-        ws: Any,
+        articles: Optional[Iterable[Any]] = None,
+        ws: Any = None,
         force: bool = False,
         style: Optional[str] = None,
+        kernel_index: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Tooling export: persist the module synthesis task-file (SYNTHESIS_PROMPT) for Agent-native authoring."""
-        task_file = ws.notes_dir / cls.get_task_filename(block_meta)
+        """导出模块笔记融合任务书（文章直供版），供宿主 Agent / 子智能体原生撰写。
 
+        门禁：本模块各集单集精读长文齐备才导出任务书；笔记成品已存在则跳过（除非 force）。
+        """
         eps = sorted(block_meta.get("episodes", []))
-        p_str = f"P{eps[0]:02d}-P{eps[-1]:02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
+        p_str = f"P{eps[0]:02d}-P{eps[-1]:02d}" if len(eps) > 1 else (f"P{eps[0]:02d}" if eps else "P??")
+        task_file = ws.notes_dir / cls.get_task_filename(block_meta)
+        note_file = ws.notes_dir / cls.get_note_filename(block_meta)
 
-        # 中文注释：任务书已存在且内容完备即跳过重写；若旧任务书为空壳且当前已有知识元，自动刷新
-        if task_file.exists() and not force:
-            should_refresh = False
-            try:
-                content = task_file.read_text(encoding="utf-8")
-                if len(content) < 100:
-                    should_refresh = True
-                elif kernels and any(k.get("definitions") or k.get("mechanisms_and_models") or k.get("title") for k in kernels):
-                    if "【知识元集合】\n[]" in content or "【知识元集合】\n[\n]" in content or '"definitions": []' in content:
-                        should_refresh = True
-            except Exception:
-                should_refresh = True
-
-            if not should_refresh:
-                print(f"[*] 模块 {block_meta['block_id']:02d} ({p_str}) 任务书已存在，跳过导出: {task_file.name}")
-                return {
-                    "block_id": block_meta["block_id"],
-                    "block_title": block_meta["block_title"],
-                    "episodes": eps,
-                    "task_file": str(task_file),
-                    "size_bytes": task_file.stat().st_size,
-                    "status": "cached",
-                }
-
-        synthesis_prompt = cls.build_synthesis_prompt(block_meta, kernels, style=style)
-        task_file.parent.mkdir(parents=True, exist_ok=True)
-        task_file.write_text(synthesis_prompt, encoding="utf-8")
-        print(f"[✓] 模块 {block_meta['block_id']:02d} ({p_str}: {block_meta['block_title']}) 融合笔记任务书已导出: {task_file.name}")
-
-        return {
-            "block_id": block_meta["block_id"],
-            "block_title": block_meta["block_title"],
+        base_result = {
+            "block_id": block_meta.get("block_id"),
+            "block_title": block_meta.get("block_title"),
             "episodes": eps,
             "task_file": str(task_file),
-            "size_bytes": task_file.stat().st_size,
-            "status": "generated",
+            "note_file": str(note_file),
         }
+
+        # 成品已存在：不再重复派发，并顺手回收残留任务书（保留编号最小的范本）
+        if note_file.exists() and note_file.stat().st_size >= MIN_NOTE_BYTES and not force:
+            try:
+                from src.core.task_cleanup import reclaim_module_note_task
+                reclaim_module_note_task(ws, int(block_meta.get("block_id", 1)))
+            except Exception:
+                pass
+            print(f"[*] 模块 {block_meta['block_id']:02d} ({p_str}) 模块笔记已存在，跳过派发: {note_file.name}")
+            return {**base_result, "size_bytes": note_file.stat().st_size, "status": "cached"}
+
+        synthesis_prompt = cls.build_synthesis_prompt(
+            block_meta, article_paths=articles, style=style, kernel_index=kernel_index
+        )
+        header = (
+            f"# 模块 {block_meta['block_id']:02d} {block_meta.get('block_title', '')} 模块笔记任务书（MODULE_NOTE_TASK）\n\n"
+            f"> 状态：need-agent-note | 语料：本模块单集精读长文（articles/） | 由宿主 Agent / 子智能体原生撰写\n"
+            f"> 工作区绝对路径：`{Path(ws.root_dir).as_posix()}`\n\n"
+            f"## 1. 落盘要求\n\n"
+            f"- 撰写提示词见下方第 2 节（含模块信息、语料清单、结构禁令、零套话禁令与视觉规范 v2）\n"
+            f"- 目标文件：`{Path(note_file).as_posix()}`\n"
+            f"- 必须逐篇完整读取上方列出的单集精读长文后再撰写；成品产出后本任务书会被自动回收\n"
+            f"- 执行须知：建议由**一个子智能体负责一个模块**；完成后只需回报"
+            f"「模块号 | 目标文件 | 字节数 | 覆盖分集 | 套话/分集标题/截断 三项自检结果」，**不要回传正文**\n\n"
+            f"---\n\n"
+            f"## 2. 模块笔记撰写提示词\n\n"
+        )
+        content = header + synthesis_prompt
+
+        content_unchanged = False
+        if task_file.exists():
+            try:
+                content_unchanged = task_file.read_text(encoding="utf-8") == content
+            except OSError:
+                content_unchanged = False
+
+        if content_unchanged:
+            print(f"[*] 模块 {block_meta['block_id']:02d} ({p_str}) 任务书内容无变化，跳过重写: {task_file.name}")
+            return {**base_result, "size_bytes": task_file.stat().st_size, "status": "cached"}
+
+        task_file.parent.mkdir(parents=True, exist_ok=True)
+        task_file.write_text(content, encoding="utf-8")
+        print(f"[✓] 模块 {block_meta['block_id']:02d} ({p_str}: {block_meta.get('block_title', '')}) 笔记任务书已导出: {task_file.name}")
+
+        return {**base_result, "size_bytes": task_file.stat().st_size, "status": "generated"}

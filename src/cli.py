@@ -436,7 +436,7 @@ def cmd_cluster_notes(args):
     print("=" * 65)
 
     # 1. Semantic Topic Planner：规划由宿主 Agent 语义产出（零本地关键词聚类）
-    print(f"\n[Phase 1/3] 收集语料摘要并校验知识块规划...")
+    print(f"\n[Phase 1/2] 收集语料摘要并校验知识块规划...")
     summaries = {}
     for p in info["parts"]:
         p_num = p["page"]
@@ -536,8 +536,8 @@ def cmd_cluster_notes(args):
         e_b = args.end_block or len(plan)
         target_blocks = [b for b in plan if s_b <= b["block_id"] <= e_b]
 
-    # 2. Sub-Agent Kernel Extraction & Main Agent Block Synthesis
-    print(f"\n[Phase 2/3 & 3/3] 并发抽取事实知识元并执行概念图谱融合 (待处理 {len(target_blocks)} 个知识块，风格: {style})...")
+    # 2. 模块笔记派发：语料门禁 = 本模块各集单集精读长文齐备（知识元已降级为可选索引）
+    print(f"\n[Phase 2/2] 逐模块导出笔记融合任务书 (待处理 {len(target_blocks)} 个知识块，风格: {style})...")
     block_results = []
     for b in target_blocks:
         b_id = b["block_id"]
@@ -545,17 +545,25 @@ def cmd_cluster_notes(args):
         p_str = f"P{min(eps):02d}-P{max(eps):02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
         print(f"\n▶ 正在处理模块 {b_id:02d} ({p_str}): 《{b['block_title']}》...")
 
-        # 知识元：优先复用 Agent 已产出，缺失则导出 KERNEL_TASK 并跳过本模块
         block_parts = [p for p in info["parts"] if p["page"] in eps]
-        kernels = KernelExtractor.extract_batch_kernels(block_parts, ws=ws)
-        pending = KernelExtractor.pending_pages(kernels)
-        if pending:
-            print(f"    [gate] {len(pending)} 集待 Agent 抽取知识元（KERNEL_TASK 已导出），跳过本模块笔记合成")
+        articles, missing = BlockSynthesizer.collect_block_articles(block_parts, ws)
+        if missing:
+            missing_str = ", ".join(f"P{m:02d}" for m in missing)
+            print(f"    [gate] 本模块尚有 {len(missing)} 集无单集精读长文（{missing_str}），跳过笔记派发")
+            print(f"    [gate] 请先让 Agent 补齐 articles/ 后再重跑本命令（已产出的模块会自动复用）")
             continue
-        print(f"    [✓] 已复用 {len(kernels)} 集 Agent 产出的知识元")
+        print(f"    [✓] 语料齐备：已锁定 {len(articles)} 篇单集精读长文")
 
-        # 主 Agent 融合任务书导出
-        res = BlockSynthesizer.synthesize_block(b, kernels, ws=ws, force=args.force, style=style)
+        kernel_index = None
+        if getattr(args, "kernel_index", False):
+            kernels = KernelExtractor.extract_batch_kernels(block_parts, ws=ws)
+            kernel_index = [k for k in kernels if k.get("status") == "extracted"] or None
+            if kernel_index:
+                print(f"    [i] --kernel-index 已开启：注入 {len(kernel_index)} 条知识元索引（仅供参考定位）")
+
+        res = BlockSynthesizer.synthesize_block(
+            b, articles, ws=ws, force=args.force, style=style, kernel_index=kernel_index
+        )
         block_results.append(res)
 
     # 加载转绝对、保存转相对（TaskWorkspace 原生支持）
@@ -631,6 +639,84 @@ def cmd_dedup(args):
             print(f"    - P{item['src_page']:02d} ──► P{item['dst_page']:02d} [Hash: {item['hash']}] (字幕: {item['synced_sub']}, 文章: {item['synced_art']})")
     else:
         print("\n[✓] 未发现需要同步的重复分集（所有音频独一无二或已全部同步就绪）。")
+    print("=" * 65)
+
+
+def cmd_cleanup(args):
+    """回收已完成的派发任务书（*_TASK.md），每类保留 N 份范本供查阅提示词。"""
+    from src.core.task_cleanup import CATEGORY_LABELS, cleanup_completed_tasks, find_workspaces
+
+    workspaces = find_workspaces(args.base_dir)
+    if getattr(args, "task", None):
+        keyword = str(args.task)
+        workspaces = [w for w in workspaces if keyword in w.root_dir.name]
+    if not workspaces:
+        print(f"[!] 在 {Path(args.base_dir).resolve()} 下未找到可用工作区。", file=sys.stderr)
+        sys.exit(1)
+
+    keep_n = max(0, int(getattr(args, "keep", 1) or 0))
+    dry_run = bool(getattr(args, "dry_run", False))
+
+    print("=" * 65)
+    print(f"[*] 任务书回收流水线（{'预演，不落盘' if dry_run else '执行删除'}；每类保留 {keep_n} 份范本）")
+    print(f"[*] 扫描基目录: {Path(args.base_dir).resolve()}")
+    print("=" * 65)
+
+    total_deleted = total_kept = total_skipped = 0
+    for ws in workspaces:
+        result = cleanup_completed_tasks(ws, keep_per_category=keep_n, dry_run=dry_run)
+        counts = result["counts"]
+        print(f"\n▶ {ws.root_dir.name}")
+        for category, stat in counts.items():
+            print(
+                f"    {CATEGORY_LABELS[category]:<12} 共 {stat['total']:>4} 份 | "
+                f"回收 {stat['deleted']:>4} | 保留范本 {stat['kept']} | 成品未产出仍保留 {stat['skipped_pending']}"
+            )
+        total_deleted += len(result["deleted"])
+        total_kept += len(result["kept"])
+        total_skipped += len(result["skipped_pending"])
+        for path in result["kept"]:
+            print(f"    [留] {path}")
+
+    print("\n" + "=" * 65)
+    verb = "可回收" if dry_run else "已回收"
+    print(f"[✓] {verb}任务书 {total_deleted} 份 | 保留范本 {total_kept} 份 | 成品未产出仍保留 {total_skipped} 份")
+    print("[i] topic_plan_TASK.md 属课程级规划任务书，唯一存在，永不回收。")
+    if dry_run:
+        print("[i] 当前为预演模式；去掉 --dry-run 即真正删除。")
+    print("=" * 65)
+
+
+def cmd_sync(args):
+    """按磁盘产成对账并回填 manifest.json（账本以硬盘为唯一真相）。"""
+    from src.core.state_sync import reconcile_workspace_manifest
+    from src.core.task_cleanup import find_workspaces
+
+    workspaces = find_workspaces(args.base_dir)
+    if getattr(args, "task", None):
+        keyword = str(args.task)
+        workspaces = [w for w in workspaces if keyword in w.root_dir.name]
+    if not workspaces:
+        print(f"[!] 在 {Path(args.base_dir).resolve()} 下未找到可用工作区。", file=sys.stderr)
+        sys.exit(1)
+
+    dry_run = bool(getattr(args, "dry_run", False))
+    print("=" * 65)
+    print(f"[*] 任务账本对账（{'预演，不写盘' if dry_run else '写入 manifest.json'}）")
+    print("[*] 判定依据：articles/ 合格长文（≥1000 字节）+ notes/ + textbooks/ + topic_plan.json")
+    print("=" * 65)
+
+    for ws in workspaces:
+        report = reconcile_workspace_manifest(ws, dry_run=dry_run)
+        print(f"\n▶ {report['workspace']}")
+        print(f"    分集：{report['success']}/{report['total']} 集达标 | 待办 {report['pending']} | "
+              f"跳过 {report['skipped']} | 历史失败 {report['failed']}")
+        print(f"    模块资产：笔记 {report['notes']} 份 | 教材 {report['textbooks']} 部 | "
+              f"规划 {report['plan_blocks']} 块")
+        print(f"    pipeline_completed = {report['pipeline_completed']}")
+
+    print("\n" + "=" * 65)
+    print(f"[✓] 已对账 {len(workspaces)} 个工作区" + ("（预演模式，未写盘）" if dry_run else ""))
     print("=" * 65)
 
 
@@ -809,6 +895,12 @@ def main():
     p_cl.add_argument("--force", action="store_true", help="Force re-exporting block task files even if they exist")
     p_cl.add_argument("--force-plan", action="store_true", help="Force re-generating semantic topic plan")
     p_cl.add_argument(
+        "--kernel-index",
+        action="store_true",
+        default=False,
+        help="Optional: also inject existing knowledge-kernel JSON as a locating index (long articles stay the source of truth)",
+    )
+    p_cl.add_argument(
         "--style",
         default=None,
         help="Note style (minimal/精简, detailed/详细, academic/学术, tutorial/教程, task_oriented/任务导向, business/商业风格, meeting_minutes/会议纪要, life_journal/生活向). No default is set; user must specify.",
@@ -830,6 +922,21 @@ def main():
     p_dd.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
     p_dd.add_argument("--dry-run", action="store_true", help="Only check for duplicates without copying files")
     p_dd.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
+
+    # cleanup：任务书回收（成品已产出的 *_TASK.md 清场，每类保留 N 份范本）
+    p_cl2 = subparsers.add_parser("cleanup", help="Reclaim completed dispatch task-files (*_TASK.md), keeping N samples per category")
+    p_cl2.add_argument("--task", default=None, help="Only process workspaces whose folder name contains this keyword")
+    p_cl2.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_cl2.add_argument("--keep", type=int, default=1, help="Samples to keep per category (default 1; 0=delete all completed)")
+    p_cl2.add_argument("--all", action="store_true", help="Process every workspace under base-dir (this is the default)")
+    p_cl2.add_argument("--dry-run", action="store_true", help="Only report what would be reclaimed")
+
+    # sync：账本对账（以磁盘产物回填 manifest.json）
+    p_sync = subparsers.add_parser("sync", help="Reconcile manifest.json with on-disk products (disk is the source of truth)")
+    p_sync.add_argument("--task", default=None, help="Only process workspaces whose folder name contains this keyword")
+    p_sync.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_sync.add_argument("--all", action="store_true", help="Process every workspace under base-dir (this is the default)")
+    p_sync.add_argument("--dry-run", action="store_true", help="Only report the reconciled state without writing")
 
     args = parser.parse_args()
     if not args.subcommand:
@@ -853,6 +960,8 @@ def main():
         "cluster-notes": cmd_cluster_notes,
         "cluster-articles": cmd_cluster_articles,
         "dedup": cmd_dedup,
+        "cleanup": cmd_cleanup,
+        "sync": cmd_sync,
         "login": cmd_login,
         "logout": cmd_logout,
         "agent-info": cmd_agent_info,

@@ -590,14 +590,15 @@ class PipelineCoordinator:
                         block_parts = [p for p in info["parts"] if p["page"] in eps]
                         if not block_parts:
                             continue
-                        kernels = KernelExtractor.extract_batch_kernels(block_parts, ws=ws)
-                        pending = KernelExtractor.pending_pages(kernels)
-                        if pending:
-                            print(f"    [gate] 模块 {b['block_id']:02d}: {len(pending)} 集待 Agent 抽取知识元"
-                                  f"（KERNEL_TASK 已导出），跳过本模块笔记合成")
+                        # 门禁：本模块各集单集精读长文齐备才导出笔记任务书（知识元降级为可选索引）
+                        articles, missing = BlockSynthesizer.collect_block_articles(block_parts, ws)
+                        if missing:
+                            _missing_str = ", ".join(f"P{m:02d}" for m in missing)
+                            print(f"    [gate] 模块 {b['block_id']:02d}: {len(missing)} 集尚无单集精读长文"
+                                  f"（{_missing_str}），跳过本模块笔记派发")
                             continue
-                        # 任务书导出已下沉 synthesize_block（notes/模块XX_*_TASK.md，含 SYNTHESIS_PROMPT）
-                        res = BlockSynthesizer.synthesize_block(b, kernels, ws=ws)
+                        # 笔记风格需显式指定，pipeline 不设默认；此处先按无风格导出，供 cluster-notes --style 重导
+                        res = BlockSynthesizer.synthesize_block(b, articles, ws=ws)
                         block_results.append(res)
         elif info["has_multi_pages"]:
             print("[*] 分区间运行：聚合后置，待 --all 全量语料齐后统一规划")
@@ -635,6 +636,25 @@ class PipelineCoordinator:
             print(f"  2. 知识块聚合笔记任务书: {ws.notes_dir}/*_TASK.md")
         print("  3. 请主程序以 5 个并发通道（Task 子代理或并行会话）直接领跑任务书，执行真正的认知写作！")
         print("=" * 65)
+
+        # ===== 任务书回收：成品已落盘的分集/模块任务书即时清场（每类保留 1 份范本） =====
+        try:
+            from .task_cleanup import cleanup_completed_tasks as _cleanup_tasks
+            _reclaim = _cleanup_tasks(ws, keep_per_category=1)
+            if _reclaim["deleted"]:
+                print(f"[*] 已回收 {len(_reclaim['deleted'])} 份已完成任务书（每类保留 1 份范本供查阅提示词）")
+        except Exception as _reclaim_err:  # 回收失败不得影响主流程
+            print(f"[!] 任务书回收已跳过：{_reclaim_err}", file=sys.stderr)
+
+        # ===== 账本对账：以磁盘产成为唯一真相回填 manifest（消除账本与产物脱节） =====
+        try:
+            from .state_sync import reconcile_workspace_manifest as _reconcile
+            _sync = _reconcile(ws)
+            print(f"[*] 账本对账：分集 {_sync['success']}/{_sync['total']} 集达标 | "
+                  f"待办 {_sync['pending']} | 模块笔记 {_sync['notes']} 份 | 教材 {_sync['textbooks']} 部 | "
+                  f"pipeline_completed={_sync['pipeline_completed']}")
+        except Exception as _sync_err:
+            print(f"[!] 账本对账已跳过：{_sync_err}", file=sys.stderr)
 
         return {
             "workspace": ws,

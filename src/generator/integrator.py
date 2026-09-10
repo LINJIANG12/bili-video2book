@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from src.core.workspace import sanitize_filename
+
 
 class ArticleIntegrator:
     """Consolidates individual episode articles into comprehensive modular chapter textbooks."""
@@ -81,15 +83,15 @@ class ArticleIntegrator:
         manifest_file = self.task_dir / "manifest.json"
         topic_plan_file = self.task_dir / "topic_plan.json"
         plan = []
-        if manifest_file.exists():
+        if topic_plan_file.exists():
+            try:
+                plan = json.loads(topic_plan_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        if not plan and manifest_file.exists():
             try:
                 m_data = json.loads(manifest_file.read_text(encoding="utf-8"))
                 plan = m_data.get("knowledge_blocks_plan", [])
-            except Exception:
-                pass
-        if not plan and topic_plan_file.exists():
-            try:
-                plan = json.loads(topic_plan_file.read_text(encoding="utf-8"))
             except Exception:
                 pass
 
@@ -120,7 +122,8 @@ class ArticleIntegrator:
 
     def integrate_module(self, module_idx: int, module_name: str, episodes: List[dict], course_title: str) -> Path:
         """Compiles articles of a module into a single unified textbook."""
-        out_filename = f"模块{module_idx:02d}_{module_name}_精读全书.md"
+        clean_name = sanitize_filename(module_name)
+        out_filename = f"模块{module_idx:02d}_{clean_name}_精读全书.md"
         out_path = self.textbooks_dir / out_filename
 
         ep_pages = [ep["page"] for ep in episodes]
