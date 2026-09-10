@@ -22,6 +22,11 @@ SUPPORTED_AUDIO_EXTS = {
 }
 SUPPORTED_MEDIA_EXTS = SUPPORTED_VIDEO_EXTS | SUPPORTED_AUDIO_EXTS
 
+# 子进程硬超时（秒）：探测类操作用短超时，转码/切片类用长超时上限。
+# 上限 600s 依据：2 小时课程视频的纯音频提取在慢速磁盘上的保守估时；若超时请先切片再处理。
+PROBE_TIMEOUT_SEC = 15
+TRANSCODE_TIMEOUT_SEC = 600
+
 
 def natural_sort_key(s: str) -> list:
     """Sort strings with embedded numbers naturally (e.g. 'P2' before 'P10')."""
@@ -64,7 +69,7 @@ class LocalMediaParser:
                 str(target),
             ]
             try:
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
                 if res.returncode == 0 and res.stdout.strip():
                     return float(res.stdout.strip())
             except Exception:
@@ -75,7 +80,7 @@ class LocalMediaParser:
         if ffmpeg_bin:
             cmd = [ffmpeg_bin, "-i", str(target)]
             try:
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
                 output = res.stderr
                 m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", output)
                 if m:
@@ -127,7 +132,12 @@ class LocalMediaParser:
             "-ac", "1",
             str(target),
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=TRANSCODE_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired as err:
+            raise RuntimeError(
+                f"FFmpeg 音频提取超时（>{TRANSCODE_TIMEOUT_SEC}s）：{src.name}。建议先用 ffmpeg 切片后再处理。"
+            ) from err
         if res.returncode != 0 or not target.exists() or target.stat().st_size == 0:
             err_msg = res.stderr[-400:] if res.stderr else "未知错误"
             raise RuntimeError(f"从视频提取音频失败（可能无有效音频轨）: {err_msg}")

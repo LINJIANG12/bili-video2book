@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omni-media-mcp"
+version = "0.1.0"
+description = "Universal Multimodal Audio/Video Native Reading MCP Server for AI Agents"
+authors = [{ name = "OmniMedia Team" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "google-genai>=0.1.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+all = [
+    "openai>=1.50.0",
+    "dashscope>=1.20.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+omni-media = "omni_media_mcp.cli:main"
+omni-media-mcp = "omni_media_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["omni_media_mcp*"]

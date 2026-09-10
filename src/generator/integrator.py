@@ -103,45 +103,15 @@ class ArticleIntegrator:
             if modules:
                 return modules
 
-        chapter_names = {
-            "1": "微机原理与数制编码基础",
-            "2": "8086微处理器内部架构",
-            "3": "8086寻址方式与指令系统",
-            "4": "汇编语言程序设计与伪指令",
-            "5": "存储器系统扩展与接口技术",
-            "6": "输入输出与中断控制系统",
-            "7": "可编程定时器与计数器8253",
-            "8": "可编程并行接口芯片8255A",
-            "9": "串行通信与总线接口技术",
-            "10": "数模与模数转换接口技术",
-            "11": "接口技术综合应用实战",
-        }
-
+        # 通用回退分组：优先按 [X.Y] 章节号前缀，其次按标题序号前缀
         for p in parts:
             title = p.get("title", "")
-            # Check [X.Y.Z] pattern (e.g. university course standard)
             m_ch = re.search(r"\[(\d+)\.", title)
             if m_ch:
-                ch_num = m_ch.group(1)
-                ch_name = chapter_names.get(ch_num, f"第{ch_num}章知识体系")
-                module_key = f"第{int(ch_num):02d}章_{ch_name}"
+                module_key = f"第{int(m_ch.group(1)):02d}章"
             else:
-                # Pattern: XX. 核心语法-[模块名]-xxx
-                m = re.search(r"核心语法-([^-]+)", title)
-                if m:
-                    module_name = m.group(1).strip()
-                else:
-                    module_name = "综合模块"
-                
-                # Unify related submodules
-                if module_name in ("函数基础", "函数进阶"):
-                    module_key = "函数基础与进阶"
-                elif module_name in ("类型注解", "模块"):
-                    module_key = "类型注解与模块化编程"
-                elif module_name == "异常":
-                    module_key = "异常处理与容错机制"
-                else:
-                    module_key = module_name
+                m_pref = re.match(r"\s*(\d+)[\.、\s]", title)
+                module_key = f"第{int(m_pref.group(1)):02d}讲" if m_pref else "综合模块"
 
             if module_key not in modules:
                 modules[module_key] = []
@@ -158,16 +128,16 @@ class ArticleIntegrator:
 
         # Header and TOC
         lines = [
-            f"# 模块 {module_idx:02d}：{module_name} 精读全书",
+            f"# 模块 {module_idx:02d}：{module_name} 合辑教材",
             "",
             f"> **所属课程**：{course_title}  ",
             f"> **模块跨度**：{page_range}（全模块共 {len(episodes)} 讲系统重构）  ",
-            f"> **出版定位**：模块化出版级系统教材全卷，融合底层机制、架构全景、生产级代码拆解与避坑自测。  ",
-            f"> **关联说明**：单集微粒度教材长文同步完整保留于 `articles/` 目录供定向查阅。",
+            f"> **内容定位**：模块化系统学习教材，融合核心机制、架构全景、代码解析与思考自测。  ",
+            f"> **关联说明**：单集长文讲义同步保留于 `articles/` 目录供定向查阅。",
             "",
             "---",
             "",
-            "## 📖 模块全书导读与全景目录",
+            "## 模块导读与全景目录",
             "",
         ]
 
@@ -254,7 +224,7 @@ class ArticleIntegrator:
         out_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
         return out_path
 
-    def run(self, course_title: str = "黑马程序员Python+AI全套视频教程") -> List[Path]:
+    def run(self, course_title: str) -> List[Path]:
         """Runs the complete module integration process."""
         parts = self.load_parts()
         grouped = self.group_episodes_by_module(parts)

@@ -184,8 +184,29 @@ def _请求元数据(地址: str, 请求头: Dict[str, str], 超时: int = 15) -
     ) from 最后错误
 
 
+def _atomic_replace(src: Path, dst: Path, retries: int = 3, delay: float = 0.2) -> None:
+    """Windows-safe atomic file replacement with brief retry on transient file locks."""
+    last_err = None
+    for i in range(retries):
+        try:
+            if dst.exists():
+                src.replace(dst)
+            else:
+                src.rename(dst)
+            return
+        except PermissionError as err:
+            last_err = err
+            time.sleep(delay * (i + 1))
+        except OSError as err:
+            last_err = err
+            time.sleep(delay)
+    # Final attempt fallback
+    if src.exists():
+        shutil.move(str(src), str(dst))
+
+
 class AudioFetcher:
-    """音频流获取器。"""
+    """音频流获取与极速落盘器。"""
 
     播放接口 = "https://api.bilibili.com/x/player/wbi/playurl"
     PLAYURL_API = "https://api.bilibili.com/x/player/wbi/playurl"
@@ -201,18 +222,6 @@ class AudioFetcher:
         30250: "杜比全景声 (Dolby Atmos)",
         30251: "Hi-Res 无损",
     }
-
-    @classmethod
-    def get_audio_stream_url(
-        cls,
-        bvid: str,
-        cid: int,
-        sessdata: Optional[str] = None,
-        prefer_quality: str = "low",
-        wbi_keys_file: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """便捷入口（与详情方法同行为）。"""
-        return cls.get_audio_stream_info(bvid=bvid, cid=cid, sessdata=sessdata, prefer_quality=prefer_quality, wbi_keys_file=wbi_keys_file)
 
     @classmethod
     def get_audio_stream_info(
@@ -326,19 +335,75 @@ class AudioFetcher:
         output_filepath: str,
         repackage_m4a: bool = True,
         max_bytes: Optional[int] = None,
+        sessdata: Optional[str] = None,
     ) -> str:
-        """携带防盗链头下载音频并转封装为音频文件。"""
+        """带容错双轨机制的音频下载：优先流式直出 16kHz 人声单声道，失败自动降级分块拉取。"""
         输出 = Path(output_filepath).resolve()
         输出.parent.mkdir(parents=True, exist_ok=True)
+        目标 = 输出.with_suffix(".m4a")
 
-        临时 = 输出.with_suffix(".raw.m4s")
+        # 幂等性保障：若有效音频已存在（>100KB），直接复用，0 秒重复耗时
+        if 目标.exists() and 目标.stat().st_size > 100 * 1024:
+            return str(目标)
 
-        请求 = urllib.request.Request(stream_url, headers=dict(cls.DEFAULT_HEADERS))
+        临时 = 输出.with_suffix(".tmp.m4a")
+        if 临时.exists():
+            try:
+                临时.unlink()
+            except OSError:
+                pass
+
+        转码器 = shutil.which("ffmpeg")
+
+        # 1. 优先通道：ffmpeg 携带防盗链 Header 与重连机制，一步直出 16kHz 单声道 32k AAC
+        if 转码器 and repackage_m4a and not max_bytes:
+            headers = dict(cls.DEFAULT_HEADERS)
+            if sessdata:
+                headers["Cookie"] = f"SESSDATA={sessdata}"
+            header_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+
+            命令 = [
+                转码器,
+                "-y",
+                "-reconnect", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "5",
+                "-headers", header_str,
+                "-i", stream_url,
+                "-vn",
+                "-acodec", "aac",
+                "-ar", "16000",
+                "-ac", "1",
+                "-b:a", "32k",
+                str(临时),
+            ]
+            try:
+                结果 = subprocess.run(命令, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+                if 结果.returncode == 0 and 临时.exists() and 临时.stat().st_size > 10 * 1024:
+                    _atomic_replace(临时, 目标)
+                    return str(目标)
+            except Exception:
+                # 异常不中断，自动无缝切入下方兜底通道
+                pass
+            finally:
+                if 临时.exists() and not 目标.exists():
+                    try:
+                        临时.unlink()
+                    except OSError:
+                        pass
+
+        # 2. 自动兜底通道：分块流控 HTTP 下载 -> 本地 ffmpeg 极速转码
+        临时_m4s = 输出.with_suffix(".raw.m4s")
+        req_headers = dict(cls.DEFAULT_HEADERS)
+        if sessdata:
+            req_headers["Cookie"] = f"SESSDATA={sessdata}"
+        请求 = urllib.request.Request(stream_url, headers=req_headers)
+
         try:
             已下 = 0
             打开器 = _获取会话打开器()
-            with 打开器.open(请求, timeout=30) as 响应, open(临时, "wb") as 写出:
-                块大小 = 128 * 1024  # 单次读取块大小
+            with 打开器.open(请求, timeout=30) as 响应, open(临时_m4s, "wb") as 写出:
+                块大小 = 128 * 1024
                 while True:
                     块 = 响应.read(块大小)
                     if not 块:
@@ -348,35 +413,41 @@ class AudioFetcher:
                     if max_bytes and 已下 >= max_bytes:
                         break
         except Exception as 错误:
-            if 临时.exists():
-                临时.unlink()
-            raise RuntimeError(f"[网络]音频下载失败：{错误}。建议动作：检查网络后重试。") from 错误
-
-        目标 = 输出.with_suffix(".m4a")
-
-        # 若有转封装工具则零损耗转封装
-        转封装 = shutil.which("ffmpeg")
-        if repackage_m4a and 转封装:
-            命令 = [
-                转封装,
-                "-y",
-                "-i", str(临时),
-                "-acodec", "copy",
-                str(目标),
-            ]
-            结果 = subprocess.run(命令, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if 结果.returncode == 0 and 目标.exists() and 目标.stat().st_size > 0:
-                if 临时.exists():
-                    临时.unlink()
-                return str(目标)
-            # 转封装失败但生成了空/残缺文件时清理之
-            if 目标.exists():
+            if 临时_m4s.exists():
                 try:
-                    目标.unlink()
+                    临时_m4s.unlink()
                 except OSError:
                     pass
+            raise RuntimeError(f"[网络]音频下载失败：{错误}。建议动作：检查网络后重试。") from 错误
 
-        # 无工具或转封装失败则原子覆盖改名
-        if 临时.exists():
-            临时.replace(目标)
+        # 本地转码为 16kHz 单声道
+        if 转码器 and repackage_m4a:
+            命令 = [
+                转码器,
+                "-y",
+                "-i", str(临时_m4s),
+                "-vn",
+                "-acodec", "aac",
+                "-ar", "16000",
+                "-ac", "1",
+                "-b:a", "32k",
+                str(临时),
+            ]
+            try:
+                结果 = subprocess.run(命令, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+                if 结果.returncode == 0 and 临时.exists() and 临时.stat().st_size > 0:
+                    if 临时_m4s.exists():
+                        try:
+                            临时_m4s.unlink()
+                        except OSError:
+                            pass
+                    _atomic_replace(临时, 目标)
+                    return str(目标)
+            except Exception:
+                pass
+
+        # 若无转码器或失败，原子重命名原始文件
+        if 临时_m4s.exists():
+            _atomic_replace(临时_m4s, 目标)
         return str(目标)
+

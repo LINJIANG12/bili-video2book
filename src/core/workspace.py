@@ -63,14 +63,6 @@ class TaskWorkspace:
         return self.base_dir / ".wbi_keys.json"
 
     @classmethod
-    def default_wbi_keys_path(cls, base_dir: Union[str, Path] = "output") -> Path:
-        """在未创建工作区实例时计算默认密钥文件路径。"""
-        基 = Path(base_dir)
-        if not 基.is_absolute():
-            基 = (Path.cwd() / str(基)).resolve()
-        return 基 / ".wbi_keys.json"
-
-    @classmethod
     def sanitize_name(cls, raw_name: str) -> str:
         """清理非法文件系统字符并限制任务文件夹长度（最大 80 字符，防 Windows MAX_PATH 溢出）。"""
         清理后 = cls.非法字符正则.sub("_", raw_name)
@@ -217,6 +209,113 @@ class TaskWorkspace:
             return data
         except Exception:
             return {}
+
+    @staticmethod
+    def compute_file_hash(filepath: Union[str, Path]) -> str:
+        """计算指定文件的 SHA-256 摘要哈希。"""
+        import hashlib
+        p = Path(filepath)
+        if not p.is_file():
+            return ""
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            while chunk := f.read(65536):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def scan_audio_fingerprints(self) -> Dict[str, List[Dict[str, Any]]]:
+        """扫描 audio 目录下所有分集音频的 SHA-256 指纹，按 hash 归组以识别重复分集。"""
+        fingerprints: Dict[str, List[Dict[str, Any]]] = {}
+        if not self.audio_dir.exists():
+            return fingerprints
+
+        for audio_file in sorted(self.audio_dir.glob("P*.*")):
+            if audio_file.suffix.lower() not in (".m4a", ".mp3", ".wav", ".aac", ".flac"):
+                continue
+            m = re.match(r"P(\d+)", audio_file.name)
+            page = int(m.group(1)) if m else None
+            h = self.compute_file_hash(audio_file)
+            if h not in fingerprints:
+                fingerprints[h] = []
+            fingerprints[h].append({
+                "page": page,
+                "file": audio_file,
+                "name": audio_file.name,
+                "size": audio_file.stat().st_size,
+            })
+        return fingerprints
+
+    @staticmethod
+    def _final_artifacts(directory: Path, page: int, tail: str) -> List[Path]:
+        """定位某集已落盘的最终产物，排除任务书（*_TASK.md）。"""
+        return [
+            f for f in sorted(directory.glob(f"P{page:02d}_*{tail}"))
+            if not f.name.endswith("_TASK.md")
+        ]
+
+    def sync_duplicate_assets(self, dry_run: bool = False) -> List[Dict[str, Any]]:
+        """检测并自动复用重复音频的字幕与长文产物，实现 0 Token 零成本去重同步。
+
+        零中间逐字稿链路的最终产物是 articles/ 长文，subtitles/ 字幕属历史遗留，
+        因此字幕是有则顺带同步的可选产物，不再充当复用前提。
+        """
+        import shutil
+        fingerprints = self.scan_audio_fingerprints()
+        synced = []
+
+        for h, items in fingerprints.items():
+            if len(items) <= 1:
+                continue
+            items_sorted = sorted(items, key=lambda x: (x["page"] if x["page"] is not None else 9999))
+            primary = items_sorted[0]
+            p_page = primary["page"]
+            if p_page is None:
+                continue
+
+            prim_art = self._final_artifacts(self.articles_dir, p_page, ".md")
+            prim_sub = self._final_artifacts(self.subtitles_dir, p_page, "_clean.txt")
+
+            if not prim_art and not prim_sub:
+                continue
+
+            src_art = prim_art[0] if prim_art else None
+            src_sub = prim_sub[0] if prim_sub else None
+
+            for dup in items_sorted[1:]:
+                d_page = dup["page"]
+                if d_page is None:
+                    continue
+
+                target_art = self._final_artifacts(self.articles_dir, d_page, ".md")
+                target_sub = self._final_artifacts(self.subtitles_dir, d_page, "_clean.txt")
+
+                need_art = src_art is not None and (not target_art or target_art[0].stat().st_size == 0)
+                need_sub = src_sub is not None and (not target_sub or target_sub[0].stat().st_size == 0)
+
+                if need_art or need_sub:
+                    m_d = re.match(r"P\d+_(.*)\.[^.]+", dup["name"])
+                    d_title = m_d.group(1) if m_d else f"P{d_page:02d}"
+
+                    dst_sub = self.subtitles_dir / f"P{d_page:02d}_{d_title}_clean.txt"
+                    dst_art = self.articles_dir / f"P{d_page:02d}_{d_title}_精读文章.md"
+
+                    if not dry_run:
+                        if need_sub:
+                            shutil.copy2(src_sub, dst_sub)
+                        if need_art:
+                            content = src_art.read_text(encoding="utf-8")
+                            dst_art.write_text(content, encoding="utf-8")
+
+                    synced.append({
+                        "src_page": p_page,
+                        "dst_page": d_page,
+                        "hash": h[:12],
+                        "synced_sub": need_sub,
+                        "synced_art": need_art,
+                    })
+
+        return synced
+
 
 
 def sanitize_filename(name: str, max_len: int = 80) -> str:

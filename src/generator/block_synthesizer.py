@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.core.workspace import sanitize_filename
 from src.generator.prompt_templates import NOTE_STYLES
 
 
@@ -53,79 +52,6 @@ class BlockSynthesizer:
 
 直接输出完整笔记 Markdown，标题为 `# 模块 {block_id}：{block_title}`，不输出任何前缀废话或分析说明。
 """
-
-    @classmethod
-    def get_block_filename(cls, block_meta: Dict[str, Any]) -> str:
-        """Construct standard block note filename: 模块01_软件工程概述_P01-P02_笔记.md."""
-        block_id = block_meta.get("block_id", 1)
-        raw_title = block_meta.get("block_title", "知识模块")
-        clean_title = sanitize_filename(raw_title)
-
-        eps = sorted(block_meta.get("episodes", []))
-        if not eps:
-            p_range = "P01"
-        elif len(eps) == 1:
-            p_range = f"P{eps[0]:02d}"
-        else:
-            p_range = f"P{eps[0]:02d}-P{eps[-1]:02d}"
-
-        return f"模块{block_id:02d}_{clean_title}_{p_range}_笔记.md"
-
-    @classmethod
-    def render_local_fallback(
-        cls,
-        block_meta: Dict[str, Any],
-        kernels: List[Dict[str, Any]],
-    ) -> str:
-        """Generate structured markdown note locally from kernel atoms if model is unavailable."""
-        block_id = block_meta.get("block_id", 1)
-        block_title = block_meta.get("block_title", "核心知识模块")
-        eps = sorted(block_meta.get("episodes", []))
-        p_str = f"P{eps[0]:02d}-P{eps[-1]:02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
-
-        lines = [
-            f"# 模块{block_id:02d}：{block_title}（{p_str}）\n",
-            f"> 体系化知识模块复习笔记 | 涵盖分集：{p_str} | 核心议题：{block_meta.get('core_theme', '')}\n",
-            "## 知识拓扑框架导图\n",
-            f"- 模块核心：{block_title}",
-        ]
-        for k in kernels:
-            lines.append(f"  ├── P{k['page']:02d}: {k['title']}")
-
-        lines.append("\n## 核心概念与理论模型精炼\n")
-        all_defs = []
-        for k in kernels:
-            all_defs.extend(k.get("definitions", []))
-        for d in all_defs:
-            lines.append(f"### {d.get('term')}\n- **核心本质**：{d.get('essence')}\n")
-
-        all_models = []
-        for k in kernels:
-            all_models.extend(k.get("mechanisms_and_models", []))
-        if all_models:
-            lines.append("\n## 关键机制与理论模型\n")
-            for m in all_models:
-                lines.append(f"### {m.get('name')}\n- **运作机理**：{m.get('details')}\n")
-
-        all_comps = []
-        for k in kernels:
-            all_comps.extend(k.get("comparisons", []))
-        if all_comps:
-            lines.append("\n## 关键要素对比辨析\n")
-            lines.append("| 对比实体 | 核心差异与适用场景 |")
-            lines.append("| :--- | :--- |")
-            for c in all_comps[:5]:
-                lines.append(f"| {c.get('entities', '概念对比')} | {c.get('distinction', '详见解析')} |")
-
-        all_anti = []
-        for k in kernels:
-            all_anti.extend(k.get("anti_patterns", []))
-        if all_anti:
-            lines.append("\n## 常见反模式与避坑要点\n")
-            for a in set(all_anti):
-                lines.append(f"- **避坑提醒**：{a}")
-
-        return "\n".join(lines)
 
     @classmethod
     def build_synthesis_prompt(

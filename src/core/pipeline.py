@@ -27,7 +27,6 @@ from src.core.fetcher import AudioFetcher
 from src.core.audio_chunker import AudioChunker
 from src.core.workspace import TaskWorkspace, sanitize_filename
 from src.core.kernel_extractor import KernelExtractor
-from src.generator.doc_builder import DocumentBuilder
 from src.generator.topic_planner import SemanticTopicPlanner
 from src.generator.block_synthesizer import BlockSynthesizer
 
@@ -111,28 +110,29 @@ def get_audio_stream(
         raise RuntimeError(enrich_network_error(err, resume_hint)) from err
 
 
-def export_transcribe_task(
+def export_article_task(
     ws: TaskWorkspace,
     page_num: int,
     clean_title: str,
     audio_file: Any,
     title: str = "",
     cid: int = 0,
-    chunk_minutes: int = 10,
+    chunk_minutes: int = 60,
 ) -> Path:
-    """导出 Agent 原生转录任务书（方案 A：深度适配 Antigravity 与 ChatGPT 原生直读）。
-    无外部 HTTP 依赖、无第三方 API Key 依赖。
+    """导出单集精读文章任务书（零中间逐字稿：听音后直接撰写 articles/）。
+
+    无外部 HTTP 依赖、无第三方 API Key 依赖，且不产出任何中间逐字稿。
     """
     import re as _re
     from src.core.audio_chunker import AudioChunker
-    from src.generator.prompt_templates import AUDIO_TRANSCRIPTION_PROMPT
+    from src.generator.prompt_templates import ARTICLE_LEARNING_PROMPT
 
     prefix = "" if _re.match(r"^P\d{2}_", clean_title) else f"P{page_num:02d}_"
-    task_file = ws.articles_dir / f"{prefix}{clean_title}_TRANSCRIBE_TASK.md"
+    task_file = ws.articles_dir / f"{prefix}{clean_title}_TASK.md"
     task_file.parent.mkdir(parents=True, exist_ok=True)
 
     audio_path = Path(audio_file).resolve() if audio_file else None
-    target_clean = ws.subtitles_dir / f"{prefix}{clean_title}_clean.txt"
+    target_article = ws.articles_dir / f"{prefix}{clean_title}_精读文章.md"
 
     # 自动执行微切片（单片 <= 10 分钟，受控在 4MB 以内），供 Antigravity view_file 及 ChatGPT 附件挂载
     slices = []
@@ -151,41 +151,42 @@ def export_transcribe_task(
             start_str = s.get("start_time_str", "00:00:00")
             end_str = s.get("end_time_str", "00:00:00")
             idx = s.get("chunk_index", 1)
-            slices_lines.append(f"- [ ] 切片 {idx:02d} [{start_str} -> {end_str}]: `{fp}` (待听写)")
+            slices_lines.append(f"- [ ] 切片 {idx:02d} [{start_str} -> {end_str}]: `{fp}` (待听音)")
         slices_section = "\n".join(slices_lines)
     else:
         slices_section = f"- [ ] P{page_num:02d} 完整音频 (00:00 起): `{audio_file}`"
 
+    article_prompt = (
+        ARTICLE_LEARNING_PROMPT
+        .replace("{title}", title or clean_title)
+        .replace("{part_title}", f"P{page_num:02d} {clean_title}")
+        .replace(
+            "{content}",
+            "（本流程不产出中间逐字稿：请直接依据下方音频切片聆听所得的真实讲解内容撰写）\n\n"
+            f"待听音切片清单：\n{slices_section}",
+        )
+    )
+
     content = (
-        f"# P{page_num:02d} {clean_title} 转录任务书（TRANSCRIBE_TASK）\n\n"
-        f"> 状态：need-agent-transcribe | 方案 A：宿主 Agent 原生多模态直读\n"
+        f"# P{page_num:02d} {clean_title} 单集精读文章任务书（ARTICLE_TASK）\n\n"
+        f"> 状态：need-agent-article | 零中间逐字稿：听音后直接撰写精读长文\n"
         f"> 深度支持平台：Antigravity（Gemini 多模态内核）与 ChatGPT（GPT-4o Audio / Codex 内核）\n\n"
-        f"## 1. 任务输入与待听写切片清单\n\n"
+        f"## 1. 任务输入与待听音切片清单\n\n"
         f"- 课程全称：{title}\n"
         f"- 分集序号：P{page_num:02d} {clean_title}\n"
         f"- 完整音频：`{audio_file}`\n"
-        f"- 目标语料落盘路径：`{target_clean}`\n\n"
-        f"### 待听写切片清单（共 {len(slices) if slices else 1} 个切片）：\n\n"
+        f"- 目标长文落盘路径：`{target_article}`\n\n"
+        f"### 待听音切片清单（共 {len(slices) if slices else 1} 个切片）：\n\n"
         f"{slices_section}\n\n"
         f"---\n\n"
-        f"## 2. 宿主 Agent 听音执行指引（两套原生直读模式）\n\n"
-        f"### 🅰️ Antigravity 宿主执行路径（Gemini 多模态核心，原生推荐）\n"
-        f"1. Antigravity 运行环境内置 `view_file` 工具，原生支持读取音频二进制数据。\n"
-        f"2. 智能体针对上方清单中的音频分片，依次调用 `view_file(AbsolutePath=\"<切片绝对路径>\")`。\n"
-        f"3. 模型核心在接收到音频数据后，遵循下方【转录提示词】逐段输出高保真逐字稿。\n"
-        f"4. 全部切片听写完成后，按时间线合并，调用 `write_to_file` 保存至：\n"
-        f"   `{target_clean}`\n\n"
-        f"### 🅱️ ChatGPT / OpenAI Codex 宿主执行路径（GPT-4o Audio 核心）\n"
-        f"1. **ChatGPT Web / 桌面端**：\n"
-        f"   - 将上方清单中的切片音频文件直接作为音频附件上传至对话中；\n"
-        f"   - 配合下方【转录提示词】要求 ChatGPT 听取原声并逐句转录；\n"
-        f"2. **OpenAI Codex CLI**：\n"
-        f"   - 在 Codex 会话中挂载切片或调用 Codex 原生多模态能力解析；\n"
-        f"3. 将最终听写文本合并保存至：\n"
-        f"   `{target_clean}`\n\n"
+        f"## 2. 宿主 Agent 执行指引（零中间逐字稿）\n\n"
+        f"1. **取切片**：对清单中的切片调用 MCP 工具 `omni-media:read_audio`（`output_mode=\"file\"`）取得本地切片绝对路径；\n"
+        f"2. **原生听音**：调用宿主原生 `view_file` 工具读取该切片路径，直接聆听讲师原声、例题与板书讲解；\n"
+        f"3. **撰写长文**：依据聆听所得的真实讲解内容，按下方【文章撰写提示词】撰写深入技术长文；\n"
+        f"4. **落盘**：调用 `write_to_file` 将长文写入上方目标长文落盘路径（严格保留，模块整编时不得删除）。\n\n"
         f"---\n\n"
-        f"## 3. 音频多模态转录提示词\n\n"
-        f"{AUDIO_TRANSCRIPTION_PROMPT}\n"
+        f"## 3. 文章撰写提示词\n\n"
+        f"{article_prompt}\n"
     )
     task_file.write_text(content, encoding="utf-8")
     return task_file
@@ -300,9 +301,9 @@ class PipelineCoordinator:
         process_all: bool = False,
         force: bool = False,
         prefetch_workers: int = 12,
-        transcribe_episodes: int = 2,
         skip_failed: bool = False,
         quality: str = "low",
+        chunk_minutes: int = 60,
     ) -> Dict[str, Any]:
         """执行完整流水线；硬门禁失败时抛出 PipelineGateError（由 CLI 转换为退出码）。"""
         from concurrent.futures import ThreadPoolExecutor
@@ -320,7 +321,7 @@ class PipelineCoordinator:
         print(f"[*] 全流程处理流水线启动 (Task Workspace: {ws.root_dir.name})")
         print("=" * 65)
 
-        print("[*] 转录策略: 对话模型原生唯一路径（_clean.txt 命中即缓存复用，否则导出 TRANSCRIBE_TASK）")
+        print("[*] 阶段一策略: 零中间逐字稿（听音后直接撰写 articles/；长文已存在即视为完成）")
 
         if process_all or range_str:
             all_parts = info["parts"]
@@ -368,8 +369,7 @@ class PipelineCoordinator:
             print("[*] --force 已指定，不过滤已完成分集")
 
         prefetch_workers = max(1, int(prefetch_workers or 1))
-        tx_workers = max(1, int(transcribe_episodes or 1))
-        print(f"[*] 并发配置: 音频预取 {prefetch_workers} 线程 | 分集转录并行 {tx_workers} 集（块级并发另计）")
+        print(f"[*] 并发配置: 音频预取 {prefetch_workers} 线程")
 
         def _audio_paths(p: Dict[str, Any]):
             clean_p_title = sanitize_filename(p["title"])
@@ -463,7 +463,7 @@ class PipelineCoordinator:
                 print("=" * 65, file=sys.stderr)
                 raise PipelineGateError(2)
 
-        # ===== 阶段二「转录任务派发」：仅阶段一全绿（或失败集全部被豁免）才启动 =====
+        # ===== 阶段二「单集精读文章任务书派发」：零中间逐字稿，直接产出 articles/ =====
         _skip_pages = {d.get("page") for d in skipped_entries}
         effective_parts = [p for p in selected_parts if p.get("page") not in _skip_pages]
         # 阶段二入口校验音频 100% 就绪，否则拒绝并指去向
@@ -482,137 +482,91 @@ class PipelineCoordinator:
             print("=" * 65, file=sys.stderr)
             raise PipelineGateError(2)
         print("=" * 65)
-        print(f"[*] 阶段二：批量转录（共 {len(effective_parts)} 集，并发 {tx_workers} 集）")
+        print(f"[*] 阶段二：派发单集精读文章任务书（共 {len(effective_parts)} 集，零中间逐字稿）")
         print("=" * 65)
-
-        def _extract_text(p: Dict[str, Any]):
-            p_num = p["page"]
-            audio_file, clean_p_title = _audio_paths(p)
-            transcript_clean_file = ws.subtitles_dir / f"P{p_num:02d}_{clean_p_title}_clean.txt"
-            if transcript_clean_file.exists() and transcript_clean_file.stat().st_size > 50 and not force:
-                print(f"    [P{p_num:02d}] 转录文本已存在，跳过转录: {transcript_clean_file.name}")
-                # 缓存命中禁记 "cached"，继承 manifest 原 asr_engine，查无则记 agent-native
-                engine_used = "agent-native"
-                try:
-                    for _d in ws.load_manifest(absolute=True).get("details", []):
-                        if isinstance(_d, dict) and _d.get("page") == p_num:
-                            _orig = _d.get("asr_engine")
-                            if _orig and _orig != "cached":
-                                engine_used = _orig
-                            break
-                except Exception:
-                    pass
-                return transcript_clean_file.read_text(encoding="utf-8"), engine_used
-
-            # 方案 A：直接导出 TRANSCRIBE_TASK 任务书（支持 Antigravity 与 ChatGPT 原生多模态听音）
-            try:
-                tf = export_transcribe_task(ws, p_num, clean_p_title, audio_file, title=info["title"], cid=p["cid"])
-            except Exception as err:
-                # 任务书落盘失败则终止任务 + 结构化报告（非零退出）
-                print("\n" + "=" * 65, file=sys.stderr)
-                print(f"[✗] 对话模型不可用，终止任务：P{p_num:02d} TRANSCRIBE_TASK 导出失败：{err}", file=sys.stderr)
-                print("原因：对话模型原生转录通道不可用（任务书落盘失败）", file=sys.stderr)
-                print("①排障重跑：检查 articles 目录写权限与磁盘空间后重跑 pipeline", file=sys.stderr)
-                print("②人工语料外挂：将人工整理文本放至 subtitles/PXX_*_clean.txt 后重跑", file=sys.stderr)
-                print("③中止：放弃本趟转录，已收齐音频保留在 audio/ 可稍后重跑", file=sys.stderr)
-                print("=" * 65, file=sys.stderr)
-                raise PipelineGateError(3)
-            print(f"    [P{p_num:02d}] 已导出 TRANSCRIBE_TASK 待 Agent 原生转录: {tf.name} (status=need-agent-transcribe)")
-            return "", "need-agent-transcribe"
 
         manifest_entries: List[Dict[str, Any]] = []
         failed_entries: List[Dict[str, Any]] = []
-        with ThreadPoolExecutor(max_workers=tx_workers) as tx_pool:
-            for p in effective_parts:
-                p["_text_future"] = tx_pool.submit(_extract_text, p)
+        for idx, p in enumerate(effective_parts, 1):
+            p_num = p["page"]
+            audio_file, clean_p_title = _audio_paths(p)
+            article_file = ws.articles_dir / f"P{p_num:02d}_{clean_p_title}_精读文章.md"
+            print(f"\n[{idx:02d}/{len(effective_parts):02d}] P{p_num:02d}: {p['title']}")
 
-            for idx, p in enumerate(effective_parts, 1):
-                p_num = p["page"]
-                audio_file, clean_p_title = _audio_paths(p)
-                print(f"\n[{idx:02d}/{len(effective_parts):02d}] 汇总落盘 P{p_num:02d}: {p['title']}...")
-                try:
-                    transcript_text, engine_used = p["_text_future"].result()
-                except PipelineGateError:
-                    raise
-                except Exception as err:
-                    print(f"    [✗] P{p_num:02d} 处理失败: {err}", file=sys.stderr)
-                    failed_entries.append({
-                        "page": p_num, "title": p["title"], "cid": p["cid"],
-                        "error": str(err), "status": "failed",
-                    })
-                    continue
-
-                transcript_clean_file = ws.subtitles_dir / f"P{p_num:02d}_{clean_p_title}_clean.txt"
-
-                if engine_used == "need-agent-transcribe":
-                    tr_task = ws.articles_dir / f"P{p_num:02d}_{clean_p_title}_TRANSCRIBE_TASK.md"
-                    if not tr_task.exists():
-                        tr_task = export_transcribe_task(ws, p_num, clean_p_title, audio_file, title=info["title"], cid=p["cid"])
-                    print(f"    [agent] P{p_num:02d} 待 Agent 原生转录: {tr_task.name}")
-                    manifest_entries.append({
-                        "page": p_num, "title": p["title"], "cid": p["cid"],
-                        "audio": str(audio_file), "transcript": str(transcript_clean_file),
-                        "task_prompt": str(tr_task), "article": "",
-                        "asr_engine": engine_used, "doc_engine": "agent-native",
-                        "status": "need-agent-transcribe",
-                    })
-                    continue
-
-                # 导出单集精读文章任务书，供 Agent 原生撰写
-                prompts = DocumentBuilder.render_prompts(
-                    title=info["title"],
-                    part_title=f"P{p_num:02d} {p['title']}",
-                    content=transcript_text,
-                    desc=info.get("desc", ""),
-                )
-                task_file = ws.articles_dir / f"P{p_num:02d}_{clean_p_title}_TASK.md"
-                task_file.write_text(prompts["article_prompt"], encoding="utf-8")
-                print(f"    [artifact] 单集精读文章任务书已导出: {task_file.name} (Agent 原生撰写)")
-
-                kernel_path = ws.subtitles_dir / "kernels" / f"P{p_num:02d}_{clean_p_title}_kernel.json"
-                KernelExtractor.extract_single_kernel(p_num, p["title"], transcript_text, kernel_path=kernel_path)
-
+            # 复用判定走 KernelExtractor 的宽容定位：历史工作区存在无 _精读文章 后缀的长文，
+            # 精确文件名匹配会误判为未写并要求重做。
+            existing_article = None if force else KernelExtractor.find_article(ws, p_num)
+            if existing_article is not None and existing_article.stat().st_size >= 1000:
+                print(f"    [cached] 单集精读长文已存在，跳过派发: {existing_article.name}")
                 manifest_entries.append({
-                    "page": p_num,
-                    "title": p["title"],
-                    "cid": p["cid"],
-                    "audio": str(audio_file),
-                    "transcript": str(transcript_clean_file),
-                    "task_prompt": str(task_file),
-                    "asr_engine": engine_used,
-                    "doc_engine": "agent-native",
+                    "page": p_num, "title": p["title"], "cid": p["cid"],
+                    "audio": str(audio_file), "article": str(existing_article),
+                    "asr_engine": "agent-native", "doc_engine": "agent-native",
                     "status": "success",
                 })
+                continue
+
+            try:
+                task_file = export_article_task(
+                    ws, p_num, clean_p_title, audio_file,
+                    title=info["title"], cid=p["cid"], chunk_minutes=chunk_minutes,
+                )
+            except Exception as err:
+                print("\n" + "=" * 65, file=sys.stderr)
+                print(f"[✗] 文章任务书导出失败，终止任务：P{p_num:02d}：{err}", file=sys.stderr)
+                print("①排障重跑：检查 articles 目录写权限与磁盘空间后重跑 pipeline", file=sys.stderr)
+                print("②中止：已收齐音频保留在 audio/ 可稍后重跑", file=sys.stderr)
+                print("=" * 65, file=sys.stderr)
+                raise PipelineGateError(3)
+
+            print(f"    [agent] 已导出文章任务书，待 Agent 听音撰写: {task_file.name}")
+            manifest_entries.append({
+                "page": p_num, "title": p["title"], "cid": p["cid"],
+                "audio": str(audio_file), "task_prompt": str(task_file),
+                "article": str(article_file),
+                "asr_engine": "agent-native", "doc_engine": "agent-native",
+                "status": "need-agent-article",
+            })
 
         if failed_entries:
             print("\n" + "=" * 65)
-            print(f"[!] 本趟共 {len(failed_entries)} 集处理失败（下载/转录/质检），已显式记入 manifest，重跑 pipeline --all 自动补齐：")
+            print(f"[!] 本趟共 {len(failed_entries)} 集处理失败，已显式记入 manifest，重跑 pipeline --all 自动补齐：")
             for f_ep in failed_entries:
                 print(f"    - P{f_ep['page']:02d} {f_ep['title']}: {str(f_ep['error'])[:160]}")
             print("=" * 65)
 
-        # ===== 阶段三「知识块聚合」：基于全局大纲与已有语料动态规划 =====
+        # ===== 阶段三「知识块聚合」：规划与知识元均由宿主 Agent 产出后才合成笔记 =====
         plan = None
         block_results: List[Dict[str, Any]] = []
         if process_all:
-            # 收集转录摘要，让语义规划贴近真实口语内容
+            # 语料摘要：优先取 Agent 已撰写的单集长文，兼容历史工作区的 _clean.txt
             summaries = {}
             for p in info["parts"]:
                 p_num = p["page"]
+                art = KernelExtractor.find_article(ws, p_num)
+                if art is not None:
+                    try:
+                        summaries[p_num] = art.read_text(encoding="utf-8")[:400]
+                    except Exception:
+                        pass
+            for p in info["parts"]:
+                p_num = p["page"]
+                if p_num in summaries:
+                    continue
                 clean_t = sanitize_filename(p["title"])
                 clean_f = ws.subtitles_dir / f"P{p_num:02d}_{clean_t}_clean.txt"
                 if clean_f.exists() and clean_f.stat().st_size > 50:
                     summaries[p_num] = clean_f.read_text(encoding="utf-8")[:300]
 
-            # 语料就绪门禁：若没有任何转录语料落盘（全为待转录），阶段三后置挂起，防止透支生成空壳大笔记
+            # 语料就绪门禁：若没有任何语料落盘，阶段三后置挂起，防止透支生成空壳大笔记
             if not summaries:
                 print("\n" + "=" * 65)
-                print("[*] 阶段三后置：当前课程音频切片已收齐，转录任务书已全部就绪。")
-                print("[*] 待宿主 Agent 听音转录落盘至 subtitles/ 后，重跑 pipeline --all 将自动聚合生成复习大笔记。")
+                print("[*] 阶段三后置：精读文章任务书已就绪，但尚无任何语料落盘。")
+                print("[*] 待宿主 Agent 将长文写入 articles/ 后，重跑 pipeline --all 将自动聚合。")
                 print("=" * 65)
             else:
                 print("\n" + "=" * 65)
-                print("[*] 阶段三：启动课程知识块智能聚合 (根据真实转录语料动态规划与合成大笔记)")
+                print("[*] 阶段三：课程知识块聚合（规划与知识元均由宿主 Agent 产出）")
                 print("=" * 65)
 
                 plan = SemanticTopicPlanner.plan(
@@ -621,21 +575,30 @@ class PipelineCoordinator:
                     ws=ws,
                     transcript_summaries=summaries,
                 )
-                print(f"[✓] 课程知识块大纲规划完成，共聚合出 {len(plan)} 个逻辑知识块:")
-                for b in plan:
-                    eps = b["episodes"]
-                    p_str = f"P{min(eps):02d}-P{max(eps):02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
-                    print(f"    - 模块 {b['block_id']:02d} ({p_str}): {b['block_title']}")
+                if not plan:
+                    print("[*] 阶段三后置：已导出知识块规划任务书，待宿主 Agent 产出 topic_plan.json 后重跑。")
+                    print(f"[*] 任务书: {ws.root_dir / 'topic_plan_TASK.md'}")
+                else:
+                    print(f"[✓] 知识块规划已就绪，共 {len(plan)} 个逻辑知识块:")
+                    for b in plan:
+                        eps = b["episodes"]
+                        p_str = f"P{min(eps):02d}-P{max(eps):02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
+                        print(f"    - 模块 {b['block_id']:02d} ({p_str}): {b['block_title']}")
 
-                for b in plan:
-                    eps = b["episodes"]
-                    block_parts = [p for p in info["parts"] if p["page"] in eps]
-                    if not block_parts:
-                        continue
-                    kernels = KernelExtractor.extract_batch_kernels(block_parts, ws=ws, max_workers=min(len(block_parts), 5))
-                    # 任务书导出已下沉 synthesize_block（notes/模块XX_*_TASK.md，含 SYNTHESIS_PROMPT）
-                    res = BlockSynthesizer.synthesize_block(b, kernels, ws=ws)
-                    block_results.append(res)
+                    for b in plan:
+                        eps = b["episodes"]
+                        block_parts = [p for p in info["parts"] if p["page"] in eps]
+                        if not block_parts:
+                            continue
+                        kernels = KernelExtractor.extract_batch_kernels(block_parts, ws=ws)
+                        pending = KernelExtractor.pending_pages(kernels)
+                        if pending:
+                            print(f"    [gate] 模块 {b['block_id']:02d}: {len(pending)} 集待 Agent 抽取知识元"
+                                  f"（KERNEL_TASK 已导出），跳过本模块笔记合成")
+                            continue
+                        # 任务书导出已下沉 synthesize_block（notes/模块XX_*_TASK.md，含 SYNTHESIS_PROMPT）
+                        res = BlockSynthesizer.synthesize_block(b, kernels, ws=ws)
+                        block_results.append(res)
         elif info["has_multi_pages"]:
             print("[*] 分区间运行：聚合后置，待 --all 全量语料齐后统一规划")
 

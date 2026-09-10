@@ -1,250 +1,171 @@
-<div align="center">
+# Bili-Video2Book
 
-# 📚 Bili-Video2Book
+将 B 站长视频/系列网课与本地音视频重构为结构化教材长文、模块合辑全书与思维导图笔记的自动化工具。
 
-### 把 B 站长视频和系列网课，一键变成能直接当教材读的深度长文、出版级模块全书与思维导图笔记
+[![开源协议: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
+[![Python 版本: 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg?style=flat-square)](#)
+[![环境适配: Antigravity | ChatGPT | Codex | 命令行](https://img.shields.io/badge/Environment-CLI%20%7C%20Agents-111827?style=flat-square)](SKILL.md)
 
-<p align="center">
-  <b>保留老师讲课的每一步推导、板书演算与核心思路；看文字比刷视频快 5 倍，支持关键词秒搜，文末附带练习题助你真正学懂。</b>
-</p>
-
-[![开源协议: MIT](https://img.shields.io/badge/开源协议-MIT-green.svg?style=flat-square)](LICENSE)
-[![适配环境: Antigravity | ChatGPT | OpenAI Codex | 终端命令行 (pip)](https://img.shields.io/badge/适配环境-Antigravity%20%7C%20ChatGPT%20%7C%20Codex%20%7C%20Terminal-111827?style=flat-square)](SKILL.md)
-[![Skill 规范: Open Agent Skills](https://img.shields.io/badge/Skill%20规范-Open%20Agent%20Skills-blue?style=flat-square)](SKILL.md)
-[![转录架构: Agent原生派发(零本地模型依赖)](https://img.shields.io/badge/转录架构-Agent原生派发(零本地模型依赖)-8A2BE2?style=flat-square)](#)
-[![交付形态: 三轨资产(长文+全书+脑图笔记)](https://img.shields.io/badge/交付形态-三轨资产(长文%2B全书%2B脑图笔记)-orange?style=flat-square)](#)
-[![测试覆盖: 49项全通过](https://img.shields.io/badge/自动化测试-49项全通过-brightgreen?style=flat-square)](#)
-
-**[English](README.en.md)** &nbsp;·&nbsp; [为什么需要](#为什么用视频学硬知识往往事倍功半) &nbsp;·&nbsp; [它能做什么](#它能做什么) &nbsp;·&nbsp; [三轨交付矩阵](#三轨交付矩阵各司其职) &nbsp;·&nbsp; [8大笔记风格矩阵](#八大多样化笔记风格矩阵) &nbsp;·&nbsp; [双层协同架构](#双层协同架构) &nbsp;·&nbsp; [极速上手](#安装与快速开始) &nbsp;·&nbsp; [设计原则](#核心设计原则)
-
-</div>
+**[English Documentation](README.en.md)** &nbsp;·&nbsp; [功能特性](#功能特性) &nbsp;·&nbsp; [交付产物体系](#交付产物体系) &nbsp;·&nbsp; [两阶段解耦流水线](#两阶段解耦流水线) &nbsp;·&nbsp; [安装与快速开始](#安装与快速开始) &nbsp;·&nbsp; [CLI 使用指南](#cli-使用指南) &nbsp;·&nbsp; [许可证](#许可证)
 
 ---
 
-## 为什么用视频学硬知识，往往“事倍功半”？
+## 功能特性
 
-我们之所以选择花几十个小时去啃 B 站的大学公开课、期末突击课或架构实战视频，是因为纸质教材往往晦涩死板，而视频里有老师**一步一步的逻辑推演、真实踩坑经验、黑板板书演算以及生动直观的比喻**。
-
-但真正把视频当教材学时，每个人都会遭遇四个难以忍受的痛点：
-
-1. **信息获取极慢，时间耗不起**：人说话的语速通常只有 150 到 200 字/分钟，就算开 1.5 倍速，一门 40 小时的网课也得硬坐 26 个小时；而人眼扫读文字的速度是 800 到 1200 字/分钟，效率相差整整 5 倍；
-2. **不能全文搜索，复习找断手**：视频是线性流媒体，进度条无法精准搜索。考前复习若想查一个公式推导或参数配置，只能在进度条上痛苦地反复拖拽、暂停、碰运气；
-3. **无效废话多，跨集支离破碎**：老师开头的设备调试、中间的闲聊口头禅，以及因为下课铃响被硬生生切成两半的工程案例；
-4. **一听就会、一做就废的“虚假熟练度”**：单向看视频极易产生“我都听懂了”的错觉；但一旦关掉视频自己动笔做题、写代码，脑子依然一片空白。
-
-**Bili-Video2Book 致力于将视频中真正有价值的推导细节、黑板演算与思维精髓，无损重构为高效、结构化、可全文检索、学完立刻做题检验的自学长文、模块全书与复习脑图。**
+- **多态输入支持**：支持 B 站单 P、多 P 连载网课、UGC 合集链接，以及本地常见音视频格式（`.mp4`, `.mkv`, `.mov`, `.flv`, `.m4a`）和本地多讲网课文件夹。
+- **两阶段解耦调度**：将单集高并发转录与跨集模块系统整编彻底解耦。阶段一通过全局扁平队列与滑动窗口维持高并发流水线；阶段二按模块知识边界统一整编。
+- **三轨结构化交付**：同时输出单集教材长文（`articles/`）、模块合辑教材（`textbooks/`）与考纲思维导图笔记（`notes/`），满足深入自学、系统通读与考前速记需求。
+- **轻量与多模态原生**：通过 FFmpeg 极速提取轻量人声音频，依托多模态模型原生读取，不依赖本地下载与运行大型离线模型权重（如 Whisper），避免占用本地显存。
+- **沙盒工作区管理**：按课程建立独立输出目录，内置增量断点续传、文件状态校验与实时队列追踪器。
 
 ---
 
-## 它能做什么
+## 交付产物体系
 
-**几十小时网课进，三套自洽专著出。**
+系统针对不同学习场景输出三类定位明确的结构化资产：
 
-输入 B 站任意长视频/连载网课链接、本地视频文件（`.mp4`/`.mkv`/`.mov`/`.flv` 等）或本地整套网课目录，系统自动完成轻量人声音频提取、无损均衡切片、Agent 原生多模态直读与全局知识块规划，交付三套各司其职的专著级资产：
+| 交付形态 | 存储路径 | 适用场景 | 核心特征 |
+| :--- | :--- | :--- | :--- |
+| **单集教材长文** | `output/<task>/articles/` | 单集深入自学、替代长视频 | 完整还原核心原理推导、代码实现与演算过程；文末配备 2~3 道自测题与溯源解析。**模块整编时严格保留，不予删除**。 |
+| **模块合辑教材** | `output/<task>/textbooks/` | 系统章节精读、全卷通读 | 跨分集知识整合，消除单集孤立感；增加章节承上启下的过渡桥梁段落，形成体系化教材。 |
+| **模块复习笔记** | `output/<task>/notes/` | 考前复习、日常速查、脑图构建 | 需显式指定 `--style`（系统不设默认）；推荐 `minimal` 对齐 CS-Xmind-Note 考研思维导图规范，多级列表展开结合单行核心定义，原生支持 VS Code Markmap 与 XMind 导入。 |
+
+---
+
+## 两阶段解耦流水线
+
+针对系列网课处理中的并发调度，系统采用单集生产与模块整编完全解耦的架构：
 
 ```text
-传统看视频学习方式：
-[40小时漫长视听] ──► 语速受限 ➔ 进度条反复拖拽 ➔ 无法搜索 ➔ 跨集割裂 ➔ 无检验闭环
-
-Bili-Video2Book 三轨重构方式：
-[一键批量重构] ──┬──► 📘 产物 A：单集精读教材长文（articles/，每集独立精读长文，完整保留绝不删除）
-                 │     └── 全量推导 · 真实黑板运算 · 案例闭环 · 随堂自测(带正文溯源解析)
-                 │
-                 ├──► 📚 产物 C：模块精读全书（textbooks/，全新整编出版级章节全书）
-                 │     └── 体系化消除单集拼凑 · 章节承前启后逻辑过渡桥梁 · 模块全景总结
-                 │
-                 └──► 📑 产物 B：模块思维导图复习笔记（notes/，CS-Xmind-Note 408 考纲脑图树）
-                       └── 多级 * 列表展开 · * > 核心定义单行引用 · ASCII拓扑 · 横向对比矩阵 · 避坑清单
+[输入 URL 或本地课程目录]
+          │
+          ▼
+【准备阶段：结构解析与音频就绪】
+  bili-video2book pipeline "<链接或本地路径>" [--all | --range X-Y]
+  ├── 智能解析分 P 拓扑与元数据，生成任务清单 (parts.json)
+  └── 批量提取轻量人声音频至 audio/ (单集阈值 60min，整轨直接处理)
+          │
+          ▼
+【阶段一：全局动态滑动流水线】
+  维护全局单一待处理任务队列 (FIFO Queue)，打满并发池推进：
+  ├── 并发维持：恒定保持 5~6 个微智能体槽位并行处理
+  ├── 滑动调度：“完成一个，立即派生一个” (磁盘探针命中 ➔ 回收 ➔ 派发新集)
+  ├── 单集一步：read_audio 取切片 ➔ view_file 原生听音 ➔ 直接撰写教材长文（零中间逐字稿）
+  └── 阶段门禁：所有分集全部竣工且无未完成任务时，阶段一结束
+          │
+          ▼
+【阶段二：按模块统一收敛整编】
+  确认单集文章 (articles/) 全部就绪后，按模块拓扑聚合：
+  ├── 模块合辑教材：调用 cluster-articles 生成各模块教材全书 (textbooks/)
+  ├── 思维导图笔记：调用 cluster-notes --style minimal 生成考纲导图笔记 (notes/)
+  └── 交付校验：核对各轨资产完整性与目录索引
 ```
 
-### 🌐 在线与本地多态输入支持
-- **B 站在线视频/系列**：单 P 视频、多 P 连载网课、UGC 合集全自动解析，自动识别 `?p=X`；
-- **本地单视频/音频文件**：支持 `.mp4`、`.mkv`、`.mov`、`.avi`、`.flv`、`.webm`、`.ts` 等全格式视频，自动高速剥离 64kbps 纯净人声音频；
-- **本地整套课程目录**：直接将存有几十讲视频的本地文件夹传入，系统按文件名自然排序（智能识别 `01, 02`、`第1讲, 第2讲`）编排分 P，一键完成整套课程的批量提取、单集精读、模块全书与脑图笔记重构！
-
-### 严守事实边界与抗幻觉机制（Strict Grounding）
-全流程贯彻严格闭卷事实保真原则，坚决杜绝大模型“无中生有”：
-- **以原内容为唯一事实依据**：严禁凭空捏造未在视频中提及的案例、数据、人物、术语或结论；
-- **缺漏显式化，保留原意表达**：原视频未展开或未说明的细节，明确标注“未说明”，绝不主观脑补；完整保留讲述者原汁原味的比喻与论证脉络。
-
-### 严禁本地模型转录铁律（Agent-Native Policy）
-- **绝不使用本地模型，严禁下载模型权重**：彻底摒弃本地庞大 Whisper 权重下载，杜绝显存占用与环境配置崩溃；
-- **纯 Python 轻量提取**：通过系统 ffmpeg 高速提取 64kbps 人声音频并执行 10 分钟无损切片，直接依托宿主对话大模型（Antigravity、ChatGPT、Codex 等）多模态能力或转录任务书原生派发。
-
----
-
-## 三轨交付矩阵：各司其职
-
-为了彻底解决“逐集自学需要详尽推导”、“模块进阶需要全书系统贯通”与“考前需要极速查阅”的三重矛盾，系统交付三套严格区分纪律的资产：
-
-| 交付形态 | 适用阶段 | 核心特色（Must have） | 纪律红线（Must NOT have） |
-| :--- | :--- | :--- | :--- |
-| 📘 **单集精读教材长文**<br>`articles/` | **系统深入自学**<br>（彻底替代长视频） | 详尽推导步骤、黑板板书与数学证明、案例前因后果、**文末附带 2 到 3 道针对重难点的综合练习题（附可在正文溯源的详细解析）** | 概括性跳步、口水碎语、“视频中我们看到”等视听口吻、无依据的外部事实脑补。<br>⚠️ **模块整编时严格完整保留，绝不删除！** |
-| 📚 **模块精读全书**<br>`textbooks/` | **系统章节精读**<br>（出版级成卷专著） | 跨集知识模块整合、去除单集模板套话、编排正式章节体系、**在各小节切换处增加平滑的逻辑过渡承接段落（Transition Bridges）**、模块全景沉淀 | 机械将单集长文首尾粘连、破坏单集原有推导深度、删除底层代码与架构图 |
-| 📑 **模块思维导图复习笔记**<br>`notes/` | **考前突击 / 脑图速查**<br>（高密度备考手册） | **对齐 SSHeRun/CS-Xmind-Note 408 考研树状导图体系**：开篇 ASCII 知识拓扑、纯粹多级 `*` 列表缩进、`* > 核心定义与本质: ...` 单行引用、**自适应横向对比矩阵**、反模式避坑清单与典型案例树。**原生适配 1 键导入 XMind / VS Code Markmap** | 长篇大论的散文段落、无层级的平铺文字、试卷练习题（自测题移至独立考纲速查卡）、无对比要素时的硬性画表 |
-
----
-
-## 八大多样化笔记风格矩阵
-
-参考开源优秀笔记设计，系统内置 8 种高信息密度标准风格（**已彻底剔除小红书碎片化类型；不设硬编码默认风格，提醒用户根据需要自主选择**）：
-
-| 风格标识 (Key) | 风格名称 | 核心定位与结构特征 | 适用场景 |
-| :--- | :--- | :--- | :--- |
-| `minimal` | **精简** | **参考 SSHeRun/CS-Xmind-Note 408 考研思维导图树状笔记**：纯粹多级缩进列表（`*` 缩进展开）、核心定义单行引用（`* > 核心定义: ...`）、特点与机理条目化、零口水废话，天然契合 XMind / Markmap 脑图渲染 | 计算机考研、期末速成、体系化速记、交互脑图制作 |
-| `detailed` | **详细** | 百科全书式全景长笔记：尽可能多记录视频内容，深度还原推导过程、背景脉络、示例推演与技术讨论，生产级代码逐行剖析 | 系统自学、专著级精读、工业落地深究 |
-| `academic` | **学术** | 形式化数学/逻辑定义、系统计算模型、渐进复杂度界（$O$ / $\Omega$）、命题推导与文献演进综述 | 计算机理论课、学术研讨、算法论文精读 |
-| `tutorial` | **教程** | 实战教程规范：目标产出与用时、前置环境依赖（Prerequisites）、保姆级分步操作（Step-by-Step）、预期终端输出与常见报错排查（Troubleshooting） | 实战项目上手、工具环境搭建、编码动手实践 |
-| `task_oriented` | **任务导向** | 任务看板与工程交付指南：SMART 量化交付目标、前置准备 Checklist 复选框、分阶段执行任务卡（输入 ➔ 动作 ➔ 验收标准）与风险阻断预案 | 工程目标推进、团队协作跟进、敏捷打钩验收 |
-| `business` | **商业风格** | CTO / 管理决策层汇报：执行摘要（TL;DR）、商业痛点诉求、ROI 投入产出比量化测算、SWOT 战略评估矩阵、落地路线图与风控合规 | 架构委员会答辩、技术商业化选型、管理层汇报 |
-| `meeting_minutes` | **会议纪要** | 议事纪要标准：基本信息卡片、议题核心讨论（观点交锋与理由阐释）、正式决议条目（[DEC-xx]）与 Action Items 责任落实清单（含责任人与 DDL） | 团队复盘会、技术方案评审会、需求对齐纪要 |
-| `life_journal` | **生活向** | 知识随笔与生活哲学：生活切片引入、认知顿悟瞬间、技术概念的生活化生动隐喻、慢下来的思考与温暖便签卡 | 知识随笔、博文写作、心智模型迁移与个人感悟 |
-
----
-
-## 双层协同架构
-
-```text
-[ 输入 B 站任意长视频 / 连载网课链接 / 本地视频文件 / 本地课程目录 ]
-                 │
-                 ▼
-┌── 🛠️ 工具层 (CLI 入口 · PipelineCoordinator 领域调度 · 纯本地极速) ────┐
-│  1. 拓扑解析  : 单P/多P/合集与本地目录智能多态嗅探 (parser/local_media)  │
-│  2. 统一网络  : WBI 验签 · 412 风控识别 · 退避重试 (http_client/fetcher) │
-│  3. 轻量提取  : 64kbps DASH 人声直取 / 本地视频 64k 剥离 (fetcher/ffmpeg)│
-│  4. 均衡切片  : 10 分钟无损流拷贝瞬间切片 (audio_chunker.py)            │
-│  5. 模块整编  : cluster-articles 模块全书整合引擎 (integrator.py)        │
-│  6. 语义规划  : 知识元抽取 + 时长感知知识块聚合 (kernel_extractor/planner)│
-└───────────────────────────────────────────────────────────────────────┘
-                 │ 导出规范化切片、知识元原子与 Agent 任务书
-                 ▼
-┌── 🧠 智能合成层 (宿主对话大模型 · 原生多模态) ───────────────────────┐
-│  1. 语义校对  : 依据领域线索纯字面纠偏（只改字，不改话）              │
-│  2. 精读长文  : 撰写单集教材级深度自学长文 (articles/Pxx_长文.md)     │
-│  3. 模块全书  : 整编输出出版级章节教材全卷 (textbooks/模块XX_全书.md) │
-│  4. 脑图笔记  : 生成 CS-Xmind-Note 风格思维导图树状笔记 (notes/模块XX) │
-└───────────────────────────────────────────────────────────────────────┘
-```
+> **动态队列追踪工具**：配套提供 `python scripts/queue_tracker.py`（支持 `--next N`、`--json`、`--summary`），用于实时监测全局队列出队状态与阶段门禁流转。
+>
+> 逐步操作规范（含阶段二三步门禁与任务书对照表）见 [SKILL.md](SKILL.md)；自检命令为 `python scripts/selfcheck.py`。
 
 ---
 
 ## 安装与快速开始
 
-支持作为成熟 AI Agent 的原生 Skill 挂载，亦可作为本地独立 CLI 工具运行。
+### 1. 系统依赖
 
-### 1. 🗣️ 交给 Agent 一句话（推荐）
-在 Antigravity、ChatGPT、OpenAI Codex 等助手中直接发送：
-```text
-把 https://github.com/LINJIANG12/bili-video2book 安装为我的全局 Skill。
+音频提取依赖系统 `ffmpeg`，请确保已安装并加入系统 `PATH` 环境变量：
+
+- **Windows**：`winget install Gyan.FFmpeg`
+- **macOS**：`brew install ffmpeg`
+- **Linux (Debian/Ubuntu)**：`sudo apt update && sudo apt install -y ffmpeg`
+
+### 2. 安装 omni-media MCP 服务（阶段一听音必需）
+
+阶段一通过 MCP 工具 `omni-media:read_audio` 提取音频切片，再由宿主多模态模型原生聆听。
+
+```bash
+cd omni-media-mcp && pip install -e .
+python -m omni_media_mcp.cli apply --target zcode
 ```
 
-> **提示（Codex / Antigravity 规范）**：
-> - **仓库级就地调用**：本仓库根目录已内置 `.agents/skills/bili-video2book`，在 Codex CLI 或支持 Open Agent Skills 的终端中直接输入 `$bili-video2book` 或自然语言即可触发。
-> - **全局调用**：将本项目拷贝或软链接至 `~/.agents/skills/bili-video2book`。
+> 接入会把已配置的 provider API Key 写入宿主配置文件，请勿将其纳入版本控制。
 
-### 2. 🧬 本地安装与系统命令行 (Terminal / pip)
+### 3. 作为 AI Agent Skill 挂载（推荐）
+
+在 Antigravity、ChatGPT、OpenAI Codex 等环境中直接说明：
+```text
+把本仓库安装为我的全局 Skill。
+```
+本仓库内置 `.agents/skills/bili-video2book`，符合 Open Agent Skills 标准规范，可直接通过 Agent 自然语言触发。
+
+### 4. 本地安装与命令行使用
+
 ```bash
 git clone https://github.com/LINJIANG12/bili-video2book.git
 cd bili-video2book
 
-# 可选：安装为全局终端命令行工具（推荐，在任意工作目录下可用）
+# 可选：安装为全局命令行工具
 pip install -e .
-
-# 系统依赖（用于音视频无损极速切片）：
-# 请确保系统已安装 ffmpeg 并加入环境变量 PATH
 ```
 
 ---
 
-## 怎么用
+## CLI 使用指南
 
-若已执行 `pip install -e .`，可直接在终端任意目录下使用 `bili-video2book` 命令；亦可免安装在仓库内直接使用 `python src/cli.py`：
+若已执行 `pip install -e .`，可直接使用 `bili-video2book`；亦可在仓库根目录直接运行 `python src/cli.py`：
 
-### 场景一：一键运行全自动流水线
+### 场景一：处理整门课程流水线
 ```bash
-# 处理整门 B 站网课
+# 处理整门 B 站网课合集
 bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all
 
-# 处理本地整套课程目录
-bili-video2book pipeline "D:\videos\软件工程公开课\" --all
+# 处理本地整套视频课程目录
+bili-video2book pipeline "D:\courses\software_engineering\" --all
 ```
 
 ### 场景二：处理指定分集或区间
 ```bash
-# 处理单集（例如第 1 讲）
+# 处理第 1 讲
 bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --page 1
 
-# 处理指定分集区间（例如第 2 讲至第 5 讲）
+# 处理第 2 讲至第 5 讲
 bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range 2-5
 ```
 
-### 场景三：整编生成模块精读全书（全新 textbooks/ 产物）
+### 场景三：生成模块合辑教材
+在阶段一单集长文生成完毕后，整编生成模块教材：
 ```bash
-# 将 articles/ 目录下的单集精读文章整编为出版级章节教材全书
-# 核心纪律：原有 articles/ 中的单篇长文完整保留，绝不删除！
 bili-video2book cluster-articles "https://www.bilibili.com/video/BV14VqVBrEhc"
 ```
 
-### 场景四：生成/更新模块思维导图复习笔记（支持指定风格）
+### 场景四：生成模块思维导图复习笔记
 ```bash
-# 使用 SSHeRun/CS-Xmind-Note 精简思维导图树风格（推荐考研/期末速记）
+# 使用 minimal 精简树状风格 (推荐考研与日常速记)
 bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --style minimal
 
-# 使用详细全景风格
+# 使用 detailed 详细全景风格
 bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --style detailed
-
-# 若不带 --style 参数，CLI 会交互式列出 8 种风格清单，提示用户自主选择
-bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc"
 ```
 
-### 场景五：直接转录本地音视频文件
+### 场景五：查看与监控任务队列状态
 ```bash
-# 传入本地视频（自动剥离 64k 音频）：存在清洗语料即缓存命中，否则导出 TRANSCRIBE_TASK 待对话模型原生转录
-bili-video2book transcribe "lecture.mp4"
+# 查看当前任务工作区的完成进度与阶段判定
+python scripts/queue_tracker.py
+
+# 获取待处理队列中接下来的 5 个分集及路径
+python scripts/queue_tracker.py --next 5
 ```
 
 ---
 
-## 真实交付物形态
+## 凭证说明：B 站 SESSDATA 配置
 
-所有任务严格采用**独立沙盒工作区（Task Workspace）**归档：
-
-```text
-output/【公开课】浙江大学：软件工程 陈越（全33讲）_BV16g411M7r2/
-├── articles/                     # 📘 [产物 A] 34 讲单集精读教材长文（每集约 1.5 万字，完整保留）
-│   ├── P01_第1讲 软件工程概述-1_精读文章.md
-│   ├── P02_第2讲 软件工程概述-2_精读文章.md
-│   └── ... (全部 34 讲单集教材，含自测思考题与溯源解析)
-├── textbooks/                    # 📚 [产物 C] 14 部模块精读全书（出版级章节教材全卷）
-│   ├── 模块01_软件工程导论与学科范式_精读全书.md       (P01~P02 整合，含导读与过渡桥梁)
-│   ├── 模块02_软件过程模型体系与演进_精读全书.md       (P03~P05 整合)
-│   └── ... (共 14 卷出版级系统教材全书)
-├── notes/                        # 📑 [产物 B] 14 份模块思维导图复习笔记 (CS-Xmind-Note 408 脑图树)
-│   ├── 模块01_软件工程导论与学科范式_P01-P02_笔记.md  (纯粹 * 缩进展开 + 单行定义 + 对比矩阵)
-│   ├── 模块02_软件过程模型体系与演进_P03-P05_笔记.md
-│   └── ... (支持 1 键导入 XMind / VS Code Markmap 渲染交互脑图)
-├── subtitles/                    # 📝 转录语料存储（转录文本 + 知识元原子 JSON）
-│   ├── P01_第1讲 软件工程概述-1_clean.txt
-│   └── kernels/
-├── audio/                        # 🎵 64kbps 纯净人声音频留档
-├── topic_plan.json               # 🗺️ 跨集知识块聚类拓扑规划
-└── manifest.json                 # 📋 任务生命周期清单（记录 textbooks、notes 与风格配置）
-```
-
----
-
-## 核心设计原则
-
-- **字字有推导，彻底替代原视频**：拒绝浮躁的 500 字提纲，宁可写满万字长文，也绝不跳过任何一步核心推导与黑板板书；
-- **原视频即唯一依据，严守事实边界**：不脑补外部未提及的案例与概念；原视频没讲的细节直接写明“未说明”，绝不为了填充篇幅而编造内容；
-- **绝不下载本地模型，零本地显存负担**：严格遵循 Agent 原生转录派发机制，把繁重计算留给云端多模态大模型；
-- **三轨资产兼顾不同学习场景**：精读自学看 `articles/`、章节通读看 `textbooks/`、考前速记导图看 `notes/`；
-- **模块整编绝不删单篇，安全无损**：整编模块全书时，单集精读教材长文严格完整保留；
-- **结构随物赋形，笔记风格自由定制**：支持 8 种专业笔记风格，精简风格对齐 408 考研树状导图，拒绝口水废话；
-- **学练形成闭环，真题解析可溯源**：精读长文文末配备针对性考查题，答案与解题推理链条 100% 能在正文中找到依据。
+在批量抓取多 P 长篇网课时，建议提供登录凭证，避免频繁请求触发 B 站 412 频控限制：
+1. 在浏览器登录 bilibili.com；
+2. 按 `F12` 打开开发者工具 -> Application -> Cookies -> `https://www.bilibili.com`；
+3. 复制 `SESSDATA` 项对应的值；
+4. 在命令中追加 `--sessdata "<SESSDATA>"` 参数即可。
 
 ---
 
 ## 许可证
 
-本项目基于 [MIT License](LICENSE) 开源。欢迎提交 Issue 与 Pull Request，共同推动高效、严肃、有深度的知识沉淀工程！
+本项目基于 [MIT License](LICENSE) 开源。

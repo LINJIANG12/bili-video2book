@@ -249,15 +249,6 @@ class WbiSigner:
         return 混合密钥
 
     @classmethod
-    def clear_cache(cls) -> None:
-        """清空内存缓存（供风控后强制刷新用）。"""
-        with cls._缓存锁:
-            cls._cached_mixin_key = None
-            cls._cache_expire_time = 0.0
-            cls._cached_img_key = None
-            cls._cached_sub_key = None
-
-    @classmethod
     def enc_wbi(
         cls,
         params: Dict[str, Any],

@@ -38,7 +38,6 @@ downloads/
 
 # Testing & Dev caches
 .pytest_cache/
-.workbuddy/
 
 # IDE / Editor configs
 .vscode/
@@ -49,5 +48,7 @@ downloads/
 # Sensitive tokens & internal drafts
 config.json
 .env
-.aide/
+.zcode/
+temp_bilinote/
+
 

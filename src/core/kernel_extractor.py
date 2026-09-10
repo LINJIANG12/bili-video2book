@@ -1,11 +1,11 @@
-"""Kernel Extractor: Builds prompts for Agent to extract atomic factual knowledge kernels, plus local fallback structuring.
+"""Kernel Extractor: Exports knowledge-kernel extraction task-files for Agent-native execution.
 
-Architecture: CLI provides tooling (transcripts, prompts, local fallback JSON). The mature Agent itself performs semantic extraction and synthesis.
+Architecture: the CLI only provides tooling (source resolution, task-file export, cache reuse).
+The host dialogue model performs the real semantic extraction and writes the kernel JSON.
+A missing kernel is reported as pending -- it is never faked with local heuristics.
 """
 
 import json
-import re
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -13,21 +13,24 @@ from .workspace import sanitize_filename
 
 
 class KernelExtractor:
+    STATUS_EXTRACTED = "extracted"
+    STATUS_PENDING = "need-agent-kernel"
+
     KERNEL_PROMPT = """你是一位顶尖计算机科学与工程知识萃取专家。
-请仔细阅读以下单集课程转录文本，执行【高纯度事实知识元（Factual Knowledge Kernel）】抽取。
+请仔细阅读以下单集课程语料，执行【高纯度事实知识元（Factual Knowledge Kernel）】抽取。
 
 【分集信息】：P{page:02d} - {title}
-【原始转录文本】：
+【待萃取语料正文】：
 {transcript_text}
 
 【萃取原则与要求】：
 1. **头尾过渡噪声剥离**：
-   - 坚决过滤开篇 3~5 分钟内的考勤、调试设备、开场白闲聊、上节课简单复习客套；
-   - 坚决过滤结尾 2~3 分钟内的下课通知、作业提醒、下节预告；
+   - 坚决过滤开篇的考勤、调试设备、开场白闲聊、上节课简单复习客套；
+   - 坚决过滤结尾的下课通知、作业提醒、下节预告；
    - 仅保留从引入实质概念、技术模型展开到核心推导结束的实质性正文。
 2. **拒绝预设模板**：
    - 严禁生搬硬套固定的段落模板，严禁输出无意义的概括性空话；
-   - 忠实还原老师传达的核心概念定义、模型运转机理、优缺点权衡、对比要素、生动具体的工程案例与避坑反模式。
+   - 忠实还原语料传达的核心概念定义、模型运转机理、优缺点权衡、对比要素、生动具体的工程案例与避坑反模式。
 3. **输出格式规范**：
    - 必须严格输出为合法 JSON 字典，严禁在 JSON 外包裹任何 Markdown 标记或多余文字：
 
@@ -35,6 +38,7 @@ class KernelExtractor:
 {{
   "page": {page},
   "title": "{title}",
+  "status": "extracted",
   "definitions": [
     {{"term": "专业术语名称", "essence": "核心本质与精准定义"}}
   ],
@@ -54,100 +58,150 @@ class KernelExtractor:
 ```
 """
 
-    @staticmethod
-    def strip_transient_chatter(text: str) -> str:
-        """Heuristic helper to trim obvious introductory or closure sentences."""
-        cleaned = re.sub(r"^(大家好|同学们好|我们现在开始上课|上节课我们讲了).*?[。！？\n]", "", text)
-        cleaned = re.sub(r"(今天就讲到这里|下课了|下节课再见|把作业交一下).*?$", "", cleaned)
-        return cleaned.strip()
+    # ------------------------------------------------------------------
+    # Paths and source resolution
+    # ------------------------------------------------------------------
 
     @classmethod
-    def degraded_extract(cls, page: int, title: str, text: str) -> Dict[str, Any]:
-        """Circuit-breaker degradation fallback when model extraction fails."""
-        cleaned = cls.strip_transient_chatter(text)
-        sentences = [s.strip() for s in re.split(r"[。！？\n]+", cleaned) if len(s.strip()) > 15]
+    def kernel_json_path(cls, ws: Any, page: int, title: str) -> Path:
+        """Canonical on-disk location of an episode's Agent-produced kernel JSON."""
+        return ws.subtitles_dir / "kernels" / f"P{page:02d}_{sanitize_filename(title)}_kernel.json"
 
-        return {
-            "page": page,
-            "title": title,
-            "status": "degraded",
-            "definitions": [{"term": title, "essence": sentences[0] if sentences else title}],
-            "mechanisms_and_models": [],
-            "comparisons": [],
-            "case_studies": [],
-            "anti_patterns": [],
-            "raw_summary": " ".join(sentences[:5]),
-        }
+    @staticmethod
+    def find_article(ws: Any, page: int) -> Optional[Path]:
+        """Locate the episode's single-episode article (excludes task-files)."""
+        candidates = [
+            f for f in sorted(ws.articles_dir.glob(f"P{page:02d}_*.md"))
+            if not f.name.endswith("_TASK.md")
+        ]
+        if candidates and candidates[0].stat().st_size > 200:
+            return candidates[0]
+        return None
+
+    # ------------------------------------------------------------------
+    # Prompt and task-file export
+    # ------------------------------------------------------------------
 
     @classmethod
     def build_kernel_prompt(cls, page: int, title: str, transcript_text: str) -> str:
         """Build the kernel-extraction prompt for the Agent to execute natively."""
         safe_title = title.replace("{", "(").replace("}", ")")
         safe_text = transcript_text[:25000]
-        return cls.KERNEL_PROMPT.replace("{page:02d}", f"{page:02d}").replace("{page}", str(page)).replace("{title}", safe_title).replace("{transcript_text}", safe_text)
+        prompt = (
+            cls.KERNEL_PROMPT
+            .replace("{page:02d}", f"{page:02d}")
+            .replace("{page}", str(page))
+            .replace("{title}", safe_title)
+            .replace("{transcript_text}", safe_text)
+        )
+        # The schema example uses doubled braces so it survives the replacements above.
+        return prompt.replace("{{", "{").replace("}}", "}")
 
     @classmethod
-    def extract_single_kernel(
+    def export_kernel_task(
         cls,
         page: int,
         title: str,
-        transcript_text: str,
-        kernel_path: Optional[Path] = None,
-    ) -> Dict[str, Any]:
-        """
-        Local fallback structuring (no network).
-        The mature Agent should execute build_kernel_prompt() natively for high-quality kernels.
-        This method only provides checkpoint reuse + local degraded structuring for offline tooling.
-        """
-        if kernel_path and kernel_path.exists() and kernel_path.stat().st_size > 50:
-            try:
-                cached = json.loads(kernel_path.read_text(encoding="utf-8"))
-                if cached.get("status") == "extracted" and (cached.get("definitions") or cached.get("mechanisms_and_models")):
-                    return cached
-            except Exception:
-                pass
+        source_text: str,
+        source_path: Path,
+        kernel_path: Path,
+    ) -> Path:
+        """Export the KERNEL_TASK file that instructs the host Agent to extract kernels."""
+        kernel_path = Path(kernel_path)
+        task_file = kernel_path.parent / f"P{page:02d}_{sanitize_filename(title)}_KERNEL_TASK.md"
+        prompt = cls.build_kernel_prompt(page, title, source_text)
+        content = (
+            f"# P{page:02d} {title} 知识元抽取任务书（KERNEL_TASK）\n\n"
+            f"> 状态：{cls.STATUS_PENDING} | 由宿主 Agent 阅读语料后原生抽取；CLI 不做本地启发式抽取\n\n"
+            f"## 1. 语料来源\n\n"
+            f"- 单集精读文章：`{Path(source_path).as_posix()}`\n\n"
+            f"## 2. 落盘要求\n\n"
+            f"- 目标文件：`{kernel_path.as_posix()}`\n"
+            f"- 必须为合法 JSON 对象，且必须写入 `\"status\": \"{cls.STATUS_EXTRACTED}\"`\n"
+            f"- 严禁在 JSON 外包裹任何 Markdown 代码块标记或多余文字\n"
+            f"- 抽取完成后重跑对应 CLI 命令即可自动复用该知识元文件\n\n"
+            f"---\n\n"
+            f"## 3. 抽取提示词\n\n{prompt}\n"
+        )
+        task_file.parent.mkdir(parents=True, exist_ok=True)
+        task_file.write_text(content, encoding="utf-8")
+        return task_file
 
-        if not transcript_text or len(transcript_text.strip()) < 50:
-            return cls.degraded_extract(page, title, transcript_text or "")
-
-        fallback = cls.degraded_extract(page, title, transcript_text)
-        if kernel_path:
-            kernel_path.parent.mkdir(parents=True, exist_ok=True)
-            kernel_path.write_text(json.dumps(fallback, ensure_ascii=False, indent=2), encoding="utf-8")
-        return fallback
+    # ------------------------------------------------------------------
+    # Cache reuse / pending reporting
+    # ------------------------------------------------------------------
 
     @classmethod
-    def extract_batch_kernels(
-        cls,
-        episodes: List[Dict[str, Any]],
-        ws: Any,
-        max_workers: int = 5,
-    ) -> List[Dict[str, Any]]:
-        """Run sub-agents in parallel to extract knowledge kernels for multiple episodes."""
-        kernels_dir = ws.subtitles_dir / "kernels"
-        kernels_dir.mkdir(parents=True, exist_ok=True)
+    def load_kernel(cls, kernel_path: Optional[Path]) -> Optional[Dict[str, Any]]:
+        """Load an Agent-produced kernel, or None when it is absent/not yet extracted."""
+        if not kernel_path:
+            return None
+        path = Path(kernel_path)
+        if not path.exists() or path.stat().st_size < 50:
+            return None
+        try:
+            cached = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(cached, dict):
+            return None
+        if cached.get("status") != cls.STATUS_EXTRACTED:
+            return None
+        if not (cached.get("definitions") or cached.get("mechanisms_and_models")):
+            return None
+        return cached
 
-        def _subagent_worker(ep: Dict[str, Any]) -> Dict[str, Any]:
-            p_num = ep["page"]
-            clean_title = sanitize_filename(ep["title"])
-            k_path = kernels_dir / f"P{p_num:02d}_{clean_title}_kernel.json"
+    @classmethod
+    def collect_kernel(cls, page: int, title: str, ws: Any) -> Dict[str, Any]:
+        """Reuse the Agent-produced kernel, otherwise export a task-file and report it as pending."""
+        article = cls.find_article(ws, page)
+        if article is None:
+            return {
+                "page": page,
+                "title": title,
+                "status": "need-agent-article",
+                "definitions": [],
+                "mechanisms_and_models": [],
+                "comparisons": [],
+                "case_studies": [],
+                "anti_patterns": [],
+            }
 
-            # Read clean transcript file
-            clean_txt_file = ws.subtitles_dir / f"P{p_num:02d}_{clean_title}_clean.txt"
-            if clean_txt_file.exists():
-                text = clean_txt_file.read_text(encoding="utf-8")
-            else:
-                text = ep.get("transcript", "")
+        kernel_path = cls.kernel_json_path(ws, page, title)
+        cached = cls.load_kernel(kernel_path)
+        if cached is not None:
+            return cached
 
-            return cls.extract_single_kernel(
-                page=p_num,
-                title=ep["title"],
-                transcript_text=text,
-                kernel_path=k_path,
-            )
+        task_file = cls.export_kernel_task(
+            page=page,
+            title=title,
+            source_text=article.read_text(encoding="utf-8"),
+            source_path=article,
+            kernel_path=kernel_path,
+        )
+        return {
+            "page": page,
+            "title": title,
+            "status": cls.STATUS_PENDING,
+            "task_file": str(task_file),
+            "definitions": [],
+            "mechanisms_and_models": [],
+            "comparisons": [],
+            "case_studies": [],
+            "anti_patterns": [],
+        }
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(_subagent_worker, episodes))
-
+    @classmethod
+    def extract_batch_kernels(cls, episodes: List[Dict[str, Any]], ws: Any) -> List[Dict[str, Any]]:
+        """Collect kernels for a block: reuse extracted ones, export task-files for the rest."""
+        results = [cls.collect_kernel(ep["page"], ep["title"], ws) for ep in episodes]
         results.sort(key=lambda x: x["page"])
         return results
+
+    @staticmethod
+    def pending_pages(kernels: List[Dict[str, Any]]) -> List[int]:
+        """Episodes whose kernels are not yet Agent-extracted."""
+        return [
+            k["page"] for k in kernels
+            if k.get("status") in (KernelExtractor.STATUS_PENDING, "need-agent-article")
+        ]

@@ -36,42 +36,18 @@ from src.core.pipeline import (
     PipelineCoordinator,
     PipelineGateError,
     _STATUS_FILE,
-    classify_audio_error,
-    enrich_network_error,
-    export_transcribe_task,
-    format_412,
+    export_article_task,
     get_audio_stream,
-    is_412,
     parse_range_string,
-    record_412_status,
     resolve_target_info,
 )
-from src.generator.cleaner import TextCleaner
-from src.generator.doc_builder import DocumentBuilder
 from src.generator.topic_planner import SemanticTopicPlanner
 from src.generator.block_synthesizer import BlockSynthesizer
-
-
-# ---- 向后兼容别名：保持历史内部符号名可用（tests 与外部调用依赖） ----
-_format_412 = format_412
-_enrich_network_error = enrich_network_error
-_get_audio_stream = get_audio_stream
-_export_transcribe_task = export_transcribe_task
-_resolve_target_info = resolve_target_info
-_parse_range_string = parse_range_string
-_is_412 = is_412
-_record_412_status = record_412_status
-_classify_audio_error = classify_audio_error
 
 
 def _save_manifest_rel(ws, data):
     """保存清单（TaskWorkspace 原生相对路径化，保留兼容入口）。"""
     ws.save_manifest(data)
-
-
-def _load_manifest_abs(ws):
-    """加载清单并转回绝对路径（TaskWorkspace 原生支持，保留兼容入口）。"""
-    return ws.load_manifest(absolute=True)
 
 
 def _to_relative_str(val):
@@ -87,9 +63,8 @@ def _to_relative_str(val):
         return val
 
 
-
 def cmd_parse(args):
-    info = _resolve_target_info(
+    info = resolve_target_info(
         args.url,
         sessdata=args.sessdata,
         custom_task=getattr(args, "task", None),
@@ -150,7 +125,7 @@ def cmd_parse(args):
 
 
 def cmd_audio(args):
-    info = _resolve_target_info(args.url, sessdata=args.sessdata, custom_task=args.task, base_dir=args.base_dir)
+    info = resolve_target_info(args.url, sessdata=args.sessdata, custom_task=args.task, base_dir=args.base_dir)
     bvid = info["bvid"]
 
     # Initialize Task Workspace
@@ -170,7 +145,7 @@ def cmd_audio(args):
     if is_batch and info["has_multi_pages"]:
         all_parts = info["parts"]
         if args.range:
-            target_indices = _parse_range_string(args.range, len(all_parts))
+            target_indices = parse_range_string(args.range, len(all_parts))
             selected_parts = [all_parts[i - 1] for i in target_indices]
         else:
             selected_parts = all_parts
@@ -220,7 +195,7 @@ def cmd_audio(args):
                     }
                 else:
                     # 中文注释：统一走 412 富化入口
-                    stream_info = _get_audio_stream(
+                    stream_info = get_audio_stream(
                         bvid,
                         p["cid"],
                         sessdata=args.sessdata,
@@ -299,7 +274,7 @@ def cmd_audio(args):
     else:
         print(f"[*] 解析音频流中... BV: {bvid}, CID: {target_cid}")
         # 中文注释：统一走 412 富化入口
-        stream_info = _get_audio_stream(
+        stream_info = get_audio_stream(
             bvid,
             target_cid,
             sessdata=args.sessdata,
@@ -345,155 +320,28 @@ def cmd_audio(args):
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-def cmd_clean(args):
-    in_path = Path(args.file).resolve()
-    if not in_path.exists():
-        print(f"[-] 文件不存在: {in_path}", file=sys.stderr)
-        return
-    text = in_path.read_text(encoding="utf-8")
-    cleaned_res = TextCleaner.clean(text)
-    print(f"[*] 清洗统计: 原始长度={cleaned_res['original_length']}, 清洗后={cleaned_res['cleaned_length']}, 压缩率={cleaned_res['compression_ratio']}%")
-
-    if args.output:
-        out_path = Path(args.output).resolve()
-        out_path.write_text(cleaned_res["cleaned_text"], encoding="utf-8")
-        print(f"[✓] 清洗后文本已保存至: {out_path}")
-    else:
-        print("-" * 50)
-        print(cleaned_res["cleaned_text"][:500] + "...")
-
-
-def cmd_prompt(args):
-    info = _resolve_target_info(args.url, sessdata=args.sessdata)
-    title = info["title"]
-    req_page = args.page if args.page is not None else (info.get("url_page") or 1)
-    part_title = "P1"
-    if info["has_multi_pages"] and req_page > 0:
-        p_idx = max(1, min(req_page, len(info["parts"])))
-        part_title = f"P{p_idx:02d} {info['parts'][p_idx - 1]['title']}"
-
-    content = "[请在此处填入转录文本或将音频直接提供给模型]"
-    if args.transcript_file:
-        content = Path(args.transcript_file).read_text(encoding="utf-8")
-
-    note_type = getattr(args, "note_type", "auto")
-    prompts = DocumentBuilder.render_prompts(
-        title=title,
-        part_title=part_title,
-        content=content,
-        note_type=note_type,
-        desc=info.get("desc", ""),
-    )
-
-    if args.type == "note":
-        print(prompts["note_prompt"])
-    elif args.type == "article":
-        print(prompts["article_prompt"])
-    elif args.type == "rectify":
-        print(prompts["rectify_prompt"])
-    else:
-        print(f"=== 【自适应笔记 Prompt (识别分类: {prompts['note_type']} | 原因: {prompts['classify_reason']})】 ===")
-        print(prompts["note_prompt"])
-        print("\n=== 【精读文章生成 Prompt】 ===")
-        print(prompts["article_prompt"])
-        print("\n=== 【ASR 语义字面校对 Prompt】 ===")
-        print(prompts["rectify_prompt"])
-
-
-def cmd_note(args):
-    info = _resolve_target_info(
-        args.url,
-        sessdata=args.sessdata,
-        custom_task=getattr(args, "task", None),
-        base_dir=getattr(args, "base_dir", "output"),
-    )
-    title = info["title"]
-    part_title = ""
-    target_cid = info["cid"]
-    req_page = args.page if args.page is not None else (info.get("url_page") or 1)
-
-    if info["has_multi_pages"] and req_page > 0:
-        p_idx = max(1, min(req_page, len(info["parts"])))
-        part_title = f"P{p_idx:02d} {info['parts'][p_idx - 1]['title']}"
-        target_cid = info["parts"][p_idx - 1]["cid"]
-
-    content = ""
-    if args.transcript_file:
-        t_path = Path(args.transcript_file).resolve()
-        if t_path.exists():
-            content = t_path.read_text(encoding="utf-8")
-        else:
-            print(f"[-] 转录文件未找到: {t_path}", file=sys.stderr)
-            return
-    else:
-        # 中文注释：字幕已移除；未提供转录文件时导出空模板/骨架提示词任务书，并警告提示
-        print("[!] 警告: 未指定转录文本文件 (--transcript-file)。", file=sys.stderr)
-        print("[*] 正在基于视频元数据与简介生成笔记任务书骨架...", file=sys.stderr)
-        print(f"[*] 提示: 若需高质量知识点提取，建议先跑 pipeline 转录后再生成完整笔记：", file=sys.stderr)
-        print(f"    python src/cli.py pipeline \"{args.url}\"", file=sys.stderr)
-        content = f"视频简介: {info.get('desc', '')}\n\n该视频时长 {info.get('duration', 0)} 秒，未挂载完整转录语料（仅元数据骨架模式）。"
-
-    # Clean content if available
-    if len(content) > 50:
-        content = TextCleaner.clean(content)["cleaned_text"]
-
-    prompts = DocumentBuilder.render_prompts(
-        title=title,
-        part_title=part_title,
-        content=content,
-        note_type=args.note_type,
-        desc=info.get("desc", ""),
-    )
-
-    ws = TaskWorkspace.create(
-        title=title,
-        bvid=info["bvid"],
-        custom_name=getattr(args, "task", None),
-        base_dir=getattr(args, "base_dir", "output"),
-    )
-
-    out_dir = Path(args.output).resolve() if args.output else ws.notes_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-    clean_title = sanitize_filename(title)
-    # 中文注释：不写伪笔记，仅导出笔记任务书，由对话模型原生撰写
-    if info["has_multi_pages"] and req_page > 0:
-        p_idx = max(1, min(req_page, len(info["parts"])))
-        p_clean = sanitize_filename(info["parts"][p_idx - 1]["title"])
-        out_file = out_dir / f"P{p_idx:02d}_{info['bvid']}_{p_clean}_NOTE_TASK.md"
-    else:
-        out_file = out_dir / f"{info['bvid']}_{clean_title}_NOTE_TASK.md"
-    out_file.write_text(prompts["note_prompt"], encoding="utf-8")
-    print(f"[✓] 笔记任务书已导出（待对话模型原生撰写）: {out_file}")
-
-
 def cmd_transcribe(args):
-    # 中文注释：转录唯一路径=对话模型原生。存在 _clean.txt 即缓存命中复用，否则导出 TRANSCRIBE_TASK。
+    # 中文注释：零中间逐字稿 —— 直接导出单集精读文章任务书（已存在长文则视为完成）。
     target_p = Path(args.target).resolve()
     if target_p.exists() and target_p.is_file():
         ws0 = TaskWorkspace.create(title=target_p.stem, bvid="", custom_name=args.task, base_dir=args.base_dir)
-        cached = None
-        for cand in (
-            ws0.subtitles_dir / f"{target_p.stem}_clean.txt",
-            ws0.subtitles_dir / f"P01_{target_p.stem}_clean.txt",
-        ):
-            if cand.exists() and cand.stat().st_size > 50:
-                cached = cand
-                break
-        if cached:
-            print(f"[✓] 转录缓存命中（清洗语料已存在）: {cached}")
+        # 该分支的任务书落盘名带 P01_ 前缀，复用判定须走宽容定位而非裸文件名
+        existing_article = KernelExtractor.find_article(ws0, 1)
+        if existing_article is not None and existing_article.stat().st_size >= 1000:
+            print(f"[✓] 单集精读长文已存在，无需重新派发: {existing_article}")
             if args.output:
                 out_p = Path(args.output).resolve()
                 out_p.parent.mkdir(parents=True, exist_ok=True)
-                out_p.write_text(cached.read_text(encoding="utf-8"), encoding="utf-8")
-                print(f"[✓] 缓存语料已复制至: {out_p}")
+                out_p.write_text(existing_article.read_text(encoding="utf-8"), encoding="utf-8")
+                print(f"[✓] 长文已复制至: {out_p}")
             return
 
-        tf = _export_transcribe_task(ws0, 1, target_p.stem, target_p, title=target_p.stem)
-        print(f"[✓] 已导出转录任务书（支持 Antigravity 与 ChatGPT 原生多模态听音）: {tf} (status=need-agent-transcribe)")
+        tf = export_article_task(ws0, 1, target_p.stem, target_p, title=target_p.stem)
+        print(f"[✓] 已导出单集精读文章任务书（零中间逐字稿，听音后直接撰写）: {tf} (status=need-agent-article)")
         return
 
     # Polymorphically resolve metadata (Local directory course or Bilibili URL/BVID)
-    info = _resolve_target_info(args.target, sessdata=args.sessdata)
+    info = resolve_target_info(args.target, sessdata=args.sessdata)
     bvid = info["bvid"]
     ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
 
@@ -508,14 +356,16 @@ def cmd_transcribe(args):
         p_title = matched["title"]
 
     clean_p_title = sanitize_filename(p_title)
-    transcript_clean_file = ws.subtitles_dir / f"P{target_part:02d}_{clean_p_title}_clean.txt"
-    if transcript_clean_file.exists() and transcript_clean_file.stat().st_size > 50:
-        print(f"[✓] 转录缓存命中（清洗语料已存在）: {transcript_clean_file}")
+    article_file = ws.articles_dir / f"P{target_part:02d}_{clean_p_title}_精读文章.md"
+    # 复用判定走宽容定位，兼容历史工作区无 _精读文章 后缀的长文
+    existing_article = KernelExtractor.find_article(ws, target_part)
+    if existing_article is not None and existing_article.stat().st_size >= 1000:
+        print(f"[✓] 单集精读长文已存在，无需重新派发: {existing_article}")
         if args.output:
             out_p = Path(args.output).resolve()
             out_p.parent.mkdir(parents=True, exist_ok=True)
-            out_p.write_text(transcript_clean_file.read_text(encoding="utf-8"), encoding="utf-8")
-            print(f"[✓] 缓存语料已复制至: {out_p}")
+            out_p.write_text(existing_article.read_text(encoding="utf-8"), encoding="utf-8")
+            print(f"[✓] 长文已复制至: {out_p}")
         return
 
     audio_file = ws.audio_dir / f"P{target_part:02d}_{clean_p_title}.m4a"
@@ -529,7 +379,7 @@ def cmd_transcribe(args):
         else:
             print(f"[*] 音频未缓存，正在下载 P{target_part:02d} 音频...")
             # 中文注释：统一走 412 富化入口
-            stream_info = _get_audio_stream(
+            stream_info = get_audio_stream(
                 bvid,
                 target_cid,
                 sessdata=args.sessdata,
@@ -537,8 +387,8 @@ def cmd_transcribe(args):
             )
             AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
 
-    tf = _export_transcribe_task(ws, target_part, clean_p_title, audio_file, title=info["title"], cid=target_cid)
-    print(f"[✓] 已导出转录任务书（支持 Antigravity 与 ChatGPT 原生多模态听音）: {tf} (status=need-agent-transcribe)")
+    tf = export_article_task(ws, target_part, clean_p_title, audio_file, title=info["title"], cid=target_cid)
+    print(f"[✓] 已导出单集精读文章任务书（零中间逐字稿，听音后直接撰写）: {tf} (status=need-agent-article)")
 
 
 def cmd_pipeline(args):
@@ -555,16 +405,16 @@ def cmd_pipeline(args):
             process_all=args.all,
             force=args.force,
             prefetch_workers=args.prefetch_workers,
-            transcribe_episodes=args.transcribe_episodes,
             skip_failed=args.skip_failed,
             quality=args.quality,
+            chunk_minutes=getattr(args, "chunk_minutes", 60),
         )
     except PipelineGateError as gate:
         sys.exit(gate.exit_code)
 
 
 def cmd_cluster_notes(args):
-    info = _resolve_target_info(
+    info = resolve_target_info(
         args.url,
         sessdata=args.sessdata,
         custom_task=getattr(args, "task", None),
@@ -579,15 +429,32 @@ def cmd_cluster_notes(args):
     print(f"[*] 任务工作区: {ws.root_dir}")
     print("=" * 65)
 
-    # 1. Semantic Topic Planner (Pure LLM semantic reasoning, zero regex)
-    print(f"\n[Phase 1/3] 启动大模型语义规划器，识别课程全局知识块边界...")
+    # 1. Semantic Topic Planner：规划由宿主 Agent 语义产出（零本地关键词聚类）
+    print(f"\n[Phase 1/3] 收集语料摘要并校验知识块规划...")
     summaries = {}
     for p in info["parts"]:
         p_num = p["page"]
+        art = KernelExtractor.find_article(ws, p_num)
+        if art is not None:
+            try:
+                summaries[p_num] = art.read_text(encoding="utf-8")[:400]
+            except Exception:
+                pass
+    for p in info["parts"]:
+        p_num = p["page"]
+        if p_num in summaries:
+            continue
         clean_t = sanitize_filename(p["title"])
         clean_f = ws.subtitles_dir / f"P{p_num:02d}_{clean_t}_clean.txt"
         if clean_f.exists() and clean_f.stat().st_size > 50:
             summaries[p_num] = clean_f.read_text(encoding="utf-8")[:300]
+
+    if not summaries:
+        print("=" * 65)
+        print("[!] 当前工作区尚无任何语料（articles/ 与 subtitles/ 均为空）。")
+        print("[*] 请先让 Agent 完成单集长文（articles/PXX_*_精读文章.md），再运行 cluster-notes。")
+        print("=" * 65)
+        sys.exit(2)
 
     plan = SemanticTopicPlanner.plan(
         info["parts"],
@@ -596,7 +463,16 @@ def cmd_cluster_notes(args):
         force=args.force_plan,
         transcript_summaries=summaries,
     )
-    print(f"[✓] 全局拓扑规划完成，共提炼出 {len(plan)} 个逻辑知识块:")
+    if not plan:
+        print("=" * 65)
+        print("[!] 知识块规划尚未产出：已导出规划任务书，等待宿主 Agent 完成语义规划。")
+        print(f"[*] 任务书   : {ws.root_dir / 'topic_plan_TASK.md'}")
+        print(f"[*] 目标文件 : {ws.root_dir / 'topic_plan.json'}")
+        print("[*] 完成后重跑本命令即可继续（校验通过会自动复用）。")
+        print("=" * 65)
+        sys.exit(2)
+
+    print(f"[✓] 知识块规划已就绪，共 {len(plan)} 个逻辑知识块:")
     for b in plan:
         eps = b["episodes"]
         p_str = f"P{min(eps):02d}-P{max(eps):02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
@@ -663,12 +539,16 @@ def cmd_cluster_notes(args):
         p_str = f"P{min(eps):02d}-P{max(eps):02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
         print(f"\n▶ 正在处理模块 {b_id:02d} ({p_str}): 《{b['block_title']}》...")
 
-        # Subagent parallel extraction
+        # 知识元：优先复用 Agent 已产出，缺失则导出 KERNEL_TASK 并跳过本模块
         block_parts = [p for p in info["parts"] if p["page"] in eps]
-        kernels = KernelExtractor.extract_batch_kernels(block_parts, ws=ws, max_workers=min(len(block_parts), 5))
-        print(f"    [✓] 子智能体已并发抽取 {len(kernels)} 集知识元（已剥离头尾客套与过渡噪声）")
+        kernels = KernelExtractor.extract_batch_kernels(block_parts, ws=ws)
+        pending = KernelExtractor.pending_pages(kernels)
+        if pending:
+            print(f"    [gate] {len(pending)} 集待 Agent 抽取知识元（KERNEL_TASK 已导出），跳过本模块笔记合成")
+            continue
+        print(f"    [✓] 已复用 {len(kernels)} 集 Agent 产出的知识元")
 
-        # Main agent synthesis
+        # 主 Agent 融合任务书导出
         res = BlockSynthesizer.synthesize_block(b, kernels, ws=ws, force=args.force, style=style)
         block_results.append(res)
 
@@ -689,7 +569,7 @@ def cmd_cluster_articles(args):
     """Consolidates single-episode articles in articles/ into modular chapter textbooks in textbooks/."""
     from src.generator.integrator import ArticleIntegrator
 
-    info = _resolve_target_info(
+    info = resolve_target_info(
         args.url,
         sessdata=args.sessdata,
         custom_task=getattr(args, "task", None),
@@ -719,6 +599,32 @@ def cmd_cluster_articles(args):
         size_kb = round(r.stat().st_size / 1024, 1)
         print(f"    - [{size_kb} KB] {r.name}")
     print(f"[✓] 单集微粒度文章保持完整: {ws.articles_dir} (未做任何删除)")
+    print("=" * 65)
+
+
+def cmd_dedup(args):
+    """Scans and synchronizes duplicate audio assets to save 100% of redundant LLM token costs."""
+    info = resolve_target_info(
+        args.url,
+        sessdata=args.sessdata,
+        custom_task=getattr(args, "task", None),
+        base_dir=getattr(args, "base_dir", "output"),
+    )
+    bvid = info["bvid"]
+    ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
+
+    print("=" * 65)
+    print(f"[*] 启动音频 SHA-256 指纹去重扫描流水线 (Audio Fingerprint Deduplication)")
+    print(f"[*] 任务工作区: {ws.root_dir}")
+    print("=" * 65)
+
+    synced = ws.sync_duplicate_assets(dry_run=args.dry_run)
+    if synced:
+        print(f"\n[✓] 发现并同步了 {len(synced)} 组重复音频资产 (0 Token 消耗):")
+        for item in synced:
+            print(f"    - P{item['src_page']:02d} ──► P{item['dst_page']:02d} [Hash: {item['hash']}] (字幕: {item['synced_sub']}, 文章: {item['synced_art']})")
+    else:
+        print("\n[✓] 未发现需要同步的重复分集（所有音频独一无二或已全部同步就绪）。")
     print("=" * 65)
 
 
@@ -812,34 +718,8 @@ def main():
     p_audio.add_argument("--chunk-minutes", type=int, default=10, help="Split audio into balanced chunks of ~N minutes (0=disabled)")
     p_audio.add_argument("--json", action="store_true", help="Output in JSON format")
 
-    # 中文注释：subtitle 子命令已移除，统一走转录；subtitles/ 目录仅作转录语料存储
-    # clean
-    p_clean = subparsers.add_parser("clean", help="Clean transcript text")
-    p_clean.add_argument("file", help="Raw transcript file path")
-    p_clean.add_argument("--output", help="Cleaned output file path", default=None)
-
-    # prompt
-    p_prompt = subparsers.add_parser("prompt", help="Render Agent prompt templates")
-    p_prompt.add_argument("url", help="Bilibili URL/BV ID or local media path")
-    p_prompt.add_argument("--page", type=int, default=None, help="Page index (auto-detects ?p=X from URL if omitted)")
-    p_prompt.add_argument("--transcript-file", help="Path to transcript file")
-    p_prompt.add_argument("--type", choices=["note", "article", "rectify", "both"], default="both")
-    p_prompt.add_argument("--note-type", choices=["auto", "study", "news", "general"], default="auto", help="Adaptive note category")
-    p_prompt.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
-
-    # note
-    p_note = subparsers.add_parser("note", help="Export note task-file (Agent-native authoring) directly")
-    p_note.add_argument("url", help="Bilibili URL/BV ID or local media path")
-    p_note.add_argument("--page", type=int, default=None, help="Page index (auto-detects ?p=X from URL if omitted)")
-    p_note.add_argument("--task", default=None, help="Custom task workspace folder name")
-    p_note.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
-    p_note.add_argument("--transcript-file", help="Path to transcript file", default=None)
-    p_note.add_argument("--note-type", choices=["auto", "study", "news", "general"], default="auto", help="Adaptive note category")
-    p_note.add_argument("--output", default=None, help="Optional explicit output directory override")
-    p_note.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
-
     # transcribe
-    p_tr = subparsers.add_parser("transcribe", help="Export TRANSCRIBE_TASK or reuse cached clean transcript (dialogue-model native only)")
+    p_tr = subparsers.add_parser("transcribe", help="Export per-episode ARTICLE_TASK (zero intermediate transcript)")
     p_tr.add_argument("target", help="Bilibili URL/BVID, local audio file, or local video file")
     p_tr.add_argument("--page", type=int, default=None, help="Page index for Bilibili video or local course (auto-detects ?p=X from URL if omitted)")
     p_tr.add_argument("--task", default=None, help="Custom task workspace folder name")
@@ -854,13 +734,12 @@ def main():
     p_pipe.add_argument("--all", action="store_true", help="Process all episodes in multi-P collection or local course directory")
     p_pipe.add_argument("--range", default=None, help="Episode range to process (e.g. 1-10, 1,3,5)")
     p_pipe.add_argument("--quality", choices=["low", "medium", "high"], default="low", help="Audio quality (low=64k speech default, medium=132k, high=192k)")
-    p_pipe.add_argument("--note-type", choices=["auto", "study", "news", "general"], default="auto", help="Note category")
     p_pipe.add_argument("--task", default=None, help="Custom task workspace folder name")
     p_pipe.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
     p_pipe.add_argument("--force", action="store_true", help="Force re-transcribing and re-generating even if exists")
     p_pipe.add_argument("--prefetch-workers", type=int, default=12, help="Parallel audio prefetch (download/extract) threads")
-    p_pipe.add_argument("--transcribe-episodes", type=int, default=2, help="Episodes transcribed concurrently (each uses chunk-level pool internally)")
     p_pipe.add_argument("--skip-failed", action="store_true", default=False, help="Explicit opt-in: exempt failed episodes from transcription gate (recorded in manifest skip list)")
+    p_pipe.add_argument("--chunk-minutes", type=int, default=60, help="Split audio into chunks of ~N minutes (0=disabled, default=60)")
     p_pipe.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
 
     # info / agent-info
@@ -895,6 +774,14 @@ def main():
     p_ca.add_argument("--force", action="store_true", help="Force re-integrating modular textbooks")
     p_ca.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
 
+    # dedup
+    p_dd = subparsers.add_parser("dedup", help="Scan and synchronize duplicate audio assets to save LLM tokens")
+    p_dd.add_argument("url", help="Bilibili URL, BV ID, or local media path")
+    p_dd.add_argument("--task", default=None, help="Custom task workspace folder name")
+    p_dd.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_dd.add_argument("--dry-run", action="store_true", help="Only check for duplicates without copying files")
+    p_dd.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
+
     args = parser.parse_args()
     if not args.subcommand:
         parser.print_help()
@@ -903,13 +790,11 @@ def main():
     dispatch = {
         "parse": cmd_parse,
         "audio": cmd_audio,
-        "clean": cmd_clean,
-        "prompt": cmd_prompt,
-        "note": cmd_note,
         "transcribe": cmd_transcribe,
         "pipeline": cmd_pipeline,
         "cluster-notes": cmd_cluster_notes,
         "cluster-articles": cmd_cluster_articles,
+        "dedup": cmd_dedup,
         "agent-info": cmd_agent_info,
         "info": cmd_info,
     }

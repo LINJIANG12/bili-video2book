@@ -13,6 +13,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from .local_media import PROBE_TIMEOUT_SEC, TRANSCODE_TIMEOUT_SEC
+
 SUPPORTED_VIDEO_EXTS = {
     ".mp4", ".mkv", ".mov", ".avi", ".flv", ".wmv", ".webm", ".ts", ".m4v", ".rmvb"
 }
@@ -31,7 +33,7 @@ class AudioChunker:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(audio_filepath),
             ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
             if res.returncode == 0 and res.stdout.strip():
                 try:
                     return float(res.stdout.strip())
@@ -42,7 +44,7 @@ class AudioChunker:
         ffmpeg_bin = shutil.which("ffmpeg")
         if ffmpeg_bin:
             cmd = [ffmpeg_bin, "-i", str(audio_filepath)]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
             output = res.stderr
             # Parse Duration: 00:40:09.12
             import re
@@ -143,7 +145,12 @@ class AudioChunker:
                 "-avoid_negative_ts", "make_zero",
                 str(chunk_path),
             ]
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            try:
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=TRANSCODE_TIMEOUT_SEC)
+            except subprocess.TimeoutExpired as err:
+                raise RuntimeError(
+                    f"FFmpeg 音频切片超时（>{TRANSCODE_TIMEOUT_SEC}s）：第 {index} 段切片失败。"
+                ) from err
 
             chunks.append({
                 "chunk_index": index,
@@ -165,6 +172,3 @@ class AudioChunker:
         minutes = (s % 3600) // 60
         secs = s % 60
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-
-    # Alias for method compatibility
-    format_time = format_seconds
