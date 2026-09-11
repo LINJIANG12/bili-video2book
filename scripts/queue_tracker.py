@@ -19,27 +19,30 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def get_task_workspace(custom_path: Optional[str] = None, pattern: Optional[str] = None) -> Path:
-    """Locate the target task workspace under output directory or custom path."""
+def get_task_workspace(
+    custom_path: Optional[str] = None,
+    pattern: Optional[str] = None,
+    base_dir: Optional[str] = None,
+) -> Path:
+    """定位目标任务工作区：显式 --dir > --base-dir > 产物根（<home>/output）。
+
+    产物根由 `src/core/paths.py` 解析（$BVB_OUTPUT_DIR / $BVB_HOME / .bvb-home 标记），
+    因此从任意工作目录调用都能找到同一批工作区，不再依赖当前目录下是否存在 output/。
+    """
     if custom_path:
         p = Path(custom_path).resolve()
         if p.exists():
             return p
         raise FileNotFoundError(f"Specified workspace directory does not exist: {custom_path}")
 
-    # Search in ./output or ../output
-    candidates = [
-        Path("./output").resolve(),
-        Path(__file__).resolve().parent.parent / "output",
-    ]
-    out_dir = None
-    for c in candidates:
-        if c.exists() and c.is_dir():
-            out_dir = c
-            break
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from src.core.paths import resolve_base_dir
 
-    if not out_dir:
-        raise RuntimeError("No 'output' directory found in current working path or project root.")
+    out_dir = resolve_base_dir(base_dir)
+    if not (out_dir.exists() and out_dir.is_dir()):
+        raise RuntimeError(
+            f"产物根不存在: {out_dir}（可用 --base-dir 指定，或设置 ${'BVB_OUTPUT_DIR'}）"
+        )
 
     # Find directories that contain parts.json or manifest.json
     valid_dirs = [
@@ -224,6 +227,8 @@ def scan_status(ws: Path, min_article_bytes: int = 1000) -> Dict:
 def main():
     parser = argparse.ArgumentParser(description="Real-time Dynamic Queue Tracker (Sliding Window Dispatch)")
     parser.add_argument("--dir", default=None, help="Path to task workspace")
+    parser.add_argument("--base-dir", default=None,
+                        help="产物根（默认：由 src/core/paths.py 解析，即 <home>/output）")
     parser.add_argument("--pattern", default=None, help="Workspace directory name keyword filter")
     parser.add_argument("--next", type=int, default=0, dest="next_n", help="Show next N pending episodes for dispatch")
     parser.add_argument("--json", action="store_true", help="Output in JSON format")
@@ -231,7 +236,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        ws = get_task_workspace(args.dir, pattern=args.pattern)
+        ws = get_task_workspace(args.dir, pattern=args.pattern, base_dir=args.base_dir)
         status = scan_status(ws)
     except Exception as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)

@@ -137,8 +137,8 @@ def reconcile_workspace_manifest(
     }
 
 
-def reconcile_all(base_dir: Any = "output", dry_run: bool = False) -> List[Dict[str, Any]]:
-    """对 base_dir 下所有工作区逐一执行对账。"""
+def reconcile_all(base_dir: Any = None, dry_run: bool = False) -> List[Dict[str, Any]]:
+    """对 base_dir 下所有工作区逐一执行对账（base_dir 为空即产物根）。"""
     from .task_cleanup import find_workspaces
 
     return [

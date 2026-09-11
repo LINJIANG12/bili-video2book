@@ -1,8 +1,9 @@
 """B 站登录凭证（SESSDATA）的本地持久化存储。
 
 设计约束：
-- 落盘位置固定为 <仓库根>/output/.sessdata.json：该目录已被 .gitignore 整体排除，
-  且 .gitignore 另有一条显式规则兜底，绝不随代码进入版本库；
+- 落盘位置固定为**产物根**下的 `.sessdata.json`（默认 `<home>/output/.sessdata.json`）：
+  三域分离后产物根位于本仓库之外，凭证**不可能**随代码进入版本库；两仓库的 .gitignore
+  另有一条显式规则兜底，防止有人把产物根搬回仓库内；
 - 只存 SESSDATA 一项，不存任何其他 Cookie 或账号信息；
 - 写入时尽力收紧文件权限（POSIX 0600），降低同机其他用户读取的可能；
 - 命令行显式传入的 --sessdata 优先级永远高于本地存档。
@@ -14,15 +15,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
-# 本文件位于 <仓库根>/src/core/ 下，向上两级即仓库根
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+from . import paths as _paths
 
 DEFAULT_STORE_NAME = ".sessdata.json"
 
 
 def store_path() -> Path:
     """凭证存档的规范路径（恒定，不随当前所在目录变化）。"""
-    return _REPO_ROOT / "output" / DEFAULT_STORE_NAME
+    return _paths.products_root() / DEFAULT_STORE_NAME
 
 
 class SessdataStore:

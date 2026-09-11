@@ -1,22 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Minimal runnable self-check for the bili-video2book + omni-media-mcp toolchain.
+"""Minimal runnable self-check for the bili-video2book skill repo (三域分离后的技能侧自检).
 
 Not a test framework: a flat sequence of assertions covering the invariants that
 matter after the architecture refactor (Agent-native kernel/plan chain, zero
-intermediate transcript, no dead modules, MCP error contract).
+intermediate transcript, no dead modules) **plus the three-domain separation
+contract**: skill/ 与 mcp/ 各自独立仓库、产物根在两者之外、CLI 不依赖当前工作目录。
+
+MCP 自身的不变量由其独立仓库的 `mcp/selfcheck.py` 负责；本脚本只在同级存在 mcp/
+时以子进程方式调用它（可选段落，缺失即跳过，技能侧不依赖 MCP 仓库）。
 
 Run: python scripts/selfcheck.py
 """
 
-import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+# 代码根（skill/）：文档、源码、脚本的基准
+SKILL_ROOT = Path(__file__).resolve().parent.parent
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+
+from src.core import paths as _paths  # noqa: E402
+
+# 容器根（skill/、mcp/、output/ 的共同父目录）与产物根
+HOME_ROOT = _paths.home_root()
+PRODUCTS_ROOT = _paths.products_root()
+MCP_REPO = Path(os.environ.get("OMNI_MEDIA_MCP_DIR", "").strip() or (HOME_ROOT / "mcp"))
 
 FAILURES = []
 
@@ -32,24 +44,122 @@ def check(name, fn):
 
 def check_imports():
     import src.cli  # noqa: F401
+    import src.core.paths  # noqa: F401
     import src.core.pipeline  # noqa: F401
     import src.core.kernel_extractor  # noqa: F401
     import src.core.workspace  # noqa: F401
     import src.generator.topic_planner  # noqa: F401
     import src.generator.integrator  # noqa: F401
     import src.generator.block_synthesizer  # noqa: F401
-    import omni_media_mcp.server  # noqa: F401
 
 
 def check_cli_help():
     for sub in ("parse", "audio", "transcribe",
                 "pipeline", "cluster-notes", "cluster-articles", "dedup",
-                "login", "logout", "info"):
+                "cleanup", "sync", "login", "logout", "info"):
         res = subprocess.run(
-            [sys.executable, str(PROJECT_ROOT / "src" / "cli.py"), sub, "--help"],
+            [sys.executable, str(SKILL_ROOT / "src" / "cli.py"), sub, "--help"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60,
         )
         assert res.returncode == 0, f"`{sub} --help` 退出码 {res.returncode}: {res.stderr[:200]}"
+
+
+def check_repo_separation():
+    """三域分离契约：skill/ 与 mcp/ 各自独立仓库，产物根在两者之外，容器根不再是仓库。"""
+    assert (SKILL_ROOT / ".git").is_dir(), "skill/ 应是独立 git 仓库（缺 .git）"
+    assert (SKILL_ROOT / ".gitattributes").is_file(), "skill/ 缺少 .gitattributes（行尾契约）"
+
+    # 容器根不应是 git 仓库（拆分后由两个独立仓库各自管理）
+    assert not (HOME_ROOT / ".git").is_dir(), f"容器根不应再有 .git: {HOME_ROOT / '.git'}"
+
+    # 产物根必须位于两个仓库工作树之外，避免产物被误提交
+    for repo_name, repo_root in (("skill", SKILL_ROOT), ("mcp", HOME_ROOT / "mcp")):
+        if not repo_root.exists():
+            continue
+        try:
+            PRODUCTS_ROOT.relative_to(repo_root)
+        except ValueError:
+            continue
+        raise AssertionError(f"产物根 {PRODUCTS_ROOT} 位于 {repo_name} 仓库工作树内")
+
+    if (HOME_ROOT / "mcp").exists():
+        assert (HOME_ROOT / "mcp" / ".git").is_dir(), "mcp/ 应是独立 git 仓库（缺 .git）"
+        assert not (SKILL_ROOT / "omni-media-mcp").exists(), "skill/ 内不应再残留 omni-media-mcp/"
+
+    # 产物根必须存在且能枚举出工作区（否则说明锚点解析跑偏）
+    assert PRODUCTS_ROOT.is_dir(), f"产物根不存在: {PRODUCTS_ROOT}"
+
+
+def check_products_root_resolution():
+    """产物根解析：与拆分前的锚点等价（<home>/output），且不随当前工作目录漂移。"""
+    expected = HOME_ROOT / "output"
+    assert PRODUCTS_ROOT == expected, f"产物根解析异常: {PRODUCTS_ROOT} != {expected}"
+    assert _paths.resolve_base_dir(None) == expected, "空 --base-dir 未解析到产物根"
+    assert _paths.resolve_base_dir("") == expected, "空字符串 --base-dir 未解析到产物根"
+    assert _paths.default_base_dir() == str(expected), "default_base_dir 与产物根不一致"
+    # manifest 相对路径基准 = 容器根，因此历史 `output/<task>/...` 字面值继续有效
+    probe = expected / "__probe__" / "模块01_甲_精读全书.md"
+    assert _paths.__name__ and str(probe.relative_to(HOME_ROOT).as_posix()).startswith("output/")
+
+    # 跨工作目录一致性：从临时目录跑一次 CLI，产物根必须仍是同一个
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        code = (
+            "import sys; sys.path.insert(0, r'%s');"
+            "from src.core import paths; print(paths.products_root())" % SKILL_ROOT
+        )
+        res = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=tmp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
+        )
+        got = (res.stdout or "").strip().splitlines()[-1] if res.stdout else ""
+        assert got == str(expected), f"从其它工作目录解析出的产物根不一致: {got!r}"
+
+
+def check_no_cross_repo_imports():
+    """互不打扰：技能侧代码不得 import omni_media_mcp；MCP 侧不得 import src。"""
+    import ast as _ast
+    import re as _re
+
+    def _imported_modules(path: Path) -> set:
+        tree = _ast.parse(path.read_text(encoding="utf-8"))
+        names = set()
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Import):
+                for alias in node.names:
+                    names.add(alias.name.split(".")[0])
+            elif isinstance(node, _ast.ImportFrom):
+                if node.module and node.level == 0:
+                    names.add(node.module.split(".")[0])
+        return names
+
+    # 技能侧：允许在「注释/字符串」里提到 MCP，但不允许真的 import
+    offenders = []
+    for path in list((SKILL_ROOT / "src").rglob("*.py")) + list((SKILL_ROOT / "scripts").rglob("*.py")):
+        if "__pycache__" in path.parts or path.name == "selfcheck.py":
+            continue  # selfcheck 只以子进程方式调用 MCP 自检，不 import
+        if "omni_media_mcp" in _imported_modules(path):
+            offenders.append(path.relative_to(SKILL_ROOT).as_posix())
+    assert not offenders, f"技能侧不得 import MCP 包: {offenders}"
+
+    # 技能侧源码不得出现 omni_media_mcp 的 import 文本（防止动态 import 绕过）
+    for path in (SKILL_ROOT / "src").rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert not _re.search(r"^\s*(import|from)\s+omni_media_mcp", text, _re.M), \
+            f"{path.relative_to(SKILL_ROOT)} 出现了对 MCP 包的 import"
+
+    mcp_root = HOME_ROOT / "mcp"
+    if mcp_root.exists():
+        bad = []
+        for path in (mcp_root / "omni_media_mcp").rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            if "src" in _imported_modules(path):
+                bad.append(path.relative_to(mcp_root).as_posix())
+        assert not bad, f"MCP 侧不得 import 技能包 src: {bad}"
 
 
 def check_kernel_extractor_contract():
@@ -89,7 +199,7 @@ def check_integrator_no_hardcoded_course():
 
     from src.generator.integrator import ArticleIntegrator
 
-    text = (PROJECT_ROOT / "src" / "generator" / "integrator.py").read_text(encoding="utf-8")
+    text = (SKILL_ROOT / "src" / "generator" / "integrator.py").read_text(encoding="utf-8")
     for needle in ("微机原理", "8253", "8255A", "黑马程序员", "核心语法-", "函数基础"):
         assert needle not in text, f"integrator.py 仍含硬编码课程数据: {needle}"
 
@@ -116,47 +226,32 @@ def check_subprocess_timeouts():
     assert ac.TRANSCODE_TIMEOUT_SEC == lm.TRANSCODE_TIMEOUT_SEC
 
     for rel in ("src/core/local_media.py", "src/core/audio_chunker.py"):
-        text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
         for line in text.splitlines():
             if "subprocess.run(" in line:
                 assert "timeout=" in line, f"{rel} 存在无超时的 subprocess.run: {line.strip()}"
 
 
-def check_mcp_tool_contract():
-    """MCP 工具契约：非法入参抛类型化异常，且废弃的云端委托链路必须已彻底移除。"""
-    from omni_media_mcp import server
-    from omni_media_mcp.core.limits import PROBE_TIMEOUT_SEC
+def check_mcp_repo_optional():
+    """可选段落：同级存在 mcp/ 独立仓库时，调用它自己的自检（技能侧不依赖 MCP）。
 
-    assert PROBE_TIMEOUT_SEC > 0
+    MCP 的全部不变量（工具契约、limits、适配器、废弃链路）由 `mcp/selfcheck.py` 负责，
+    避免两处断言各自漂移；找不到 MCP 仓库即跳过，不视为失败。
+    """
+    import subprocess as _sp
 
-    # 云端委托（需 API Key 的 read_media/ask_media/probe_models 及 provider/benchmark 层）
-    # 已废弃：宿主模型原生听音取代了它，这些入口必须不复存在。
-    for gone in ("read_media", "ask_media", "probe_models"):
-        assert not hasattr(server, gone), f"{gone} 属废弃的云端委托链路，应已移除"
-    for live in ("read_audio", "inspect_media"):
-        assert hasattr(server, live), f"{live} 是当前唯一入口，不得缺失"
+    entry = MCP_REPO / "selfcheck.py"
+    if not entry.is_file():
+        print(f"       (未发现 MCP 仓库自检 {entry}，跳过可选段落)")
+        return
 
-    missing = str(PROJECT_ROOT / "definitely-missing.m4a")
-    non_media = str(PROJECT_ROOT / "pyproject.toml")
-
-    async def _run():
-        cases = [
-            (server.read_audio(file_path=missing), FileNotFoundError),
-            (server.read_audio(file_path=non_media), ValueError),
-            (server.read_audio(file_path=non_media, output_mode="bogus"), ValueError),
-            (server.inspect_media(file_path=missing), FileNotFoundError),
-            (server.inspect_media(file_path=non_media), ValueError),
-        ]
-        for coro, expected in cases:
-            try:
-                await coro
-            except expected:
-                continue
-            except Exception as err:
-                raise AssertionError(f"期望 {expected.__name__}，实际 {type(err).__name__}: {err}")
-            raise AssertionError(f"非法入参未抛出 {expected.__name__}")
-
-    asyncio.run(_run())
+    res = _sp.run(
+        [sys.executable, str(entry)],
+        cwd=str(MCP_REPO), stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True, timeout=300,
+    )
+    tail = "\n".join((res.stdout or "").strip().splitlines()[-4:])
+    assert res.returncode == 0, f"mcp/selfcheck.py 未通过（exit {res.returncode}）:\n{tail}"
+    print(f"       (已调用 {entry})")
 
 
 def check_dead_modules_removed():
@@ -165,36 +260,47 @@ def check_dead_modules_removed():
         "src/generator/cleaner.py",
         "src/generator/classifier.py",
         "src/generator/doc_builder.py",
-        "omni-media-mcp/omni_media_mcp/installer.py",
-        "omni-media-mcp/omni_media_mcp/providers",
-        "omni-media-mcp/omni_media_mcp/benchmarks",
-        "omni-media-mcp/omni_media_mcp/prompts.py",
         "tests",
-        "omni-media-mcp/tests",
         "MCP_TOOL_AUDIT_REPORT.md",
         "config.example.json",
         "scripts/validate_skill.py",
+        # 三域分离后，MCP 的实现不再属于本仓库（其死代码断言见 mcp/selfcheck.py）
+        "omni-media-mcp",
     ):
-        assert not (PROJECT_ROOT / rel).exists(), f"{rel} 应已删除"
+        assert not (SKILL_ROOT / rel).exists(), f"{rel} 应已删除"
 
 
 def check_host_artifacts_ignored():
-    """宿主/编辑器旁路目录必须被 .gitignore 覆盖且从未入库。
+    """宿主/编辑器旁路目录与产物根都不得进入任一仓库。
 
-    .workbuddy、.zcode 这类目录由编辑器在会话中自动写入（含对话记忆），
-    既不该被"必须不存在"式断言约束（宿主会重建），也绝不能进入版本库。
+    .workbuddy、.zcode 这类目录由编辑器在会话中自动写入（含对话记忆）——三域分离后它们位于
+    容器根，不在任何仓库工作树内；产物根同理。这里同时验证「不在工作树内」这一结构事实，
+    以及两个仓库的 .gitignore 仍留有安全网条目（防止有人把产物根搬回仓库内）。
     """
     import subprocess as _sp
 
-    ignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
-    for name in (".workbuddy", ".aide", ".zcode", "output", ".sessdata.json"):
-        assert name in ignore, f"{name} 未被 .gitignore 覆盖"
+    ignore = (SKILL_ROOT / ".gitignore").read_text(encoding="utf-8")
+    for name in (".workbuddy", ".aide", ".zcode", "output", ".sessdata.json", ".archive"):
+        assert name in ignore, f"{name} 未被 skill/.gitignore 覆盖（安全网缺失）"
 
-    tracked = _sp.run(
-        ["git", "ls-files", "--", ".workbuddy", ".aide", ".zcode"],
-        cwd=str(PROJECT_ROOT), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
-    )
-    assert not tracked.stdout.strip(), f"宿主旁路目录已被纳入版本控制: {tracked.stdout.strip()}"
+    repos = [SKILL_ROOT] + ([HOME_ROOT / "mcp"] if (HOME_ROOT / "mcp" / ".git").is_dir() else [])
+    for repo in repos:
+        tracked = _sp.run(
+            ["git", "ls-files", "--", ".workbuddy", ".aide", ".zcode", "output", ".sessdata.json", ".archive"],
+            cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
+        )
+        assert not tracked.stdout.strip(), \
+            f"{repo.name} 仓库纳入了宿主旁路目录/产物: {tracked.stdout.strip()}"
+
+    # 结构事实：这些目录都在容器根（两仓库工作树之外）
+    for name in (".workbuddy", ".zcode", "output"):
+        assert (HOME_ROOT / name).exists() or name == ".zcode", f"容器根缺少 {name}"
+        for repo in repos:
+            try:
+                (HOME_ROOT / name).relative_to(repo)
+            except ValueError:
+                continue
+            raise AssertionError(f"{name} 位于 {repo.name} 仓库工作树内，应移到容器根")
 
 
 def check_skill_copies_in_sync():
@@ -204,7 +310,7 @@ def check_skill_copies_in_sync():
         ("references/delivery_matrix.md", ".agents/skills/bili-video2book/references/delivery_matrix.md"),
     ]
     for a, b in pairs:
-        pa, pb = PROJECT_ROOT / a, PROJECT_ROOT / b
+        pa, pb = SKILL_ROOT / a, SKILL_ROOT / b
         assert pa.exists() and pb.exists(), f"{a} 或 {b} 缺失"
         assert pa.read_text(encoding="utf-8") == pb.read_text(encoding="utf-8"), f"{a} 与 {b} 不同步"
 
@@ -266,7 +372,7 @@ def check_stage1_gate_ignores_task_files():
     """阶段一门禁只认最终长文：articles/ 里的任务书不得计入已完成。"""
     import tempfile
 
-    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+    sys.path.insert(0, str(SKILL_ROOT / "scripts"))
     from queue_tracker import scan_status
     from src.core.workspace import TaskWorkspace
 
@@ -363,25 +469,40 @@ def check_sessdata_store_safety():
     assert resolve_sessdata(secret) == secret, "显式传入未优先生效"
     assert resolve_sessdata("   ") == SessdataStore.load(), "空白显式值应回退到本地存档"
 
-    # 默认存档路径必须被 .gitignore 覆盖，且绝不能已进入版本库
-    assert DEFAULT_STORE_NAME in (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8"), \
-        f"{DEFAULT_STORE_NAME} 未被 .gitignore 覆盖"
-    tracked = _sp.run(
-        ["git", "ls-files", "--", DEFAULT_STORE_NAME],
-        cwd=str(PROJECT_ROOT), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
-    )
-    assert not tracked.stdout.strip(), f"凭证存档已被纳入版本控制: {tracked.stdout.strip()}"
+    # 默认存档路径：必须落在产物根（两仓库工作树之外），且 skill/.gitignore 留有安全网
+    assert DEFAULT_STORE_NAME in (SKILL_ROOT / ".gitignore").read_text(encoding="utf-8"), \
+        f"{DEFAULT_STORE_NAME} 未被 skill/.gitignore 覆盖（安全网缺失）"
     assert store_path().name == DEFAULT_STORE_NAME
+    assert store_path().parent == PRODUCTS_ROOT, \
+        f"凭证存档不在产物根: {store_path()} (期望目录 {PRODUCTS_ROOT})"
+    for repo in (SKILL_ROOT, HOME_ROOT / "mcp"):
+        if not (repo / ".git").is_dir():
+            continue
+        tracked = _sp.run(
+            ["git", "ls-files", "--", DEFAULT_STORE_NAME],
+            cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
+        )
+        assert not tracked.stdout.strip(), f"凭证存档已进入 {repo.name} 版本控制: {tracked.stdout.strip()}"
+        try:
+            store_path().relative_to(repo)
+        except ValueError:
+            continue
+        raise AssertionError(f"凭证存档位于 {repo.name} 仓库工作树内")
 
 
 def check_cache_paths_anchored():
-    """缓存/凭证文件路径必须锚定仓库根，不得随当前所在目录漂移。"""
+    """缓存/凭证文件路径必须锚定**产物根**，不得随当前所在目录漂移，也不得落回代码仓库。"""
     from src.core.credentials import store_path
     from src.core.wbi import WbiSigner
 
     for label, p in (("WBI 密钥", WbiSigner._解析密钥文件路径()), ("凭证存档", store_path())):
         assert p.is_absolute(), f"{label}路径不是绝对路径: {p}"
-        assert PROJECT_ROOT in p.parents, f"{label}路径未锚定仓库根: {p}"
+        assert PRODUCTS_ROOT in p.parents, f"{label}路径未锚定产物根: {p}"
+        assert SKILL_ROOT not in p.parents, f"{label}路径落在了代码仓库内: {p}"
+
+    # 显式传入的相对路径按容器根解析（兼容拆分前的 `output/.wbi_keys.json` 写法）
+    legacy = WbiSigner._解析密钥文件路径("output/.wbi_keys.json")
+    assert legacy == PRODUCTS_ROOT / ".wbi_keys.json", f"旧式相对路径解析异常: {legacy}"
 
 
 def check_render_compat_rules():
@@ -422,7 +543,7 @@ def check_render_compat_rules():
         "references/delivery_matrix.md",
         ".agents/skills/bili-video2book/references/delivery_matrix.md",
     ):
-        text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
         assert "Typora" in text, f"{rel} 未声明 Typora 阅读场景"
         assert "```text" in text, f"{rel} 未写入字符画围栏要求"
 
@@ -464,12 +585,12 @@ def check_module_note_contract():
     # 3) 旧版八种笔记风格必须已彻底删除（含标签与指令文案）
     for 已删除 in ("NOTE_STYLES", "minimal", "detailed", "academic", "tutorial",
                   "task_oriented", "business", "meeting_minutes", "life_journal"):
-        text = (PROJECT_ROOT / "src" / "generator" / "prompt_templates.py").read_text(encoding="utf-8")
+        text = (SKILL_ROOT / "src" / "generator" / "prompt_templates.py").read_text(encoding="utf-8")
         assert 已删除 not in text, f"prompt_templates.py 仍残留旧笔记风格痕迹：{已删除}"
 
     # 4) 任务书渲染：必须带上版式规范与语料清单
     block_meta = {"block_id": 3, "block_title": "关系数据库", "episodes": [6, 7], "core_theme": "关系模型"}
-    样例文章 = PROJECT_ROOT / "SKILL.md"  # 仅需一个存在的文件来渲染字节数
+    样例文章 = SKILL_ROOT / "SKILL.md"  # 仅需一个存在的文件来渲染字节数
     prompt = BlockSynthesizer.build_synthesis_prompt(block_meta, [样例文章])
     assert NOTE_VISUAL_SPEC in prompt, "任务书未注入版式规范"
     assert "SKILL.md" in prompt, "任务书未渲染语料清单"
@@ -628,7 +749,7 @@ def check_deliverable_lint_gate():
     from src.core.deliverable_lint import lint_render, summarize_render
     from src.core.task_cleanup import find_workspaces
 
-    workspaces = find_workspaces(PROJECT_ROOT / "output")
+    workspaces = find_workspaces(PRODUCTS_ROOT)
     if not workspaces:
         print("       (仓库内无 output/ 工作区，跳过真实产物门禁)")
         return
@@ -663,7 +784,7 @@ def check_docs_style_matrix_clean():
         "SKILL.md",
         "references/delivery_matrix.md",
     ):
-        text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
         low = text.lower()
         for 已删除 in ("minimal", "detailed"):
             assert 已删除 not in low, f"{rel} 仍残留已删除的笔记风格字样：{已删除}"
@@ -677,7 +798,7 @@ def check_delivery_matrix_article_types():
         "references/delivery_matrix.md",
         ".agents/skills/bili-video2book/references/delivery_matrix.md",
     ):
-        text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
         for key in ARTICLE_PROMPT_TYPES:
             assert f"`{key}`" in text, f"{rel} 的类型表缺少 {key} 行"
         assert "推荐" in text or "已提供（推荐" in text, f"{rel} 未标出推荐风格"
@@ -691,10 +812,10 @@ def check_version_consistency():
 
     import src
 
-    skill = (PROJECT_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     m_skill = _re.search(r"^\s*version:\s*([^\s]+)\s*$", skill, _re.M)
     assert m_skill, "SKILL.md 抬头缺少 version 字段"
-    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject = (SKILL_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     m_proj = _re.search(r'^version\s*=\s*"([^"]+)"', pyproject, _re.M)
     assert m_proj, "pyproject.toml 缺少 version"
     versions = {"SKILL.md": m_skill.group(1), "pyproject.toml": m_proj.group(1), "src.__version__": src.__version__}
@@ -706,14 +827,14 @@ def check_quality_gate_copy():
     from src.core.deliverable_lint import FATAL_NOTE_KEYS
 
     assert len(FATAL_NOTE_KEYS) == 5, f"致命项集合变化，文档需同步：{FATAL_NOTE_KEYS}"
-    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    readme = (SKILL_ROOT / "README.md").read_text(encoding="utf-8")
     for 中文标签 in ("套话填充", "空壳标题", "分集平铺标题", "行内残缺引用", "分集口吻"):
         assert 中文标签 in readme, f"README.md 质检说明缺少致命项：{中文标签}"
-    readme_en = (PROJECT_ROOT / "README.en.md").read_text(encoding="utf-8").lower()
+    readme_en = (SKILL_ROOT / "README.en.md").read_text(encoding="utf-8").lower()
     for 英文标签 in ("boilerplate", "hollow", "per-episode headings", "inline quote", "episode voice"):
         assert 英文标签 in readme_en, f"README.en.md 质检说明缺少致命项：{英文标签}"
     for rel in ("SKILL.md", "README.md", "README.en.md"):
-        text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
         assert "语言标识" in text or "language tag" in text.lower() or "language identifier" in text.lower(), \
             f"{rel} 未说明围栏语言标识的体检口径"
 
@@ -734,7 +855,7 @@ def check_manifest_paths_portable():
     drive_re = _re.compile(r"[A-Za-z]:[\\/]")
 
     # 仓库内路径：相对化后必须是纯相对、无盘符、无反斜杠
-    in_repo_rel = TaskWorkspace.to_relative(PROJECT_ROOT / "output" / "__probe__" / "模块01_甲_精读全书.md")
+    in_repo_rel = TaskWorkspace.to_relative(HOME_ROOT / "output" / "__probe__" / "模块01_甲_精读全书.md")
     assert in_repo_rel == "output/__probe__/模块01_甲_精读全书.md", f"仓库内路径相对化异常: {in_repo_rel}"
     assert not drive_re.search(in_repo_rel) and "\\" not in in_repo_rel
 
@@ -797,8 +918,9 @@ def check_no_hardcoded_machine_paths():
         return found
 
     扫描 = []
-    for 子目录 in ("src", "scripts", "omni-media-mcp"):
-        for path in (PROJECT_ROOT / 子目录).rglob("*.py"):
+    # MCP 侧（mcp/ 仓库）由它自己的 selfcheck.py 扫描，本仓库只负责技能侧
+    for 子目录 in ("src", "scripts"):
+        for path in (SKILL_ROOT / 子目录).rglob("*.py"):
             if path.name == "selfcheck.py":
                 continue
             if "__pycache__" in path.parts:
@@ -816,7 +938,7 @@ def check_no_hardcoded_machine_paths():
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
                 if drive_re.search(node.value):
-                    hits.append(f"{path.relative_to(PROJECT_ROOT).as_posix()}:{node.lineno}: {node.value[:70]}")
+                    hits.append(f"{path.relative_to(SKILL_ROOT).as_posix()}:{node.lineno}: {node.value[:70]}")
     assert not hits, "源码内存在硬编码本机绝对路径:\n      " + "\n      ".join(hits)
 
 
@@ -913,22 +1035,28 @@ def check_regression_fixes():
 
 def main():
     print("=" * 62)
-    print("bili-video2book / omni-media-mcp 自检")
+    print("bili-video2book 技能仓库自检（三域分离：skill / mcp / output）")
+    print(f"  代码根  : {SKILL_ROOT}")
+    print(f"  容器根  : {HOME_ROOT}")
+    print(f"  产物根  : {PRODUCTS_ROOT}")
     print("=" * 62)
     check("模块导入无 ImportError", check_imports)
     check("CLI 全部子命令 --help 可用", check_cli_help)
+    check("三域分离契约（仓库边界/产物在仓库外）", check_repo_separation)
+    check("产物根解析与 cwd 无关", check_products_root_resolution)
+    check("跨仓库不互引（skill ⇎ mcp）", check_no_cross_repo_imports)
     check("KernelExtractor 契约（无本地伪造抽取）", check_kernel_extractor_contract)
     check("SemanticTopicPlanner 契约（无启发式聚类）", check_topic_planner_contract)
     check("ArticleIntegrator 无硬编码课程数据", check_integrator_no_hardcoded_course)
     check("零中间逐字稿入口切换", check_zero_transcript_pipeline)
     check("子进程硬超时就位", check_subprocess_timeouts)
-    check("MCP 工具契约与废弃链路移除", check_mcp_tool_contract)
+    check("MCP 仓库自检（可选段落）", check_mcp_repo_optional)
     check("任务书导出门禁端到端", check_task_file_export_end_to_end)
     check("阶段一门禁不误认任务书", check_stage1_gate_ignores_task_files)
     check("重复分集免字幕复用", check_dedup_reuses_without_subtitles)
     check("SESSDATA 存档安全（脱敏/不入库）", check_sessdata_store_safety)
-    check("缓存与凭证路径锚定仓库根", check_cache_paths_anchored)
-    check("宿主旁路目录不入库", check_host_artifacts_ignored)
+    check("缓存与凭证路径锚定产物根", check_cache_paths_anchored)
+    check("宿主旁路目录与产物不入库", check_host_artifacts_ignored)
     check("交付物渲染兼容约束（Typora）", check_render_compat_rules)
     check("长文提示词风格契约（学习/旧版 + 未确认即终止）", check_article_prompt_types)
     check("模块笔记契约（文章直供/只写结论/版式规范/任务书回收）", check_module_note_contract)

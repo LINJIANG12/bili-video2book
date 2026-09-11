@@ -18,8 +18,7 @@ from functools import reduce
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-# 仓库根目录（默认缓存文件路径的锚定基准）
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+from . import paths as _paths
 
 
 class WbiSigner:
@@ -36,9 +35,9 @@ class WbiSigner:
         36, 20, 34, 44, 52
     ]
 
-    # 默认密钥文件（调用方可传入自定义路径覆盖）
-    默认密钥文件 = "output/.wbi_keys.json"
-    DEFAULT_KEYS_FILE = "output/.wbi_keys.json"
+    # 默认密钥文件名（调用方可传入自定义路径覆盖；路径由 paths.products_root() 决定）
+    默认密钥文件 = ".wbi_keys.json"
+    DEFAULT_KEYS_FILE = ".wbi_keys.json"
 
     # 内存缓存有效期（秒）与文件缓存有效期（秒）
     内存有效期 = 3600
@@ -60,15 +59,16 @@ class WbiSigner:
 
     @classmethod
     def _解析密钥文件路径(cls, keys_file: Optional[Any] = None) -> Path:
-        """解析密钥文件路径（未传入时使用仓库根下的默认路径）。
+        """解析密钥文件路径（未传入时使用**产物根**下的默认路径）。
 
-        默认路径锚定仓库根而非当前所在目录，否则在别处执行命令会在那里凭空多出一个
-        output/ 目录。
+        默认路径锚定产物根（默认 `<home>/output/.wbi_keys.json`）而非当前所在目录，
+        否则在别处执行命令会在那里凭空多出一个 output/ 目录；显式传入的相对路径
+        按容器根（home）解析，兼容拆分前的 `output/.wbi_keys.json` 写法。
         """
         if keys_file is None:
-            return _REPO_ROOT / cls.DEFAULT_KEYS_FILE
+            return _paths.products_root() / cls.DEFAULT_KEYS_FILE
         路径 = Path(str(keys_file))
-        return 路径 if 路径.is_absolute() else _REPO_ROOT / 路径
+        return 路径 if 路径.is_absolute() else _paths.home_root() / 路径
 
     @classmethod
     def _读取文件缓存(cls, 路径: Path) -> Optional[Tuple[str, str, float]]:

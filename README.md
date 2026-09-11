@@ -72,6 +72,25 @@
 
 ---
 
+## 目录结构（三域隔离）
+
+本项目按**职责**分成三个互不打扰的域：代码、MCP 服务、产物各占一处，任何一个的升级/搬迁都不会影响另外两个。
+
+```text
+<容器根>/
+├── skill/     ← 本仓库：技能与工具链（SKILL.md、src/、scripts/、references/、.agents/）
+├── mcp/       ← 独立仓库：omni-media MCP 服务（纯本地，与技能无运行时依赖）
+└── output/    ← 产物根：每门课一个工作区 + .sessdata.json / .wbi_keys.json / .cli_status.json
+```
+
+- **两个仓库各自独立**（各自的 `.git`），可分别克隆、升级、发布；MCP 从不 import 技能代码，技能也从不 import MCP 代码（`selfcheck` 强制校验）；
+- **产物永远在两仓库之外**：不会出现在任何 `git status` 里，删除/迁移仓库都不会动到成品；
+- **命令与工作目录解耦**：`--base-dir` 缺省即产物根（绝对路径），因此在任意目录执行 CLI/脚本都能找到同一批工作区；
+  需要换位置时用 `--base-dir <路径>`，或设置环境变量 `BVB_HOME`（容器根）/ `BVB_OUTPUT_DIR`（产物根）；
+- `python src/cli.py info` 会打印当前解析出的「代码根 / 容器根 / 产物根」三行，便于确认。
+
+---
+
 ## 安装与快速开始
 
 ### 1. 系统依赖
@@ -82,13 +101,15 @@
 - **macOS**：`brew install ffmpeg`
 - **Linux (Debian/Ubuntu)**：`sudo apt update && sudo apt install -y ffmpeg`
 
-### 2. 安装 omni-media MCP 服务（阶段一听音必需）
+### 2. 安装 omni-media MCP 服务（阶段一听音必需，独立仓库）
 
 阶段一通过 MCP 工具 `omni-media:read_audio` 提取音频切片，再由宿主多模态模型原生聆听。
+MCP 是**独立仓库**（与本仓库平级的 `mcp/`），只需装一次、可独立升级：
 
 ```bash
-cd omni-media-mcp && pip install -e .
-python -m omni_media_mcp.cli apply --target zcode
+cd ../mcp && pip install -e .          # 若未克隆：git clone <omni-media-mcp 仓库地址> mcp
+python -m omni_media_mcp.cli apply --target zcode   # --target 也可用 opencode/dsh/codex/antigravity/all
+python selfcheck.py                    # 可选：跑 MCP 侧自检
 ```
 
 > **无需任何 API Key**：音频由宿主多模态模型原生聆听，接入只写入服务启动命令与 `PYTHONPATH`，不涉及任何凭证。唯一的外部依赖是系统 `ffmpeg`。
@@ -102,7 +123,7 @@ python -m omni_media_mcp.cli apply --target zcode
 本仓库内置 `.agents/skills/bili-video2book`，符合 Open Agent Skills 标准规范，可直接通过 Agent 自然语言触发。
 
 > **注意（工作目录契约）**：Skill 本体只有 `SKILL.md` 与 `references/`，**命令与脚本都在仓库里**。
-> 挂载时请保持**整个仓库可达**（整仓复制或软链），并让 Agent **以仓库根为工作目录**执行
+> 挂载时请保持**整个仓库可达**（整仓复制或软链），并让 Agent **以本仓库根（`skill/`）为工作目录**执行
 > `python src/cli.py …` / `python scripts/…`，否则 SKILL.md 里的命令会找不到文件。
 
 ### 4. 本地安装与命令行使用
@@ -119,7 +140,8 @@ pip install -e .
 
 ## CLI 使用指南
 
-若已执行 `pip install -e .`，可直接使用 `bili-video2book`；亦可在仓库根目录直接运行 `python src/cli.py`：
+若已执行 `pip install -e .`，可直接使用 `bili-video2book`；亦可在本仓库根目录（`skill/`）直接运行 `python src/cli.py`。
+产物一律落在产物根（默认 `<容器根>/output/`），与代码目录分离；下文示例中的 `output/<task>/…` 均**相对产物根**。
 
 ### 场景一：处理整门课程流水线
 ```bash

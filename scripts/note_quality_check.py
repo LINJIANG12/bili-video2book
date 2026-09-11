@@ -105,7 +105,8 @@ def check_workspace(ws: Any, max_truncated: int, args_require_structure: bool = 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Module-note quality check (boilerplate / episode headings / truncation / structure)")
     parser.add_argument("--dir", default=None, help="直接指定单个工作区目录")
-    parser.add_argument("--base-dir", default="output", help="工作区基目录（默认 output）")
+    parser.add_argument("--base-dir", default=None,
+                        help="工作区基目录（默认：由 src/core/paths.py 解析的产物根 <home>/output）")
     parser.add_argument("--task", default=None, help="仅处理目录名包含该关键字的工作区")
     parser.add_argument("--max-truncated", type=int, default=DEFAULT_MAX_TRUNCATED,
                         help=f"每份笔记允许的断句上限（默认 {DEFAULT_MAX_TRUNCATED}）")
@@ -127,7 +128,7 @@ def main() -> int:
             workspaces = [w for w in workspaces if str(args.task) in w.root_dir.name]
 
     if not workspaces:
-        print(f"[ERROR] 未找到可用工作区（base-dir={args.base_dir}）", file=sys.stderr)
+        print(f"[ERROR] 未找到可用工作区（base-dir={args.base_dir or '产物根'}）", file=sys.stderr)
         return 1
 
     reports = [check_workspace(ws, args.max_truncated, args.require_structure) for ws in workspaces]

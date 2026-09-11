@@ -27,23 +27,28 @@ from src.core.fetcher import AudioFetcher
 from src.core.audio_chunker import AudioChunker
 from src.core.workspace import TaskWorkspace, sanitize_filename
 from src.core.kernel_extractor import KernelExtractor
+from src.core import paths as _paths
 from src.generator.topic_planner import SemanticTopicPlanner
 from src.generator.block_synthesizer import BlockSynthesizer
 from src.generator.prompt_templates import ArticlePromptTypeError
 
-# 仓库根目录（状态文件与断点续跑提示的换算基准）
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# 代码根（skill/）——仅用于断点续跑提示等展示；产物路径一律走 paths.products_root()
+PROJECT_ROOT = _paths.code_root()
 
-# 状态文件记录上次 412/熔断，无则 info 显示“无记录”
-# 优先保存在当前工作目录的 output/ 下，其次保存在包根目录
+
 def _resolve_status_file() -> Path:
-    cwd_path = Path.cwd() / "output" / ".cli_status.json"
-    if cwd_path.exists():
-        return cwd_path
-    root_path = PROJECT_ROOT / "output" / ".cli_status.json"
-    if root_path.exists():
-        return root_path
-    return cwd_path
+    """状态文件（记录上次 412/熔断）路径：产物根下唯一一份。
+
+    三域分离后不再探测当前工作目录：在任意目录执行命令都写同一个状态文件，
+    不会在别处凭空生成一个 output/。仅保留「读取旧 cwd/output 状态文件」的兼容探测。
+    """
+    current = _paths.products_root() / ".cli_status.json"
+    if current.exists():
+        return current
+    legacy_cwd = Path.cwd() / "output" / ".cli_status.json"
+    if legacy_cwd.exists():
+        return legacy_cwd
+    return current
 
 _STATUS_FILE = _resolve_status_file()
 
@@ -210,7 +215,7 @@ def resolve_target_info(
     target: str,
     sessdata: Optional[str] = None,
     custom_task: Optional[str] = None,
-    base_dir: str = "output",
+    base_dir: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """多态解析本地媒体或 B 站元数据；网络失败且存在本地 parts.json 缓存时自动离线自愈。"""
     if LocalMediaParser.is_local_media(target):
@@ -221,7 +226,7 @@ def resolve_target_info(
         # 离线自愈：接口被风控或网络中断时，优先加载本地保存的分集拓扑离线运行
         bvid = BilibiliParser.extract_bvid(target)
         if bvid:
-            out_base = Path(base_dir).resolve() if Path(base_dir).is_absolute() else (Path.cwd() / str(base_dir)).resolve()
+            out_base = _paths.resolve_base_dir(base_dir)
             cand_dirs = []
             if custom_task:
                 cand_dirs.append(out_base / TaskWorkspace.sanitize_name(custom_task))
@@ -309,7 +314,7 @@ class PipelineCoordinator:
         url: str,
         sessdata: Optional[str] = None,
         task: Optional[str] = None,
-        base_dir: str = "output",
+        base_dir: Optional[Any] = None,
         page: Optional[int] = None,
         range_str: Optional[str] = None,
         process_all: bool = False,

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Python 3.8+, ffmpeg in PATH, Multimodal LLM Agent (Antigravity, ChatGPT/Codex)
 metadata:
   author: LINJIANG12
-  version: 1.9.0
+  version: 2.0.0
   category: learning-and-education
 ---
 
@@ -67,9 +67,20 @@ python src/cli.py logout                          # 撤销保存
 ## 3. 标准作业流程 (Standard Operating Procedures - SOP)
 
 > [!IMPORTANT]
-> **运行前置（工作目录契约）**：本 Skill 的所有命令都写成 `python src/cli.py …` / `python scripts/…` 的相对形式，
-> 因此**必须以仓库根目录为当前工作目录执行**。`.agents/skills/bili-video2book/` 里只有 `SKILL.md` 与 `references/`，
-> 不含 `src/`、`scripts/`：挂载为全局 Skill 时请保持**整个仓库可达**（整仓复制或软链），不要只复制 SKILL.md。
+> **运行前置（三域布局与工作目录契约）**：本仓库是**技能域**，只含代码与文档；MCP 服务与产物各自独立成域：
+>
+> ```text
+> <容器根>/
+> ├── skill/     ← 本仓库（技能/CLI/脚本；命令里的 src/ 与 scripts/ 都指这里）
+> ├── mcp/       ← 独立仓库：omni-media MCP 服务（与技能无运行时依赖）
+> └── output/    ← 产物根：各课程工作区 + .sessdata.json / .wbi_keys.json / .cli_status.json
+> ```
+>
+> - 所有命令写成 `python src/cli.py …` / `python scripts/…` 的相对形式，**请以本仓库根（`skill/`）为当前工作目录执行**；
+> - **产物根默认就是容器根下的 `output/`**，与代码彻底分离：命令可在任意目录执行（`--base-dir` 缺省即产物根，绝对路径）；
+>   需要改位置时用 `--base-dir <路径>`，或设 `BVB_HOME`（容器根）/ `BVB_OUTPUT_DIR`（产物根）；
+> - `.agents/skills/bili-video2book/` 里只有 `SKILL.md` 与 `references/`，**不含 `src/`、`scripts/`**：
+>   挂载为全局 Skill 时请保持**整个仓库可达**（整仓复制或软链），不要只复制 SKILL.md。
 
 整个重构流水线分为一个准备阶段与两个核心阶段，Agent 只需按顺序执行指定命令与工具：
 
@@ -306,7 +317,8 @@ python src/cli.py login --sessdata "<SESSDATA>"
 python src/cli.py logout
 ```
 
-> 阶段一的音频切片依赖 MCP 工具 `omni-media:read_audio`，接入方式见 README 的安装章节。
+> 阶段一的音频切片依赖 MCP 工具 `omni-media:read_audio`。MCP 服务是**独立仓库**（容器根下的 `mcp/`，与技能无运行时依赖），
+> 装一次即可长期使用，接入方式见 README 的安装章节。
 
 ### 6.1 完整参数表（速查表之外的开关都在这里）
 
@@ -323,7 +335,7 @@ python src/cli.py logout
 | `sync` | `--dry-run` `--task 关键字` `--all` | 按磁盘对账回填 manifest |
 | `note_quality_check.py` | `--strict` `--require-structure` `--max-truncated N`（默认 4） `--dir` `--task` `--base-dir` `--json` | 结构缺件默认只提示，`--require-structure` 才纳入门禁 |
 | `render_compat_check.py` | `--strict` `--require-lang` `--dir` `--task` `--base-dir` `--json` | 语言标识默认只提示，`--require-lang` 才纳入门禁 |
-| `queue_tracker.py` | `--next N` `--summary` `--json` `--dir PATH` `--pattern 关键字` | 多课程并存时必须用 `--dir`/`--pattern` 指定工作区 |
+| `queue_tracker.py` | `--next N` `--summary` `--json` `--dir PATH` `--pattern 关键字` `--base-dir DIR` | 多课程并存时必须用 `--dir`/`--pattern` 指定工作区；`--base-dir` 缺省即产物根 |
 | `cleanup_tasks.py` | `--keep N` `--dry-run` `--task` `--json` `--strict` | `cleanup` 的独立脚本入口（功能一致） |
 
 ---
@@ -340,10 +352,12 @@ python src/cli.py logout
 
 ### 7.1 工作区目录结构
 
+以下路径**均相对产物根**（默认 `<容器根>/output/`，与 `skill/`、`mcp/` 平级）：
+
 ```text
 output/<task>/
 ├── audio/                     # 提取的音频与自动切片
-├── parts.json                 # 分集拓扑缓存（接口受阻时离线自愈依赖）
+├── parts.json                 # 分集拓扑缓存（接口受阻时离线自愈依赖；局部运行按 page 合并，不会截断）
 ├── manifest.json              # 任务清单与断点续跑状态（可用 `cli.py sync` 按磁盘对账回填）
 ├── topic_plan.json            # ① 模块规划（Agent 产出）
 ├── topic_plan_TASK.md         # ① 规划任务书（课程级唯一，永不回收）
@@ -356,6 +370,9 @@ output/<task>/
 │   └── 模块XX_*_笔记.md       #   模块笔记（跨集融合，阶段二产物）
 └── textbooks/                 # ③ 模块合辑教材
 ```
+
+产物根同时存放运行时状态文件：`.sessdata.json`（凭证，`cli.py login`）、`.wbi_keys.json`（WBI 签名密钥缓存）、
+`.cli_status.json`（上次 412/熔断记录）。这些文件**永远不在代码仓库里**，因此不会被误提交。
 
 > **处理范围**：流水线处理的是**当前稿件的 1..N 个分 P**（即 `parts.json` 的内容）。
 > 若课程是「UGC 合集里每集独立 BV」，`parse` 会列出全季清单，但 `pipeline` / `cluster-*` **不会**跨稿件遍历，
@@ -374,12 +391,12 @@ output/<task>/
 工具链以磁盘产物为唯一进度依据，重跑同一条命令即可续作：
 
 - 单集长文、模块规划、模块笔记、模块教材均按 § 5.5 表格的条件自动复用（模块笔记与模块教材命中成品即跳过，打印 `[cached]`）；
-- 删除 `output/` 下某个**产物**文件（如 `articles/PXX_*_精读文章.md`），即视为重新派发该环节；
+- 删除产物根下某个**产物**文件（如 `<产物根>/<task>/articles/PXX_*_精读文章.md`），即视为重新派发该环节；
 - 任务书会被自动回收，因此**不要靠删除任务书来重派**。需要重导时的正确做法：
   - 模块笔记：`cluster-notes --force`；
   - 模块教材：`cluster-articles --force`；
   - 单集长文：`pipeline --force`（`transcribe` 没有 `--force`，重派请直接删除该集长文后再跑）；
-- 用 `python scripts/queue_tracker.py --next 5` 查看阶段一待办队列，`--summary` 获取单行状态；多课程并存时加 `--pattern` / `--dir`；
+- 用 `python scripts/queue_tracker.py --next 5` 查看阶段一待办队列，`--summary` 获取单行状态；多课程并存时加 `--pattern` / `--dir` / `--base-dir`；
 - 若 `manifest.json` 与实际产物不一致（例如 Agent 直接写盘后清单未回填），执行 `python src/cli.py sync` 按磁盘对账。
 
 ### 7.3 阅读器与渲染兼容

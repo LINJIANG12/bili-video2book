@@ -1,7 +1,7 @@
 """任务工作区管理器（按任务隔离输出目录）。
 
-目录结构：
-输出根目录/
+目录结构（产物根由 `src/core/paths.py` 统一解析，默认 = 容器根下的 output/）：
+产物根/
 └── <任务名>/
     ├── 音频目录/      # 提取的音频与切片文件
     ├── 笔记目录/      # 结构化笔记
@@ -17,20 +17,12 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-
-def _探测仓库根目录() -> Path:
-    """从本文件向上查找包含目录的祖先作为仓库根目录。"""
-    try:
-        当前 = Path(__file__).resolve()
-        for 祖先 in 当前.parents:
-            if (祖先 / "src").is_dir():
-                return 祖先
-        return Path.cwd()
-    except Exception:
-        return Path.cwd()
+from . import paths as _paths
 
 
-_仓库根目录 = _探测仓库根目录()
+# 容器根（= skill/、mcp/、output/ 的共同父目录）：同时作为 manifest 相对路径的换算基准，
+# 从而保证 `output/<task>/...` 这类历史清单路径在三域分离后依然逐字节有效。
+_仓库根目录 = _paths.home_root()
 
 
 class TaskWorkspace:
@@ -38,14 +30,16 @@ class TaskWorkspace:
 
     非法字符正则 = re.compile(r'[\\/*?:"<>|\n\r\t]+')
 
-    # 仓库根目录（相对路径换算基准）
+    # 容器根（相对路径换算基准）
     仓库根目录: Path = _仓库根目录
     REPO_ROOT: Path = _仓库根目录
+    # 语义更准确的别名
+    HOME_ROOT: Path = _仓库根目录
 
-    def __init__(self, task_name: str, base_dir: Union[str, Path] = "output"):
-        """初始化工作区并确保子目录存在。"""
+    def __init__(self, task_name: str, base_dir: Union[str, Path, None] = None):
+        """初始化工作区并确保子目录存在（base_dir 为空即产物根）。"""
         self.task_name = self.sanitize_name(task_name)
-        self.base_dir = Path(base_dir).resolve() if Path(base_dir).is_absolute() else (Path.cwd() / str(base_dir)).resolve()
+        self.base_dir = _paths.resolve_base_dir(base_dir)
         self.root_dir = self.base_dir / self.task_name
         self.audio_dir = self.root_dir / "audio"
         self.notes_dir = self.root_dir / "notes"
@@ -88,7 +82,7 @@ class TaskWorkspace:
         title: str,
         bvid: str = "",
         custom_name: Optional[str] = None,
-        base_dir: Union[str, Path] = "output",
+        base_dir: Union[str, Path, None] = None,
     ) -> "TaskWorkspace":
         """工厂方法：按标题与稿件号搭建任务工作区。"""
         if custom_name:

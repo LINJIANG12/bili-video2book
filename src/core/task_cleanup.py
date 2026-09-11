@@ -240,22 +240,17 @@ def reclaim_module_note_task(ws: Any, block_id: int, keep_module: int = 1) -> Op
     return None
 
 
-def find_workspaces(base_dir: Any = "output") -> List[Any]:
+def find_workspaces(base_dir: Any = None) -> List[Any]:
     """枚举 base_dir 下所有可用工作区（含 parts.json/manifest.json 或任一产物子目录）。
 
-    基目录解析：相对路径先按当前工作目录解析；若当前目录下不存在而**仓库根目录**下存在，
-    则回退到仓库根——这样从任意目录调用脚本都能找到工作区（README/SKILL 推荐直接跑 scripts/）。
+    基目录解析统一交给 `paths.resolve_base_dir`：空值即**产物根**（绝对路径，与当前工作目录无关）；
+    相对路径优先按当前工作目录解析，不存在则回退到产物根下的同名目录——这样从任意目录调用
+    脚本都能找到工作区（README/SKILL 推荐直接跑 scripts/）。
     """
+    from . import paths as _paths
     from .workspace import TaskWorkspace
 
-    base = Path(base_dir)
-    if not base.is_absolute():
-        candidate = (Path.cwd() / str(base_dir)).resolve()
-        if not candidate.exists():
-            alt = (TaskWorkspace.REPO_ROOT / str(base_dir)).resolve()
-            if alt.exists():
-                candidate = alt
-        base = candidate
+    base = _paths.resolve_base_dir(base_dir)
     if not base.exists():
         return []
 

@@ -32,6 +32,7 @@ PROJECT_ROOT = CURRENT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.core import paths as _paths
 from src.core.local_media import LocalMediaParser
 from src.core.fetcher import AudioFetcher
 from src.core.audio_chunker import AudioChunker
@@ -49,6 +50,18 @@ from src.core.pipeline import (
 )
 from src.generator.topic_planner import SemanticTopicPlanner
 from src.generator.block_synthesizer import BlockSynthesizer
+
+
+BASE_DIR_HELP = (
+    "Base output directory for task workspaces "
+    "(default: the products root resolved by src/core/paths.py, i.e. <home>/output; "
+    f"override with ${_paths.ENV_OUTPUT_DIR} or ${_paths.ENV_HOME})"
+)
+
+
+def _resolve_base_dir(value):
+    """把 --base-dir 解析为绝对路径（空值即产物根，不随当前工作目录漂移）。"""
+    return str(_paths.resolve_base_dir(value))
 
 
 def _save_manifest_rel(ws, data):
@@ -134,7 +147,7 @@ def cmd_parse(args):
         args.url,
         sessdata=args.sessdata,
         custom_task=getattr(args, "task", None),
-        base_dir=getattr(args, "base_dir", "output"),
+        base_dir=getattr(args, "base_dir", None),
     )
     if args.json:
         print(json.dumps(info, ensure_ascii=False, indent=2))
@@ -492,7 +505,7 @@ def cmd_cluster_notes(args):
         args.url,
         sessdata=args.sessdata,
         custom_task=getattr(args, "task", None),
-        base_dir=getattr(args, "base_dir", "output"),
+        base_dir=getattr(args, "base_dir", None),
     )
     bvid = info["bvid"]
     ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
@@ -626,7 +639,7 @@ def cmd_cluster_articles(args):
         args.url,
         sessdata=args.sessdata,
         custom_task=getattr(args, "task", None),
-        base_dir=getattr(args, "base_dir", "output"),
+        base_dir=getattr(args, "base_dir", None),
     )
     bvid = info["bvid"]
     ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
@@ -663,7 +676,7 @@ def cmd_dedup(args):
         args.url,
         sessdata=args.sessdata,
         custom_task=getattr(args, "task", None),
-        base_dir=getattr(args, "base_dir", "output"),
+        base_dir=getattr(args, "base_dir", None),
     )
     bvid = info["bvid"]
     ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
@@ -813,6 +826,14 @@ def cmd_info(args):
     print(f"• FFmpeg 状态   : {'已就绪 (' + ffmpeg_path + ')' if ffmpeg_path else '未找到（建议安装以支持音频切片）'}")
     print("• 架构模式      : 宿主 Agent 原生派发模式（零环境变量、零网络代理绑定；转录=对话模型原生唯一路径）")
     print("=" * 65)
+    print("【三域路径（代码 / MCP / 产物 互相隔离）】")
+    _三域 = _paths.describe()
+    print(f"• 代码根       : {_三域['code_root']}")
+    print(f"• 容器根 home  : {_三域['home_root']}" + ("  [来自 ${}]".format(_paths.ENV_HOME) if _三域["home_from_env"] else ""))
+    print(f"• 产物根       : {_三域['products_root']}" + ("  [来自 ${}]".format(_paths.ENV_OUTPUT_DIR) if _三域["products_from_env"] else ""))
+    print(f"  工作区清单   : {store_path().parent}")
+    print(f"  覆盖方式     : export {_paths.ENV_HOME}=<容器根> / export {_paths.ENV_OUTPUT_DIR}=<产物根>，或用 --base-dir")
+    print("=" * 65)
     # 中文注释：WBI key 有效期读内存缓存+缓存文件
     print("【WBI Key 状态】")
     try:
@@ -888,7 +909,7 @@ def main():
     p_audio.add_argument("--range", default=None, help="Episode range to download (e.g. 1-10, 1,3,5)")
     p_audio.add_argument("--quality", choices=["low", "medium", "high"], default="low", help="Audio quality (low=64k speech default, medium=132k, high=192k)")
     p_audio.add_argument("--task", default=None, help="Custom task workspace folder name")
-    p_audio.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_audio.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_audio.add_argument("--force", action="store_true", help="Force re-download/re-extraction even if audio file already exists")
     p_audio.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
     p_audio.add_argument("--url-only", action="store_true", help="Only print stream URL without downloading")
@@ -901,7 +922,7 @@ def main():
     p_tr.add_argument("target", help="Bilibili URL/BVID, local audio file, or local video file")
     p_tr.add_argument("--page", type=int, default=None, help="Page index for Bilibili video or local course (auto-detects ?p=X from URL if omitted)")
     p_tr.add_argument("--task", default=None, help="Custom task workspace folder name")
-    p_tr.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_tr.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_tr.add_argument("--output", default=None, help="Optional custom output path (only used when cached clean transcript exists)")
     p_tr.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
     p_tr.add_argument(
@@ -919,7 +940,7 @@ def main():
     p_pipe.add_argument("--range", default=None, help="Episode range to process (e.g. 1-10, 1,3,5)")
     p_pipe.add_argument("--quality", choices=["low", "medium", "high"], default="low", help="Audio quality (low=64k speech default, medium=132k, high=192k)")
     p_pipe.add_argument("--task", default=None, help="Custom task workspace folder name")
-    p_pipe.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_pipe.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_pipe.add_argument("--force", action="store_true", help="Force re-transcribing and re-generating even if exists")
     p_pipe.add_argument("--prefetch-workers", type=int, default=12, help="Parallel audio prefetch (download/extract) threads")
     p_pipe.add_argument("--skip-failed", action="store_true", default=False, help="Explicit opt-in: exempt failed episodes from transcription gate (recorded in manifest skip list)")
@@ -951,7 +972,7 @@ def main():
     p_cl.add_argument("--start-block", type=int, default=None, help="Start block ID")
     p_cl.add_argument("--end-block", type=int, default=None, help="End block ID")
     p_cl.add_argument("--task", default=None, help="Custom task workspace folder name")
-    p_cl.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_cl.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_cl.add_argument("--replace", action="store_true", default=False, help="Replace old single-episode notes in notes/ directory")
     p_cl.add_argument("--force", action="store_true", help="Force re-exporting block task files even if they exist")
     p_cl.add_argument("--force-plan", action="store_true", help="Force re-generating semantic topic plan")
@@ -967,7 +988,7 @@ def main():
     p_ca = subparsers.add_parser("cluster-articles", help="Consolidate single-episode articles into modular textbooks in textbooks/")
     p_ca.add_argument("url", help="Bilibili URL or BV ID")
     p_ca.add_argument("--task", default=None, help="Custom task workspace folder name")
-    p_ca.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_ca.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_ca.add_argument("--force", action="store_true", help="Force re-integrating modular textbooks (default: reuse existing textbooks/)")
     p_ca.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
 
@@ -975,14 +996,14 @@ def main():
     p_dd = subparsers.add_parser("dedup", help="Scan and synchronize duplicate audio assets to save LLM tokens")
     p_dd.add_argument("url", help="Bilibili URL, BV ID, or local media path")
     p_dd.add_argument("--task", default=None, help="Custom task workspace folder name")
-    p_dd.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_dd.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_dd.add_argument("--dry-run", action="store_true", help="Only check for duplicates without copying files")
     p_dd.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
 
     # cleanup：任务书回收（成品已产出的 *_TASK.md 清场，每类保留 N 份范本）
     p_cl2 = subparsers.add_parser("cleanup", help="Reclaim completed dispatch task-files (*_TASK.md), keeping N samples per category")
     p_cl2.add_argument("--task", default=None, help="Only process workspaces whose folder name contains this keyword")
-    p_cl2.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_cl2.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_cl2.add_argument("--keep", type=int, default=1, help="Samples to keep per category (default 1; 0=delete all completed)")
     p_cl2.add_argument("--all", action="store_true", help="Process every workspace under base-dir (compatibility flag; this is already the default)")
     p_cl2.add_argument("--dry-run", action="store_true", help="Only report what would be reclaimed")
@@ -990,7 +1011,7 @@ def main():
     # sync：账本对账（以磁盘产物回填 manifest.json）
     p_sync = subparsers.add_parser("sync", help="Reconcile manifest.json with on-disk products (disk is the source of truth)")
     p_sync.add_argument("--task", default=None, help="Only process workspaces whose folder name contains this keyword")
-    p_sync.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
+    p_sync.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_sync.add_argument("--all", action="store_true", help="Process every workspace under base-dir (compatibility flag; this is already the default)")
     p_sync.add_argument("--dry-run", action="store_true", help="Only report the reconciled state without writing")
 
@@ -1007,6 +1028,10 @@ def main():
     else:
         args.sessdata = resolve_sessdata(raw_sessdata)
         args.sessdata_source = "命令行参数" if raw_sessdata else ("本地存档" if args.sessdata else None)
+
+    # 产物根解析：--base-dir 缺省即产物根（绝对路径），使命令与当前工作目录彻底解耦。
+    if hasattr(args, "base_dir"):
+        args.base_dir = _resolve_base_dir(args.base_dir)
 
     dispatch = {
         "parse": cmd_parse,

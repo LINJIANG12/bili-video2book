@@ -33,7 +33,8 @@ from src.core.task_cleanup import (  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Reclaim completed dispatch task-files (*_TASK.md)")
-    parser.add_argument("--base-dir", default="output", help="工作区基目录（默认 output）")
+    parser.add_argument("--base-dir", default=None,
+                        help="工作区基目录（默认：由 src/core/paths.py 解析的产物根 <home>/output）")
     parser.add_argument("--task", default=None, help="仅处理目录名包含该关键字的工作区")
     parser.add_argument("--keep", type=int, default=1, help="每类保留的范本数量（默认 1；0=全部回收）")
     parser.add_argument("--dry-run", action="store_true", help="仅预演，不实际删除")
@@ -41,11 +42,14 @@ def main() -> int:
     parser.add_argument("--strict", action="store_true", help="回收后仍存在应删任务书则返回非零（CI 用）")
     args = parser.parse_args()
 
-    workspaces = find_workspaces(args.base_dir)
+    from src.core.paths import resolve_base_dir  # noqa: E402  （脚本头部已注入仓库根）
+
+    base_dir = resolve_base_dir(args.base_dir)
+    workspaces = find_workspaces(base_dir)
     if args.task:
         workspaces = [w for w in workspaces if str(args.task) in w.root_dir.name]
     if not workspaces:
-        print(f"[ERROR] 在 {Path(args.base_dir).resolve()} 下未找到可用工作区", file=sys.stderr)
+        print(f"[ERROR] 在 {base_dir} 下未找到可用工作区", file=sys.stderr)
         return 1
 
     keep_n = max(0, int(args.keep))

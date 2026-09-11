@@ -72,6 +72,29 @@ The execution architecture separates single-episode generation from modular cons
 
 ---
 
+## Repository Layout (three isolated domains)
+
+The project is split by **responsibility** into three domains that never interfere with each other — code, MCP server and
+products each live in their own place, so upgrading or relocating one never touches the others:
+
+```text
+<container root>/
+├── skill/     ← this repository: the skill & toolchain (SKILL.md, src/, scripts/, references/, .agents/)
+├── mcp/       ← separate repository: the omni-media MCP server (fully local, no runtime dependency on the skill)
+└── output/    ← products root: one workspace per course + .sessdata.json / .wbi_keys.json / .cli_status.json
+```
+
+- **Two independent repositories** (each with its own `.git`) that can be cloned, upgraded and released separately;
+  the MCP never imports skill code and the skill never imports MCP code (enforced by `selfcheck`);
+- **Products always live outside both repos**: they can never show up in `git status`, and removing/relocating a repo
+  never touches your deliverables;
+- **Commands are decoupled from the working directory**: `--base-dir` defaults to the products root (an absolute path),
+  so running the CLI from any directory finds the same workspaces. Override it with `--base-dir <path>`, or set
+  `BVB_HOME` (container root) / `BVB_OUTPUT_DIR` (products root);
+- `python src/cli.py info` prints the resolved code root / container root / products root for confirmation.
+
+---
+
 ## Installation
 
 ### 1. System Dependencies
@@ -82,13 +105,15 @@ Audio processing relies on system `ffmpeg`. Ensure it is installed and available
 - **macOS**: `brew install ffmpeg`
 - **Linux (Debian/Ubuntu)**: `sudo apt update && sudo apt install -y ffmpeg`
 
-### 2. Install the omni-media MCP Server (required for Stage 1 listening)
+### 2. Install the omni-media MCP Server (separate repository, required for Stage 1 listening)
 
 Stage 1 uses the MCP tool `omni-media:read_audio` to extract audio slices that the host multimodal model listens to natively.
+The MCP ships as its **own repository** (sibling `mcp/`), installed once and upgradable independently:
 
 ```bash
-cd omni-media-mcp && pip install -e .
-python -m omni_media_mcp.cli apply --target zcode
+cd ../mcp && pip install -e .     # if not cloned yet: git clone <omni-media-mcp repo> mcp
+python -m omni_media_mcp.cli apply --target zcode   # also: opencode/dsh/codex/antigravity/all
+python selfcheck.py               # optional: MCP-side self-check
 ```
 
 > **No API key required**: audio is listened to natively by the host multimodal model. Registration only writes the server command and `PYTHONPATH` — no credentials are involved. The only external dependency is system `ffmpeg`.
@@ -103,8 +128,8 @@ The repository includes `.agents/skills/bili-video2book` compliant with Open Age
 
 > **Working-directory contract**: the skill bundle itself only ships `SKILL.md` and `references/`; every command and
 > script lives in the repository. When installing globally, keep the **whole repository reachable** (copy or symlink it)
-> and run `python src/cli.py …` / `python scripts/…` **from the repository root**, otherwise the documented commands
-> will not resolve.
+> and run `python src/cli.py …` / `python scripts/…` **from this repository root (`skill/`)**, otherwise the documented
+> commands will not resolve.
 
 ### 4. Local CLI Installation
 
@@ -120,7 +145,9 @@ pip install -e .
 
 ## CLI Usage
 
-If installed via `pip install -e .`, use `bili-video2book` directly; or run `python src/cli.py` in the repository root:
+If installed via `pip install -e .`, use `bili-video2book` directly; or run `python src/cli.py` in this repository root
+(`skill/`). All products land in the products root (default `<container root>/output/`), never inside the code
+repository; the `output/<task>/…` paths below are relative to that products root.
 
 ### Scenario 1: Full Course Pipeline
 ```bash
