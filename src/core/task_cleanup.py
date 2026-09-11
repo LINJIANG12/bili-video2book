@@ -1,9 +1,8 @@
 """Task-file Reclaim: 回收已完成的派发任务书（*_TASK.md）。
 
 架构定位：任务书（`PXX_*_TASK.md` / `PXX_*_KERNEL_TASK.md` / `模块XX_*_TASK.md`）是工具层
-写给宿主 Agent 的**临时派发物**；Agent 读完后把成品落到 `articles/` / `subtitles/kernels/` /
-`notes/`。旧版本只负责写、不负责收，于是任务书从第一门课堆到第 N 门课，目录里混着大量废纸，
-并且把 `queue_tracker` 的「模块笔记 N 部」计数也带偏了。
+写给宿主 Agent 的**临时派发物**；Agent 读完后把成品落到 `articles/` / `subtitles/kernels/` / `notes/`。旧版本只负责写、不负责收，于是任务书从第一门课
+堆到第 N 门课，目录里混着大量废纸，并且把 `queue_tracker` 的「模块笔记 N 部」计数也带偏了。
 
 本模块补齐「收」的这一半：
 - **只回收成品已落盘**的任务书；成品未产出的任务书一律保留；
@@ -58,7 +57,7 @@ def _iter_tasks(ws: Any, category: str) -> List[Path]:
         return []
 
     def 排序键(f: Path) -> int:
-        num = _episode_no(f.name) if category != CATEGORY_NOTES else _module_no(f.name)
+        num = _module_no(f.name) if category == CATEGORY_NOTES else _episode_no(f.name)
         return num if num is not None else 10**9
 
     return sorted(files, key=排序键)
@@ -87,23 +86,50 @@ def _kernel_product_ready(ws: Any, task_file: Path) -> bool:
     return KernelExtractor.load_kernel(kernel_json) is not None
 
 
-def _note_product_ready(ws: Any, task_file: Path) -> bool:
-    """模块笔记成品是否已落盘（同名换 `_笔记.md`，回退按模块编号前缀匹配）。"""
-    # 模块01_xxx_TASK.md -> 模块01_xxx_笔记.md
-    if task_file.name.endswith("_TASK.md"):
-        exact = ws.notes_dir / (task_file.name[: -len("_TASK.md")] + "_笔记.md")
-        if exact.exists() and exact.stat().st_size >= MIN_PRODUCT_BYTES:
-            return True
+def find_module_note(
+    ws: Any,
+    module_no: Optional[int],
+    preferred_name: Optional[str] = None,
+    min_bytes: int = MIN_PRODUCT_BYTES,
+) -> Optional[Path]:
+    """定位某个模块**已落盘**的笔记成品（供复用判定与任务书回收共用）。
 
-    module_no = _module_no(task_file.name)
+    两级定位：
+    1. 先试规范文件名（工具层派发时约定的 `模块XX_<题名>_笔记.md`）；
+    2. 再按模块号前缀回退匹配 `模块XX_*.md`——历史工作区的成品可能叫别的名字
+       （如 `模块01_…_P01-P17_思维导图速查笔记.md`），只认规范名会误判为「无成品」并重复派发。
+    """
+    notes_dir = ws.notes_dir
+    if preferred_name:
+        exact = notes_dir / str(preferred_name)
+        try:
+            if exact.exists() and exact.stat().st_size >= min_bytes:
+                return exact
+        except OSError:
+            pass
     if module_no is None:
-        return False
-    for candidate in ws.notes_dir.glob(f"模块{module_no:02d}_*.md"):
+        return None
+    try:
+        candidates = sorted(notes_dir.glob(f"模块{int(module_no):02d}_*.md"))
+    except (OSError, ValueError):
+        return None
+    for candidate in candidates:
         if candidate.name.endswith("_TASK.md"):
             continue
-        if candidate.stat().st_size >= MIN_PRODUCT_BYTES:
-            return True
-    return False
+        try:
+            if candidate.stat().st_size >= min_bytes:
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _note_product_ready(ws: Any, task_file: Path) -> bool:
+    """模块笔记成品是否已落盘（规范名优先，回退按模块编号前缀匹配）。"""
+    preferred = None
+    if task_file.name.endswith("_TASK.md"):
+        preferred = task_file.name[: -len("_TASK.md")] + "_笔记.md"
+    return find_module_note(ws, _module_no(task_file.name), preferred_name=preferred) is not None
 
 
 def _product_ready(ws: Any, category: str, task_file: Path) -> bool:
@@ -134,7 +160,9 @@ def cleanup_completed_tasks(
 ) -> Dict[str, Any]:
     """回收各分类中「成品已落盘」的任务书，每类保留编号最小的 N 份作范本。
 
-    返回：{"deleted": [...], "kept": [...], "skipped_pending": [...], "counts": {...}}
+    返回：{"deleted": [...], "kept": [...], "skipped_pending": [...], "failed_delete": [...], "counts": {...}}
+    其中 skipped_pending = 成品未产出而保留 / failed_delete = 成品已产出但删除失败（占用、权限），
+    两者必须分开统计——混在一起会把删除失败说成「成品未产出仍保留」，掩盖真实故障。
     路径一律以仓库相对路径呈现，便于日志阅读。
     """
     from .workspace import TaskWorkspace
@@ -143,6 +171,7 @@ def cleanup_completed_tasks(
     deleted: List[str] = []
     kept: List[str] = []
     skipped: List[str] = []
+    failed_delete: List[str] = []
     counts: Dict[str, Dict[str, int]] = {}
 
     def 相对(p: Path) -> str:
@@ -153,6 +182,7 @@ def cleanup_completed_tasks(
         cat_kept: List[str] = []
         cat_deleted = 0
         cat_skipped = 0
+        cat_failed = 0
 
         for idx, task_file in enumerate(tasks):
             if idx < keep_n:
@@ -163,8 +193,8 @@ def cleanup_completed_tasks(
                     cat_deleted += 1
                     deleted.append(相对(task_file))
                 else:
-                    cat_skipped += 1
-                    skipped.append(相对(task_file))
+                    cat_failed += 1
+                    failed_delete.append(相对(task_file))
             else:
                 cat_skipped += 1
                 skipped.append(相对(task_file))
@@ -175,12 +205,14 @@ def cleanup_completed_tasks(
             "kept": len(cat_kept),
             "deleted": cat_deleted,
             "skipped_pending": cat_skipped,
+            "failed_delete": cat_failed,
         }
 
     return {
         "deleted": deleted,
         "kept": kept,
         "skipped_pending": skipped,
+        "failed_delete": failed_delete,
         "counts": counts,
         "dry_run": dry_run,
     }

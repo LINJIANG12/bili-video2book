@@ -69,6 +69,66 @@ def _to_relative_str(val):
         return val
 
 
+def _confirm_article_prompt_style(args) -> str:
+    """确认使用哪种长文提示词风格（学习 / 旧版）。
+
+    用户明确指定就照用；未指定时打印风格菜单，交互终端下请用户当场选择；
+    仍然拿不到选择则终止任务（工具层不猜、不兜底）。
+    """
+    from src.generator.prompt_templates import render_article_prompt_menu
+
+    chosen = (getattr(args, "article_type", "") or "").strip()
+    if chosen:
+        return chosen
+
+    print("\n" + "=" * 65)
+    print(render_article_prompt_menu())
+    print("=" * 65)
+    if sys.stdin.isatty():
+        try:
+            typed = input("请选择长文提示词风格 (learning / legacy，直接回车取消): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            typed = ""
+        if typed:
+            return typed
+
+    print("[!] 未确认长文提示词风格，任务终止。请显式指定后重跑，例如：", file=sys.stderr)
+    print('    python src/cli.py pipeline "<链接>" --all --article-type learning   # 学习（推荐）', file=sys.stderr)
+    print('    python src/cli.py pipeline "<链接>" --all --article-type legacy     # 旧版（原稳定版）', file=sys.stderr)
+    sys.exit(4)
+
+
+def _export_article_task_guarded(ws, page_num, clean_title, audio_file, **kwargs):
+    """单集长文任务书导出的唯一出口：提示词风格未命中已提供预设时，打印风格菜单并终止任务。
+
+    工具层刻意不做关键词猜测、不做默认兜底——风格由用户确认。
+    """
+    from src.generator.prompt_templates import ArticlePromptTypeError
+
+    try:
+        return export_article_task(ws, page_num, clean_title, audio_file, **kwargs)
+    except ArticlePromptTypeError as err:
+        print("\n" + err.report, file=sys.stderr)
+        print("去向：确认使用哪种提示词风格后，用 --article-type 重跑本命令。", file=sys.stderr)
+        sys.exit(4)
+
+
+def _owner_line(info) -> str:
+    """渲染 UP 主一行：兼容正常元数据（dict）与离线自愈缓存（owner 为字符串/空）。
+
+    离线自愈分支刻意不伪造 UP 主信息（owner 为空），若直接取 info['owner']['name']
+    会抛 TypeError（string indices must be integers），把一条本来可用的离线路径打断。
+    """
+    owner = info.get("owner")
+    if isinstance(owner, dict):
+        name = str(owner.get("name") or "").strip() or "未知"
+        mid = owner.get("mid", 0)
+    else:
+        name = str(owner or "").strip() or "未知（离线缓存）"
+        mid = info.get("owner_mid", 0)
+    return f"{name} (mid: {mid})"
+
+
 def cmd_parse(args):
     info = resolve_target_info(
         args.url,
@@ -103,7 +163,7 @@ def cmd_parse(args):
 
     print("=" * 65)
     print(f"【视频标题】: {info['title']}")
-    print(f"【UP 主】   : {info['owner']['name']} (mid: {info['owner']['mid']})")
+    print(f"【UP 主】   : {_owner_line(info)}")
     print(f"【BV 号】   : {info['bvid']}")
     print(f"【类型判定】: {info['type_desc']}")
     if info.get("url_page"):
@@ -342,7 +402,10 @@ def cmd_transcribe(args):
                 print(f"[✓] 长文已复制至: {out_p}")
             return
 
-        tf = export_article_task(ws0, 1, target_p.stem, target_p, title=target_p.stem)
+        tf = _export_article_task_guarded(
+            ws0, 1, target_p.stem, target_p, title=target_p.stem,
+            article_type=_confirm_article_prompt_style(args),
+        )
         print(f"[✓] 已导出单集精读文章任务书（零中间逐字稿，听音后直接撰写）: {tf} (status=need-agent-article)")
         return
 
@@ -393,12 +456,16 @@ def cmd_transcribe(args):
             )
             AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
 
-    tf = export_article_task(ws, target_part, clean_p_title, audio_file, title=info["title"], cid=target_cid)
+    tf = _export_article_task_guarded(
+        ws, target_part, clean_p_title, audio_file, title=info["title"], cid=target_cid,
+        article_type=_confirm_article_prompt_style(args),
+    )
     print(f"[✓] 已导出单集精读文章任务书（零中间逐字稿，听音后直接撰写）: {tf} (status=need-agent-article)")
 
 
 def cmd_pipeline(args):
     """两阶段流水线：调度编排委托领域服务 PipelineCoordinator，CLI 仅负责参数解析与退出码转换。"""
+    article_type = _confirm_article_prompt_style(args)
     coordinator = PipelineCoordinator()
     try:
         coordinator.run(
@@ -414,6 +481,7 @@ def cmd_pipeline(args):
             skip_failed=args.skip_failed,
             quality=args.quality,
             chunk_minutes=getattr(args, "chunk_minutes", 60),
+            article_type=article_type,
         )
     except PipelineGateError as gate:
         sys.exit(gate.exit_code)
@@ -484,37 +552,9 @@ def cmd_cluster_notes(args):
         p_str = f"P{min(eps):02d}-P{max(eps):02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
         print(f"    - 模块 {b['block_id']:02d} ({p_str}): {b['block_title']}")
 
-    # 0. Check style selection - strictly no hardcoded default
-    style = getattr(args, "style", None)
-    if not style:
-        print("=" * 65)
-        print("【提示：未指定笔记风格 (--style)】")
-        print("系统不设默认笔记风格，请根据受众与使用场景从以下 8 种风格中选择：")
-        print("  1. 精简 (minimal)       - [推荐] CS-Xmind-Note 408考研思维导图树状笔记，多级缩进列表，零口水话，天然适配 XMind/Markmap")
-        print("  2. 详细 (detailed)      - 详尽大笔记，尽可能多记录内容，还原逻辑展开、示例、推导与背景讨论")
-        print("  3. 学术 (academic)      - 学术报告与教材专著语调，形式化理论定义、严密证明与底层模型分析")
-        print("  4. 教程 (tutorial)      - 保姆级步骤拆解（Step-by-Step）、代码演练与排错避坑实战")
-        print("  5. 任务导向 (task_oriented) - 目标驱动、知识点转化为实操任务、技能打钩清单 (Checklists)")
-        print("  6. 商业风格 (business)  - 执行摘要、商业价值与落地权衡建议")
-        print("  7. 会议纪要 (meeting_minutes) - 议题速览、关键发言结论、待办分工与后续动向")
-        print("  8. 生活向 (life_journal) - 个人生活感悟与思考随笔")
-        print("=" * 65)
-        if sys.stdin.isatty():
-            try:
-                user_choice = input("请选择笔记风格 (例如 minimal 或 精简): ").strip()
-                if user_choice:
-                    style = user_choice
-            except (EOFError, KeyboardInterrupt):
-                pass
-
-        if not style:
-            print("[!] 请在命令行中通过 --style 参数明确指定笔记风格后重试，例如：", file=sys.stderr)
-            print('    python src/cli.py cluster-notes "<链接>" --style minimal', file=sys.stderr)
-            print('    python src/cli.py cluster-notes "<链接>" --style 精简', file=sys.stderr)
-            sys.exit(1)
-
     # Clean old single-episode notes if replace requested (safely backed up first)
     if args.replace:
+        # 1.7 之前遗留的旧版单集笔记（模块笔记上线前的产物），原地替换为模块大笔记
         old_single_notes = list(ws.notes_dir.glob("P[0-9][0-9]_*_笔记.md"))
         if old_single_notes:
             backup_dir = ws.notes_dir / ".backup_single_notes"
@@ -537,7 +577,7 @@ def cmd_cluster_notes(args):
         target_blocks = [b for b in plan if s_b <= b["block_id"] <= e_b]
 
     # 2. 模块笔记派发：语料门禁 = 本模块各集单集精读长文齐备（知识元已降级为可选索引）
-    print(f"\n[Phase 2/2] 逐模块导出笔记融合任务书 (待处理 {len(target_blocks)} 个知识块，风格: {style})...")
+    print(f"\n[Phase 2/2] 逐模块导出模块笔记任务书 (待处理 {len(target_blocks)} 个知识块；笔记只有一种风格)...")
     block_results = []
     for b in target_blocks:
         b_id = b["block_id"]
@@ -562,7 +602,7 @@ def cmd_cluster_notes(args):
                 print(f"    [i] --kernel-index 已开启：注入 {len(kernel_index)} 条知识元索引（仅供参考定位）")
 
         res = BlockSynthesizer.synthesize_block(
-            b, articles, ws=ws, force=args.force, style=style, kernel_index=kernel_index
+            b, articles, ws=ws, force=args.force, kernel_index=kernel_index
         )
         block_results.append(res)
 
@@ -570,11 +610,10 @@ def cmd_cluster_notes(args):
     manifest = ws.load_manifest(absolute=True)
     manifest["knowledge_blocks_plan"] = plan
     manifest["knowledge_blocks_results"] = block_results
-    manifest["note_style"] = style
     ws.save_manifest(manifest)
 
     print("\n" + "=" * 65)
-    print(f"[✓] 知识块聚合重构执行完毕！共导出 {len(block_results)} 份模块融合笔记任务书（风格: {style}）")
+    print(f"[✓] 知识块聚合重构执行完毕！共导出 {len(block_results)} 份模块笔记任务书")
     print(f"[✓] 任务书目录: {ws.notes_dir}")
     print("=" * 65)
 
@@ -600,15 +639,17 @@ def cmd_cluster_articles(args):
     print("=" * 65)
 
     integrator = ArticleIntegrator(ws.root_dir)
-    results = integrator.run(course_title=info["title"])
+    force = bool(getattr(args, "force", False))
+    results = integrator.run(course_title=info["title"], force=force)
 
-    # Update manifest
+    # Update manifest（textbooks 属列表型路径字段，save_manifest 会自动反向相对化）
     manifest = ws.load_manifest(absolute=True)
     manifest["textbooks"] = [str(r) for r in results]
     ws.save_manifest(manifest)
 
     print("\n" + "=" * 65)
-    print(f"[✓] 模块教材整编重构执行完毕！共生成 {len(results)} 部模块精读全书:")
+    print(f"[✓] 模块教材已就绪，共 {len(results)} 部模块精读全书"
+          f"（{'已按最新章节强制重编' if force else '已有教材默认复用，需重编请加 --force'}）:")
     for r in results:
         size_kb = round(r.stat().st_size / 1024, 1)
         print(f"    - [{size_kb} KB] {r.name}")
@@ -662,7 +703,7 @@ def cmd_cleanup(args):
     print(f"[*] 扫描基目录: {Path(args.base_dir).resolve()}")
     print("=" * 65)
 
-    total_deleted = total_kept = total_skipped = 0
+    total_deleted = total_kept = total_skipped = total_failed_delete = 0
     for ws in workspaces:
         result = cleanup_completed_tasks(ws, keep_per_category=keep_n, dry_run=dry_run)
         counts = result["counts"]
@@ -670,17 +711,22 @@ def cmd_cleanup(args):
         for category, stat in counts.items():
             print(
                 f"    {CATEGORY_LABELS[category]:<12} 共 {stat['total']:>4} 份 | "
-                f"回收 {stat['deleted']:>4} | 保留范本 {stat['kept']} | 成品未产出仍保留 {stat['skipped_pending']}"
+                f"回收 {stat['deleted']:>4} | 保留范本 {stat['kept']} | "
+                f"成品未产出仍保留 {stat['skipped_pending']} | 删除失败 {stat.get('failed_delete', 0)}"
             )
         total_deleted += len(result["deleted"])
         total_kept += len(result["kept"])
         total_skipped += len(result["skipped_pending"])
+        total_failed_delete += len(result.get("failed_delete", []))
         for path in result["kept"]:
             print(f"    [留] {path}")
+        for path in result.get("failed_delete", []):
+            print(f"    [!] 删除失败（文件被占用或无权限）: {path}")
 
     print("\n" + "=" * 65)
     verb = "可回收" if dry_run else "已回收"
-    print(f"[✓] {verb}任务书 {total_deleted} 份 | 保留范本 {total_kept} 份 | 成品未产出仍保留 {total_skipped} 份")
+    print(f"[✓] {verb}任务书 {total_deleted} 份 | 保留范本 {total_kept} 份 | "
+          f"成品未产出仍保留 {total_skipped} 份 | 删除失败 {total_failed_delete} 份")
     print("[i] topic_plan_TASK.md 属课程级规划任务书，唯一存在，永不回收。")
     if dry_run:
         print("[i] 当前为预演模式；去掉 --dry-run 即真正删除。")
@@ -711,7 +757,7 @@ def cmd_sync(args):
         print(f"\n▶ {report['workspace']}")
         print(f"    分集：{report['success']}/{report['total']} 集达标 | 待办 {report['pending']} | "
               f"跳过 {report['skipped']} | 历史失败 {report['failed']}")
-        print(f"    模块资产：笔记 {report['notes']} 份 | 教材 {report['textbooks']} 部 | "
+        print(f"    模块资产：模块笔记 {report['notes']} 份 | 教材 {report['textbooks']} 部 | "
               f"规划 {report['plan_blocks']} 块")
         print(f"    pipeline_completed = {report['pipeline_completed']}")
 
@@ -804,7 +850,10 @@ def cmd_info(args):
         print(f"• 无记录（读取失败：{err}）")
     print("=" * 65)
     print("【Agent 自主驱动工作协议】：")
-    print("1. 物理层跑批: python src/cli.py pipeline \"<链接>\" --all")
+    print("0. 类型判定（工作流第一步）: 依课程标题/分集标题判定长文类型，未命中已提供提示词的类型即终止任务")
+    print("   - 当前已提供提示词：learning（学习类：系统网课/公开课/讲座）")
+    print("1. 物理层跑批: python src/cli.py pipeline \"<链接>\" --all --article-type learning")
+    print("   - 长文提示词风格由用户确认：learning=学习（推荐）/ legacy=旧版；不确认即终止任务")
     print("2. 语料与任务书自动生成于 output/<任务名>/")
     print("   - articles/PXX_*_TASK.md: 单集精读文章提示词")
     print("   - notes/模块XX_*_TASK.md: 知识块聚合复习笔记提示词")
@@ -812,8 +861,8 @@ def cmd_info(args):
     print("=" * 65)
     print("【可复制的断点续跑命令示例】：")
     print('python src/cli.py login --sessdata "<你的 SESSDATA>"   # 一次持久化，后续命令免传')
-    print('python src/cli.py pipeline "<链接>" --all')
-    print('python src/cli.py pipeline "<链接>" --range 1-10')
+    print('python src/cli.py pipeline "<链接>" --all --article-type learning')
+    print('python src/cli.py pipeline "<链接>" --range 1-10 --article-type learning')
     print("=" * 65)
 
 
@@ -855,6 +904,12 @@ def main():
     p_tr.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
     p_tr.add_argument("--output", default=None, help="Optional custom output path (only used when cached clean transcript exists)")
     p_tr.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
+    p_tr.add_argument(
+        "--article-type", default=None, dest="article_type",
+        help="长文提示词风格（用户确认）：learning=学习（推荐，当前版）/ legacy=旧版（原稳定版）；"
+             "未指定时打印风格菜单并请用户确认，确认不了即终止任务。"
+             "另有 consulting/interview/review/livestream 四种形态已登记但提示词未提供，命中即终止。",
+    )
 
     # pipeline
     p_pipe = subparsers.add_parser("pipeline", help="Execute complete automated pipeline (Audio -> ASR -> Notes & Articles)")
@@ -870,6 +925,12 @@ def main():
     p_pipe.add_argument("--skip-failed", action="store_true", default=False, help="Explicit opt-in: exempt failed episodes from transcription gate (recorded in manifest skip list)")
     p_pipe.add_argument("--chunk-minutes", type=int, default=60, help="Split audio into chunks of ~N minutes (0=disabled, default=60)")
     p_pipe.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
+    p_pipe.add_argument(
+        "--article-type", default=None, dest="article_type",
+        help="长文提示词风格（用户确认）：learning=学习（推荐，当前版）/ legacy=旧版（原稳定版）；"
+             "未指定时打印风格菜单并请用户确认，确认不了即终止任务。"
+             "另有 consulting/interview/review/livestream 四种形态已登记但提示词未提供，命中即终止。",
+    )
 
     # info / agent-info
     p_info = subparsers.add_parser("info", aliases=["agent-info"], help="Show environment & toolchain readiness status")
@@ -900,11 +961,6 @@ def main():
         default=False,
         help="Optional: also inject existing knowledge-kernel JSON as a locating index (long articles stay the source of truth)",
     )
-    p_cl.add_argument(
-        "--style",
-        default=None,
-        help="Note style (minimal/精简, detailed/详细, academic/学术, tutorial/教程, task_oriented/任务导向, business/商业风格, meeting_minutes/会议纪要, life_journal/生活向). No default is set; user must specify.",
-    )
     p_cl.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
 
     # cluster-articles
@@ -912,7 +968,7 @@ def main():
     p_ca.add_argument("url", help="Bilibili URL or BV ID")
     p_ca.add_argument("--task", default=None, help="Custom task workspace folder name")
     p_ca.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
-    p_ca.add_argument("--force", action="store_true", help="Force re-integrating modular textbooks")
+    p_ca.add_argument("--force", action="store_true", help="Force re-integrating modular textbooks (default: reuse existing textbooks/)")
     p_ca.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
 
     # dedup
@@ -928,14 +984,14 @@ def main():
     p_cl2.add_argument("--task", default=None, help="Only process workspaces whose folder name contains this keyword")
     p_cl2.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
     p_cl2.add_argument("--keep", type=int, default=1, help="Samples to keep per category (default 1; 0=delete all completed)")
-    p_cl2.add_argument("--all", action="store_true", help="Process every workspace under base-dir (this is the default)")
+    p_cl2.add_argument("--all", action="store_true", help="Process every workspace under base-dir (compatibility flag; this is already the default)")
     p_cl2.add_argument("--dry-run", action="store_true", help="Only report what would be reclaimed")
 
     # sync：账本对账（以磁盘产物回填 manifest.json）
     p_sync = subparsers.add_parser("sync", help="Reconcile manifest.json with on-disk products (disk is the source of truth)")
     p_sync.add_argument("--task", default=None, help="Only process workspaces whose folder name contains this keyword")
     p_sync.add_argument("--base-dir", default="./output", help="Base output directory for task workspaces")
-    p_sync.add_argument("--all", action="store_true", help="Process every workspace under base-dir (this is the default)")
+    p_sync.add_argument("--all", action="store_true", help="Process every workspace under base-dir (compatibility flag; this is already the default)")
     p_sync.add_argument("--dry-run", action="store_true", help="Only report the reconciled state without writing")
 
     args = parser.parse_args()

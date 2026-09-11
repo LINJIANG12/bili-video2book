@@ -92,10 +92,9 @@ class WbiSigner:
     @classmethod
     def _写入文件缓存(cls, 路径: Path, 图片密钥: str, 子密钥: str, 过期时间: float) -> None:
         """原子写入文件缓存（仅保存密钥与有效期，不保存用户凭证）。"""
-        临时 = 路径.with_suffix(".tmp")
+        临时 = 路径.with_suffix(f".tmp.{os.getpid()}")
         try:
             路径.parent.mkdir(parents=True, exist_ok=True)
-            临时 = 路径.with_suffix(f".tmp.{os.getpid()}")
             with open(临时, "w", encoding="utf-8") as 写:
                 json.dump(
                     {"img_key": 图片密钥, "sub_key": 子密钥, "expire_at": 过期时间},

@@ -1,2 +1,3 @@
 """Bilibili Audio & Knowledge Extraction Package."""
-__version__ = "0.1.0"
+# 版本号与 SKILL.md 抬头、pyproject.toml 三处必须一致（scripts/selfcheck.py 会校验）
+__version__ = "1.9.0"

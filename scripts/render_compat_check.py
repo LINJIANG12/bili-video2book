@@ -9,11 +9,15 @@ Markdown 成品（含历史遗留的手工镜像目录）做渲染层面的机�
   ② 围栏外裸字符画（渲染时连续空格被合并，图形会彻底错位）
   ③ 代码围栏未成对闭合 ④ 围栏缺失语言标识
 
+  门禁口径：①②③ 为**致命项**，参与 `--strict`；④「缺语言标识」默认只提示不拦（历史成品
+  中存在大量既有缺口），需要死守时显式追加 `--require-lang`。
+
 用法：
     python scripts/render_compat_check.py                    # 体检全部工作区
     python scripts/render_compat_check.py --task 微机原理      # 只体检名称含关键字的工作区
     python scripts/render_compat_check.py --dir "<工作区路径>"
     python scripts/render_compat_check.py --strict           # 有致命项即返回非零
+    python scripts/render_compat_check.py --strict --require-lang   # 把「缺语言标识」也纳入门禁
     python scripts/render_compat_check.py --json
 """
 
@@ -60,7 +64,7 @@ def collect_markdown(ws: Any) -> List[Path]:
     return files
 
 
-def check_workspace(ws: Any) -> Dict[str, Any]:
+def check_workspace(ws: Any, require_lang: bool = False) -> Dict[str, Any]:
     entries: List[Dict[str, Any]] = []
     totals = {"alert_blocks": 0, "stray_art": 0, "fences_unbalanced": 0, "fence_without_lang": 0}
 
@@ -73,12 +77,16 @@ def check_workspace(ws: Any) -> Dict[str, Any]:
         summary = summarize_render(lint)
         for key, value in summary.items():
             totals[key] += value
-        # 只把「致命项」文件列入清单；缺语言标识属警告，仅计入总数（历史语料量大，避免淹没真信号）
+        # 默认只把「致命项」文件列入清单；缺语言标识属警告（历史语料量大，避免淹没真信号），
+        # 显式 --require-lang 时才把它提升为门禁项。
         fatal_here = fatal_render_total(summary)
+        if require_lang:
+            fatal_here += summary["fence_without_lang"]
         if fatal_here == 0:
             continue
         entries.append({
             "file": TaskWorkspace.to_relative(path),
+            "fatal": fatal_here,
             "summary": summary,
             "samples": {
                 "alert_blocks": lint["alert_blocks"][:3],
@@ -88,6 +96,8 @@ def check_workspace(ws: Any) -> Dict[str, Any]:
         })
 
     fatal = fatal_render_total(totals)
+    if require_lang:
+        fatal += totals["fence_without_lang"]
     return {
         "workspace": ws.root_dir.name,
         "workspace_path": str(ws.root_dir),
@@ -95,6 +105,7 @@ def check_workspace(ws: Any) -> Dict[str, Any]:
         "problem_files": len(entries),
         "totals": totals,
         "fatal_total": fatal,
+        "require_lang": bool(require_lang),
         "entries": entries,
     }
 
@@ -106,6 +117,8 @@ def main() -> int:
     parser.add_argument("--task", default=None, help="仅处理目录名包含该关键字的工作区")
     parser.add_argument("--json", action="store_true", help="JSON 输出")
     parser.add_argument("--strict", action="store_true", help="存在致命项即返回非零")
+    parser.add_argument("--require-lang", action="store_true", dest="require_lang",
+                        help="把「围栏缺语言标识」也纳入门禁（默认只提示；历史成品存在既有缺口）")
     args = parser.parse_args()
 
     if args.dir:
@@ -123,13 +136,16 @@ def main() -> int:
         print(f"[ERROR] 未找到可用工作区（base-dir={args.base_dir}）", file=sys.stderr)
         return 1
 
-    reports = [check_workspace(ws) for ws in workspaces]
+    reports = [check_workspace(ws, require_lang=args.require_lang) for ws in workspaces]
 
     if args.json:
-        print(json.dumps({"reports": reports, "strict": bool(args.strict)}, ensure_ascii=False, indent=2))
+        print(json.dumps({"reports": reports, "strict": bool(args.strict),
+                          "require_lang": bool(args.require_lang)}, ensure_ascii=False, indent=2))
     else:
         print("=" * 72)
         print("[*] 交付物渲染合规体检（告警块 / 围栏外字符画 / 围栏配对 / 围栏语言标识）")
+        scope = "语言标识=门禁项（--require-lang）" if args.require_lang else "语言标识=提示项（不参与 --strict）"
+        print(f"[*] 门禁口径：{scope}")
         print("=" * 72)
         for report in reports:
             print(f"\n▶ {report['workspace']}")

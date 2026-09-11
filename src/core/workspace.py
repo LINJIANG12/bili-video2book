@@ -146,6 +146,38 @@ class TaskWorkspace:
             except Exception:
                 return str(path).replace(os.sep, "/")
 
+    @staticmethod
+    def merge_parts(existing: Any, incoming: Any) -> List[Any]:
+        """按 `page` 合并分集拓扑，返回排序后的列表（`incoming` 覆盖同 page 旧值）。
+
+        必要原因：`pipeline --page N` / `--range A-B` 这类**局部运行**只处理选中分集，
+        若直接用子集覆盖 `parts.json`，就会把「分集拓扑缓存」截断成那几集——接口被风控
+        时的离线自愈会据此误判课程规模，`cli.py sync` 的 episode_total 也随之变小。
+        """
+        merged: Dict[Any, Any] = {}
+        order: List[Any] = []
+
+        def _吸收(数据: Any) -> None:
+            if not isinstance(数据, list):
+                return
+            for 条目 in 数据:
+                if not isinstance(条目, dict):
+                    continue
+                键 = 条目.get("page")
+                if 键 is None:
+                    continue
+                if 键 not in merged:
+                    order.append(键)
+                merged[键] = 条目
+
+        _吸收(existing)
+        _吸收(incoming)
+
+        def 排序键(键: Any) -> tuple:
+            return (0, 键, "") if isinstance(键, int) else (1, 0, str(键))
+
+        return [merged[键] for 键 in sorted(order, key=排序键)]
+
     def save_parts(self, parts: Union[List[Any], Dict[str, Any]]) -> Path:
         """原子写入分集列表缓存。"""
         目标 = self.parts_cache_path
@@ -172,19 +204,39 @@ class TaskWorkspace:
         except Exception:
             return []
 
+    # 单值路径字段（策略：入库相对仓库根，读回绝对路径）
     PATH_KEYS = {
         "audio", "transcript", "task_prompt", "task_file", "article",
-        "audio_file", "filepath", "source_path", "target_path", "chunk_path", "chunk_file"
+        "audio_file", "filepath", "source_path", "target_path", "chunk_path", "chunk_file",
+        # 模块笔记任务书结果里的目标文件；缺了它会把机器绝对路径写进 manifest
+        "note_file", "kernel_file",
     }
+
+    # 列表型路径字段（元素为路径字符串）：textbooks / notes_files / kernels 等
+    # 只在字典分支按 key 判定，因此必须单独列一份并在两个方向都逐项转换，
+    # 否则 cluster-articles 单独跑完会把盘符绝对路径留在 manifest 里。
+    PATH_LIST_KEYS = {"textbooks", "notes_files", "kernels"}
+
+    @classmethod
+    def _convert_path_list(cls, values: Any, converter, fallback) -> Any:
+        """对列表型路径字段逐项做路径换算；非列表原样交给 fallback 递归处理。"""
+        if not isinstance(values, list):
+            return fallback(values)
+        return [converter(v) if isinstance(v, (str, Path)) else fallback(v) for v in values]
 
     @classmethod
     def relativize_obj(cls, obj: Any) -> Any:
         """递归将字典/列表中属于路径键的值换算为相对仓库根目录的相对路径。"""
         if isinstance(obj, dict):
-            return {
-                k: (cls.to_relative(v) if k in cls.PATH_KEYS and isinstance(v, (str, Path)) else cls.relativize_obj(v))
-                for k, v in obj.items()
-            }
+            result = {}
+            for k, v in obj.items():
+                if k in cls.PATH_LIST_KEYS:
+                    result[k] = cls._convert_path_list(v, cls.to_relative, cls.relativize_obj)
+                elif k in cls.PATH_KEYS and isinstance(v, (str, Path)):
+                    result[k] = cls.to_relative(v)
+                else:
+                    result[k] = cls.relativize_obj(v)
+            return result
         if isinstance(obj, list):
             return [cls.relativize_obj(x) for x in obj]
         return obj
@@ -193,10 +245,17 @@ class TaskWorkspace:
     def absolutize_obj(cls, obj: Any) -> Any:
         """递归将字典/列表中属于路径键的值换算为绝对路径供程序内部安全读取。"""
         if isinstance(obj, dict):
-            return {
-                k: (str(cls.to_absolute(v)) if k in cls.PATH_KEYS and isinstance(v, (str, Path)) else cls.absolutize_obj(v))
-                for k, v in obj.items()
-            }
+            result = {}
+            for k, v in obj.items():
+                if k in cls.PATH_LIST_KEYS:
+                    result[k] = cls._convert_path_list(
+                        v, lambda p: str(cls.to_absolute(p)), cls.absolutize_obj
+                    )
+                elif k in cls.PATH_KEYS and isinstance(v, (str, Path)):
+                    result[k] = str(cls.to_absolute(v))
+                else:
+                    result[k] = cls.absolutize_obj(v)
+            return result
         if isinstance(obj, list):
             return [cls.absolutize_obj(x) for x in obj]
         return obj

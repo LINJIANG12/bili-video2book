@@ -186,8 +186,13 @@ def lint_note(text: str) -> Dict[str, Any]:
 
 
 def check_note_structure(text: str) -> Dict[str, Any]:
-    """结构完备性：视觉规范 v2 要求的必备构件是否齐备。"""
+    """结构完备性：笔记版式规范要求的必备构件是否齐备。
+
+    注意：现行笔记风格**不含**「速查卡 / 一句话总纲」（与树、条目重复，已废弃），
+    因此结构项里不再检查它们，改为要求「末尾没有多余收尾小节」。
+    """
     quote_lines = sum(1 for ln in text.splitlines() if ln.strip().startswith(">"))
+    heading_texts = re.findall(r"^#{1,6}\s+(.*)$", text, re.M)
     return {
         "has_h1": bool(re.search(r"^#\s+\S", text, re.M)),
         "has_metadata_block": quote_lines >= 2,
@@ -195,7 +200,9 @@ def check_note_structure(text: str) -> Dict[str, Any]:
         "has_sections": len(re.findall(r"^##\s+\S", text, re.M)) >= 2,
         "has_oneline_theme": "一句话主旨" in text,
         "has_source_marks": bool(re.search(r">\s*来源\s*[:：]\s*P\d+", text)),
-        "has_final_summary": "一句话总纲" in text,
+        "no_redundant_tail": not any(
+            ("速查卡" in h) or ("一句话总纲" in h) for h in heading_texts
+        ),
     }
 
 
@@ -249,7 +256,7 @@ STRUCTURE_KEYS = (
     "has_sections",
     "has_oneline_theme",
     "has_source_marks",
-    "has_final_summary",
+    "no_redundant_tail",
 )
 
 FATAL_RENDER_KEYS = ("alert_blocks", "stray_art", "fences_unbalanced")

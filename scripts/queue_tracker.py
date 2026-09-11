@@ -203,7 +203,6 @@ def scan_status(ws: Path, min_article_bytes: int = 1000) -> Dict:
         [f for f in notes_dir.glob("*.md") if not f.name.endswith("_TASK.md")]
         if notes_dir.exists() else []
     )
-
     return {
         "workspace": str(ws),
         "workspace_name": ws.name,

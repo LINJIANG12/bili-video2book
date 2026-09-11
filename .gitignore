@@ -27,6 +27,8 @@ env/
 ENV/
 
 # Output directories & audio artifacts
+# 说明（三域分离后）：产物根 output/ 已位于本仓库之外（与 skill/、mcp/ 平级），
+# 此处保留相关条目仅作安全网——防止有人把产物目录搬回仓库内后被误提交。
 output/
 downloads/
 *.m4a
@@ -35,6 +37,10 @@ downloads/
 *.wav
 .backup_single_notes/
 *.tmp.*
+
+# 容器根归档与锚点标记（产物备份、原仓库裸克隆、home 标记）
+.archive/
+.bvb-home
 
 # Testing & Dev caches
 .pytest_cache/

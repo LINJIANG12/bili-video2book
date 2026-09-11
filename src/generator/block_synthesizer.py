@@ -1,12 +1,14 @@
 """Block Synthesizer: 导出「模块笔记」融合任务书（文章直供版）。
 
 架构定位：工具层只负责**备料与渲染提示词**——把该模块各集单集精读长文（`articles/`）的路径清单、
-模块边界信息、专属提示词（`MODULE_NOTE_PROMPT`）、渲染兼容规则与视觉规范 v2 组装成
+模块边界信息、专属提示词（`MODULE_NOTE_PROMPT`）、渲染兼容规则与笔记版式规范组装成
 `notes/模块XX_*_TASK.md`，交由宿主 Agent（通常是每模块一个子智能体）原生撰写。
 
 语料变更（v1.7）：模块笔记的唯一事实来源是**单集精读长文**；
 知识元（kernel）已从「前置门禁」降级为「可选索引」（`kernel_index` 显式传入才注入），
 因为空壳知识元会把笔记质量一并拖垮。成品产出后任务书由 task_cleanup 自动回收。
+
+风格变更（v1.8）：笔记**只有这一种风格**（旧版八种风格矩阵已删除），不再需要 `--style`。
 """
 
 import json
@@ -15,7 +17,6 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from src.generator.prompt_templates import (
     MODULE_NOTE_PROMPT,
-    NOTE_STYLES,
     NOTE_VISUAL_SPEC,
     RENDER_COMPAT_RULES,
 )
@@ -67,10 +68,12 @@ class BlockSynthesizer:
         cls,
         block_meta: Dict[str, Any],
         article_paths: Optional[Iterable[Any]] = None,
-        style: Optional[str] = None,
         kernel_index: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
-        """组装模块笔记撰写提示词（文章直供 + 指定风格 + 渲染与视觉规范）。"""
+        """组装模块笔记撰写提示词（文章直供 + 渲染硬约束 + 统一版式规范）。
+
+        笔记只有这一种风格，因此不再接受 `style` 参数。
+        """
         eps = sorted(block_meta.get("episodes", []))
         p_str = f"P{eps[0]:02d}-P{eps[-1]:02d}" if len(eps) > 1 else (f"P{eps[0]:02d}" if eps else "P??")
         b_id_str = f"{block_meta.get('block_id', 1):02d}"
@@ -101,23 +104,7 @@ class BlockSynthesizer:
                 f"```json\n{compact}\n```\n"
             )
 
-        # 指定笔记风格
-        if style:
-            style_key = style.lower().strip()
-            for k, v in NOTE_STYLES.items():
-                if style.strip() == k or style.strip() == v.get("label"):
-                    style_key = k
-                    break
-            if style_key in NOTE_STYLES:
-                st = NOTE_STYLES[style_key]
-                prompt += (
-                    f"\n━━━━━━━━━━━━━━━━━━\n"
-                    f"七、指定笔记风格：{st['label']} ({style_key})\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"{st['instruction']}\n"
-                )
-
-        # 渲染兼容硬约束 + 视觉规范 v2：在此统一注入，八种风格全覆盖
+        # 排版硬约束 + 统一版式规范：在此统一注入（笔记只有这一种风格，不再按风格分支）
         prompt += f"\n━━━━━━━━━━━━━━━━━━\n{RENDER_COMPAT_RULES}\n"
         prompt += f"\n━━━━━━━━━━━━━━━━━━\n{NOTE_VISUAL_SPEC}\n"
         return prompt
@@ -136,13 +123,22 @@ class BlockSynthesizer:
         return cls.get_task_filename(block_meta)[: -len("_TASK.md")] + "_笔记.md"
 
     @classmethod
+    def _find_existing_note(cls, ws: Any, block_meta: Dict[str, Any]) -> Optional[Path]:
+        """定位该模块已落盘的笔记成品（规范名优先，回退按模块号前缀匹配）。"""
+        note_file = ws.notes_dir / cls.get_note_filename(block_meta)
+        try:
+            from src.core.task_cleanup import find_module_note
+        except Exception:
+            return note_file if note_file.exists() else None
+        return find_module_note(ws, block_meta.get("block_id"), preferred_name=note_file.name)
+
+    @classmethod
     def synthesize_block(
         cls,
         block_meta: Dict[str, Any],
         articles: Optional[Iterable[Any]] = None,
         ws: Any = None,
         force: bool = False,
-        style: Optional[str] = None,
         kernel_index: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """导出模块笔记融合任务书（文章直供版），供宿主 Agent / 子智能体原生撰写。
@@ -163,24 +159,36 @@ class BlockSynthesizer:
         }
 
         # 成品已存在：不再重复派发，并顺手回收残留任务书（保留编号最小的范本）
-        if note_file.exists() and note_file.stat().st_size >= MIN_NOTE_BYTES and not force:
+        # 复用判定统一交给 task_cleanup.find_module_note：先规范名，再按模块号前缀回退，
+        # 否则历史工作区里叫 `模块XX_…_思维导图速查笔记.md` 的成品会被判成「无成品」而重复派发。
+        cached_note = cls._find_existing_note(ws, block_meta)
+        if (
+            cached_note is not None
+            and cached_note.stat().st_size >= MIN_NOTE_BYTES
+            and not force
+        ):
             try:
                 from src.core.task_cleanup import reclaim_module_note_task
                 reclaim_module_note_task(ws, int(block_meta.get("block_id", 1)))
             except Exception:
                 pass
-            print(f"[*] 模块 {block_meta['block_id']:02d} ({p_str}) 模块笔记已存在，跳过派发: {note_file.name}")
-            return {**base_result, "size_bytes": note_file.stat().st_size, "status": "cached"}
+            print(f"[*] 模块 {block_meta['block_id']:02d} ({p_str}) 模块笔记已存在，跳过派发: {cached_note.name}")
+            return {
+                **base_result,
+                "note_file": str(cached_note),
+                "size_bytes": cached_note.stat().st_size,
+                "status": "cached",
+            }
 
         synthesis_prompt = cls.build_synthesis_prompt(
-            block_meta, article_paths=articles, style=style, kernel_index=kernel_index
+            block_meta, article_paths=articles, kernel_index=kernel_index
         )
         header = (
             f"# 模块 {block_meta['block_id']:02d} {block_meta.get('block_title', '')} 模块笔记任务书（MODULE_NOTE_TASK）\n\n"
             f"> 状态：need-agent-note | 语料：本模块单集精读长文（articles/） | 由宿主 Agent / 子智能体原生撰写\n"
             f"> 工作区绝对路径：`{Path(ws.root_dir).as_posix()}`\n\n"
             f"## 1. 落盘要求\n\n"
-            f"- 撰写提示词见下方第 2 节（含模块信息、语料清单、结构禁令、零套话禁令与视觉规范 v2）\n"
+            f"- 撰写提示词见下方第 2 节（含模块信息、语料清单、结构要求、密度纪律、零套话禁令与笔记版式规范）\n"
             f"- 目标文件：`{Path(note_file).as_posix()}`\n"
             f"- 必须逐篇完整读取上方列出的单集精读长文后再撰写；成品产出后本任务书会被自动回收\n"
             f"- 执行须知：建议由**一个子智能体负责一个模块**；完成后只需回报"

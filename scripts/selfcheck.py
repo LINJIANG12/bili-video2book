@@ -389,7 +389,6 @@ def check_render_compat_rules():
     from src.generator.block_synthesizer import BlockSynthesizer
     from src.generator.prompt_templates import (
         ARTICLE_LEARNING_PROMPT,
-        NOTE_STYLES,
         RENDER_COMPAT_RULES,
     )
 
@@ -409,13 +408,14 @@ def check_render_compat_rules():
     assert "```text 围栏内" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 未要求字符画进围栏"
     assert "{article_list}" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 缺少语料清单占位符"
 
-    # 4) 八种笔记风格 + 未指定风格，经注入后必须全覆盖
+    # 4) 笔记只有一种风格：渲染兼容规则与版式规范都必须注入（build_synthesis_prompt 已无 style 参数）
+    import inspect as _inspect
+
+    assert "style" not in _inspect.signature(BlockSynthesizer.build_synthesis_prompt).parameters, \
+        "build_synthesis_prompt 不应再有 style 参数（八种旧风格已删除）"
     block_meta = {"block_id": 1, "block_title": "t", "episodes": [1], "core_theme": "x"}
-    for key in NOTE_STYLES:
-        prompt = BlockSynthesizer.build_synthesis_prompt(block_meta, [], style=key)
-        assert RENDER_COMPAT_RULES in prompt, f"风格 {key} 未注入渲染兼容规则"
     assert RENDER_COMPAT_RULES in BlockSynthesizer.build_synthesis_prompt(block_meta, []), \
-        "未指定风格时也未注入渲染兼容规则"
+        "模块笔记提示词未注入渲染兼容规则"
 
     # 5) 格式总纲（含镜像）必须写明阅读器为 Typora
     for rel in (
@@ -428,13 +428,12 @@ def check_render_compat_rules():
 
 
 def check_module_note_contract():
-    """模块笔记契约：文章直供 + 零套话禁令 + 视觉规范 v2 + 分集标题禁令 + 任务书回收。"""
+    """模块笔记契约：文章直供 + 只写结论 + 零套话 + 版式规范 + 两条排版硬约束 + 任务书回收。"""
     from src.core.task_cleanup import cleanup_completed_tasks  # noqa: F401  (导入即校验依赖无环)
     from src.core.workspace import TaskWorkspace
     from src.generator.block_synthesizer import BlockSynthesizer
     from src.generator.prompt_templates import (
         MODULE_NOTE_PROMPT,
-        NOTE_STYLES,
         NOTE_VISUAL_SPEC,
     )
 
@@ -447,28 +446,39 @@ def check_module_note_contract():
     ):
         assert 关键短语 in MODULE_NOTE_PROMPT, f"MODULE_NOTE_PROMPT 缺少{说明}：{关键短语}"
 
-    # 2) 视觉规范 v2 的三项标志性要求必须在位
-    for 关键短语 in ("一句话主旨", "速查卡", "一句话总纲"):
+    # 2) 版式规范标志性要求必须在位；且必须明令不再写「速查卡 / 一句话总纲」
+    for 关键短语 in ("一句话主旨", "知识拓扑树", "来源: P03"):
         assert 关键短语 in NOTE_VISUAL_SPEC, f"NOTE_VISUAL_SPEC 缺少「{关键短语}」要求"
+    assert "末尾不加收尾小节" in NOTE_VISUAL_SPEC, "NOTE_VISUAL_SPEC 未禁止末尾收尾小节"
 
-    # 3) 精简风格不得再把「分集/小节标题」写成标题层级示范
-    minimal_instruction = NOTE_STYLES["minimal"]["instruction"]
-    assert "## 分集/小节标题" not in minimal_instruction, "minimal 风格仍在示范分集标题层级"
-    assert "严禁使用分集编号或分集标题" in minimal_instruction, "minimal 风格未写明分集标题禁令"
+    # 2b) 两条最容易翻车的排版硬要求必须在位
+    assert "围栏整体缩进 4 个空格" in NOTE_VISUAL_SPEC, "版式规范缺少字符画围栏缩进要求"
+    assert "一个汉字按 2 列、一个 ASCII 字符按 1 列" in NOTE_VISUAL_SPEC, \
+        "版式规范缺少拓扑树按显示宽度对齐的要求"
 
-    # 4) 任务书渲染：八种风格 + 未指定风格都必须带上视觉规范与语料清单
+    # 2c) 密度纪律：只写结论、不写推导
+    assert "只写结论，不写推导" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 缺少「只写结论不写推导」纪律"
+    assert "标题用技术文档的朴素写法" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 缺少朴素标题要求"
+    assert "不许硬造子标题" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 未禁止硬造子标题"
+
+    # 3) 旧版八种笔记风格必须已彻底删除（含标签与指令文案）
+    for 已删除 in ("NOTE_STYLES", "minimal", "detailed", "academic", "tutorial",
+                  "task_oriented", "business", "meeting_minutes", "life_journal"):
+        text = (PROJECT_ROOT / "src" / "generator" / "prompt_templates.py").read_text(encoding="utf-8")
+        assert 已删除 not in text, f"prompt_templates.py 仍残留旧笔记风格痕迹：{已删除}"
+
+    # 4) 任务书渲染：必须带上版式规范与语料清单
     block_meta = {"block_id": 3, "block_title": "关系数据库", "episodes": [6, 7], "core_theme": "关系模型"}
     样例文章 = PROJECT_ROOT / "SKILL.md"  # 仅需一个存在的文件来渲染字节数
-    for key in list(NOTE_STYLES) + [None]:
-        prompt = BlockSynthesizer.build_synthesis_prompt(block_meta, [样例文章], style=key)
-        assert NOTE_VISUAL_SPEC in prompt, f"风格 {key} 未注入视觉规范 v2"
-        assert "SKILL.md" in prompt, f"风格 {key} 未渲染语料清单"
+    prompt = BlockSynthesizer.build_synthesis_prompt(block_meta, [样例文章])
+    assert NOTE_VISUAL_SPEC in prompt, "任务书未注入版式规范"
+    assert "SKILL.md" in prompt, "任务书未渲染语料清单"
 
     # 5) 知识元默认不参与：不传 kernel_index 时不得出现知识元索引段
-    prompt_without = BlockSynthesizer.build_synthesis_prompt(block_meta, [样例文章], style="minimal")
+    prompt_without = BlockSynthesizer.build_synthesis_prompt(block_meta, [样例文章])
     assert "可选结构化索引" not in prompt_without, "未显式开启时仍注入了知识元索引"
     prompt_with = BlockSynthesizer.build_synthesis_prompt(
-        block_meta, [样例文章], style="minimal",
+        block_meta, [样例文章],
         kernel_index=[{"page": 6, "status": "extracted", "definitions": []}],
     )
     assert "可选结构化索引" in prompt_with, "显式传入 kernel_index 时未注入索引段"
@@ -515,6 +525,101 @@ def check_module_note_contract():
 
 
 
+def check_article_prompt_types():
+    """长文提示词风格契约：学习（推荐）+ 旧版（原稳定版）两种风格，由用户确认后使用。
+
+    另外四种视频形态只登记、不提供提示词：命中即打印风格菜单并终止任务（不猜、不降级）。
+    """
+    import tempfile
+
+    from src.core.pipeline import export_article_task
+    from src.core.workspace import TaskWorkspace
+    from src.generator.prompt_templates import (
+        ARTICLE_LEARNING_PROMPT,
+        ARTICLE_LEGACY_PROMPT,
+        ARTICLE_PROMPT_TYPES,
+        IMPLEMENTED_ARTICLE_TYPES,
+        ArticlePromptTypeError,
+        render_article_prompt_menu,
+        resolve_article_prompt,
+    )
+
+    # 1) 只提供两种风格，且「学习」是推荐风格；其余形态登记齐备但必须没有提示词
+    assert IMPLEMENTED_ARTICLE_TYPES == ("learning", "legacy"),         f"已提供提示词的状态异常: {IMPLEMENTED_ARTICLE_TYPES}"
+    assert ARTICLE_PROMPT_TYPES["learning"].get("recommended") is True, "「学习」未被标为推荐风格"
+    assert len(ARTICLE_PROMPT_TYPES) >= 2, "风格矩阵至少应登记学习与旧版"
+    for key, meta in ARTICLE_PROMPT_TYPES.items():
+        assert meta.get("label"), f"风格 {key} 缺少中文名"
+        assert meta.get("signals"), f"风格 {key} 缺少适用信号（用户无法据以选择）"
+        if key not in IMPLEMENTED_ARTICLE_TYPES:
+            assert not meta.get("prompt"), f"风格 {key} 不应提供提示词"
+
+    # 2) 旧版必须与改写前的原稳定版一致：仍走客观学术第一视角与随堂自测
+    for 关键短语 in ("客观、直接的技术/学术第一视角", "随堂自测", "去口语化"):
+        assert 关键短语 in ARTICLE_LEGACY_PROMPT, f"旧版提示词缺少原有条款：{关键短语}"
+    for 反例 in ("保住讲师的讲课风格", "标题用技术文档的朴素写法"):
+        assert 反例 not in ARTICLE_LEGACY_PROMPT, f"旧版提示词混入了新风格条款：{反例}"
+
+    # 3) 学习版（推荐）的立意必须在位：保讲课风格 / 高信息密度 / 成稿观感 / 噪声清单含舞台提示
+    for 关键短语 in ("保住讲师的讲课风格", "高信息密度", "成稿观感", "（笑）"):
+        assert 关键短语 in ARTICLE_LEARNING_PROMPT, f"学习版提示词缺少「{关键短语}」"
+
+    # 4) 已判定不合格的扩张型/编造型条款不得回流
+    for 反例 in ("宁可充分展开", "绝不跳步"):
+        assert 反例 not in ARTICLE_LEARNING_PROMPT, f"学习版提示词回流了扩张型条款：{反例}"
+    assert "不要凭印象替他补一份" in ARTICLE_LEARNING_PROMPT, "缺少「不得替讲师补写代码」的禁令"
+
+    # 5) 标题规则（第 4~8 轮逐步加固）：朴素写法 + 数量与切分跟着内容 + 不许硬造子标题 + 不许撑大原文
+    for 关键短语 in ("标题用技术文档的朴素写法", "严禁口语化、修辞化、带语气或带悬念的标题",
+                   "标题的数量与切分跟着这一讲走", "不许硬造子标题", "不许出现空壳层级"):
+        assert 关键短语 in ARTICLE_LEARNING_PROMPT, f"学习版提示词缺少标题规则：{关键短语}"
+    assert "不构成" in ARTICLE_LEARNING_PROMPT and "义务" in ARTICLE_LEARNING_PROMPT, \
+        "学习版提示词未禁止「立了标题就要写满」"
+
+    # 6) 风格解析：键 / 中文名都要命中；未指定、拼错、无提示词的形态都必须终止
+    assert resolve_article_prompt("learning")["key"] == "learning"
+    assert resolve_article_prompt("学习")["key"] == "learning"
+    assert resolve_article_prompt("legacy")["key"] == "legacy"
+    assert resolve_article_prompt("旧版")["key"] == "legacy"
+    for bad in ("", "网课", "consulting", "livestream"):
+        try:
+            resolve_article_prompt(bad)
+        except ArticlePromptTypeError as err:
+            assert "菜单" in err.report, "终止提示未附带风格菜单"
+            continue
+        raise AssertionError(f"非预设风格未终止任务: {bad!r}")
+
+    # 7) 菜单必须列出全部风格、标出推荐、并给出可复制用法
+    menu = render_article_prompt_menu()
+    for key in ARTICLE_PROMPT_TYPES:
+        assert f"--article-type {key}" in menu, f"风格菜单缺少 {key}"
+    assert "推荐" in menu, "风格菜单未标出推荐风格"
+    assert "--all --article-type" in menu, "风格菜单缺少可复制用法"
+
+    # 8) 端到端：未命中风格不得落盘任何任务书；命中时任务书须写明风格并注入对应提示词
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = TaskWorkspace(task_name="style_gate", base_dir=tmp)
+        for bad in ("", "consulting", "乱写"):
+            try:
+                export_article_task(ws, 1, "绪论", None, title="测试课程", article_type=bad)
+            except ArticlePromptTypeError:
+                pass
+            else:
+                raise AssertionError(f"风格 {bad!r} 未被门禁拦下")
+        assert not list(ws.articles_dir.glob("*_TASK.md")), "风格未命中却落了任务书"
+
+        task = export_article_task(ws, 1, "绪论", None, title="测试课程", article_type="学习")
+        text = task.read_text(encoding="utf-8")
+        assert "长文风格：学习" in text, "任务书未写明所选长文风格"
+        assert "保住讲师的讲课风格" in text, "任务书未注入学习版提示词"
+
+        (ws.articles_dir / "P01_绪论_精读文章.md").unlink(missing_ok=True)
+        legacy_task = export_article_task(ws, 2, "数制", None, title="测试课程", article_type="legacy")
+        legacy_text = legacy_task.read_text(encoding="utf-8")
+        assert "长文风格：旧版" in legacy_text, "旧版任务书未写明风格"
+        assert "随堂自测" in legacy_text, "旧版任务书未注入旧版提示词"
+
+
 def check_deliverable_lint_gate():
     """真实交付物机器门禁：告警块与围栏配对必须为 0（仓库无 output/ 时自动跳过）。
 
@@ -550,6 +655,262 @@ def check_deliverable_lint_gate():
     assert unbalanced == 0, f"交付物中仍有 {unbalanced} 个未成对闭合的代码围栏"
 
 
+def check_docs_style_matrix_clean():
+    """文档不得再残留已删除的旧笔记风格：minimal / detailed 只存在于历史记忆里。"""
+    for rel in (
+        "README.md",
+        "README.en.md",
+        "SKILL.md",
+        "references/delivery_matrix.md",
+    ):
+        text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        low = text.lower()
+        for 已删除 in ("minimal", "detailed"):
+            assert 已删除 not in low, f"{rel} 仍残留已删除的笔记风格字样：{已删除}"
+
+
+def check_delivery_matrix_article_types():
+    """交付矩阵的长文类型表必须覆盖全部已登记类型，且标明 legacy 的存在与 learning 的推荐地位。"""
+    from src.generator.prompt_templates import ARTICLE_PROMPT_TYPES, IMPLEMENTED_ARTICLE_TYPES
+
+    for rel in (
+        "references/delivery_matrix.md",
+        ".agents/skills/bili-video2book/references/delivery_matrix.md",
+    ):
+        text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        for key in ARTICLE_PROMPT_TYPES:
+            assert f"`{key}`" in text, f"{rel} 的类型表缺少 {key} 行"
+        assert "推荐" in text or "已提供（推荐" in text, f"{rel} 未标出推荐风格"
+        assert set(IMPLEMENTED_ARTICLE_TYPES) == {"learning", "legacy"}, \
+            f"已提供提示词的类型集合变化，文档需同步：{IMPLEMENTED_ARTICLE_TYPES}"
+
+
+def check_version_consistency():
+    """版本号三处必须一致：SKILL 抬头 / pyproject / src.__version__。"""
+    import re as _re
+
+    import src
+
+    skill = (PROJECT_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    m_skill = _re.search(r"^\s*version:\s*([^\s]+)\s*$", skill, _re.M)
+    assert m_skill, "SKILL.md 抬头缺少 version 字段"
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    m_proj = _re.search(r'^version\s*=\s*"([^"]+)"', pyproject, _re.M)
+    assert m_proj, "pyproject.toml 缺少 version"
+    versions = {"SKILL.md": m_skill.group(1), "pyproject.toml": m_proj.group(1), "src.__version__": src.__version__}
+    assert len(set(versions.values())) == 1, f"版本号不一致: {versions}"
+
+
+def check_quality_gate_copy():
+    """质检文档口径必须与代码一致：五类致命项齐全，且语言标识写明是提示项。"""
+    from src.core.deliverable_lint import FATAL_NOTE_KEYS
+
+    assert len(FATAL_NOTE_KEYS) == 5, f"致命项集合变化，文档需同步：{FATAL_NOTE_KEYS}"
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    for 中文标签 in ("套话填充", "空壳标题", "分集平铺标题", "行内残缺引用", "分集口吻"):
+        assert 中文标签 in readme, f"README.md 质检说明缺少致命项：{中文标签}"
+    readme_en = (PROJECT_ROOT / "README.en.md").read_text(encoding="utf-8").lower()
+    for 英文标签 in ("boilerplate", "hollow", "per-episode headings", "inline quote", "episode voice"):
+        assert 英文标签 in readme_en, f"README.en.md 质检说明缺少致命项：{英文标签}"
+    for rel in ("SKILL.md", "README.md", "README.en.md"):
+        text = (PROJECT_ROOT / rel).read_text(encoding="utf-8")
+        assert "语言标识" in text or "language tag" in text.lower() or "language identifier" in text.lower(), \
+            f"{rel} 未说明围栏语言标识的体检口径"
+
+
+def check_manifest_paths_portable():
+    """清单路径必须可移植：路径字段（含列表型）一律按 to_relative 归一，绝不原样落盘绝对路径。
+
+    注意：临时工作区可能位于**另一个盘符**（TEMP 在 C:、仓库在 D:），此时跨盘 relativize 无法
+    产出 `../..` 形式，会退化为绝对路径——因此这里断言的是「落盘值恒等于 to_relative(原值)」，
+    而不是「一定不是绝对路径」；另用仓库内路径单独验证相对化后不含盘符。
+    """
+    import json
+    import re as _re
+    import tempfile
+
+    from src.core.workspace import TaskWorkspace
+
+    drive_re = _re.compile(r"[A-Za-z]:[\\/]")
+
+    # 仓库内路径：相对化后必须是纯相对、无盘符、无反斜杠
+    in_repo_rel = TaskWorkspace.to_relative(PROJECT_ROOT / "output" / "__probe__" / "模块01_甲_精读全书.md")
+    assert in_repo_rel == "output/__probe__/模块01_甲_精读全书.md", f"仓库内路径相对化异常: {in_repo_rel}"
+    assert not drive_re.search(in_repo_rel) and "\\" not in in_repo_rel
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = TaskWorkspace(task_name="portable_probe", base_dir=tmp)
+        raw = {
+            "textbooks": [str(ws.root_dir / "textbooks" / "模块01_甲_精读全书.md")],
+            "notes_files": [str(ws.notes_dir / "模块01_甲_笔记.md")],
+            "note_file": str(ws.notes_dir / "模块01_甲_笔记.md"),
+            "kernel_file": str(ws.subtitles_dir / "kernels" / "P01_甲_kernel.json"),
+            "details": [{"page": 1, "article": str(ws.articles_dir / "P01_甲_精读文章.md")}],
+        }
+        rel = ws.relativize_obj(raw)
+        assert rel["textbooks"] == [TaskWorkspace.to_relative(raw["textbooks"][0])], \
+            f"textbooks 未按 to_relative 归一: {rel['textbooks']}"
+        assert rel["notes_files"] == [TaskWorkspace.to_relative(raw["notes_files"][0])], \
+            f"notes_files 未按 to_relative 归一: {rel['notes_files']}"
+        assert rel["note_file"] == TaskWorkspace.to_relative(raw["note_file"]), \
+            f"note_file 未按 to_relative 归一: {rel['note_file']}"
+        assert rel["kernel_file"] == TaskWorkspace.to_relative(raw["kernel_file"]), \
+            f"kernel_file 未按 to_relative 归一: {rel['kernel_file']}"
+        assert rel["details"][0]["article"] == TaskWorkspace.to_relative(raw["details"][0]["article"]), \
+            "details[].article 未按 to_relative 归一"
+
+        # 反方向：读回时列表型路径字段必须逐项绝对化，程序内部可直接读取
+        back = ws.absolutize_obj(rel)
+        assert back["textbooks"] == [str(TaskWorkspace.to_absolute(rel["textbooks"][0]))], \
+            f"textbooks 未逐项绝对化: {back['textbooks']}"
+        assert Path(back["note_file"]).is_absolute(), "note_file 未绝对化"
+        assert Path(back["details"][0]["article"]).is_absolute(), "details[].article 未绝对化"
+
+        ws.save_manifest({
+            "textbooks": raw["textbooks"],
+            "knowledge_blocks_results": [{"block_id": 1, "note_file": raw["note_file"]}],
+        })
+        text = ws.manifest_file.read_text(encoding="utf-8")
+        assert "\\\\" not in text, "manifest.json 落盘了 Windows 反斜杠路径"
+        payload = json.loads(text)
+        assert payload["textbooks"] == [TaskWorkspace.to_relative(raw["textbooks"][0])], \
+            f"textbooks 落盘形态异常: {payload['textbooks']}"
+        assert payload["knowledge_blocks_results"][0]["note_file"] == TaskWorkspace.to_relative(raw["note_file"]), \
+            f"note_file 落盘形态异常: {payload['knowledge_blocks_results'][0]['note_file']}"
+
+
+def check_no_hardcoded_machine_paths():
+    """源码不得硬编码本机盘符绝对路径（AST 取字符串常量；跳过文档字符串里的示例路径）。"""
+    import ast
+    import re as _re
+
+    drive_re = _re.compile(r"(^|[^\w])[A-Za-z]:[\\/]")
+
+    def _docstring_nodes(tree: ast.AST) -> set:
+        found = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                body = getattr(node, "body", None) or []
+                if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                        and isinstance(body[0].value.value, str):
+                    found.add(id(body[0].value))
+        return found
+
+    扫描 = []
+    for 子目录 in ("src", "scripts", "omni-media-mcp"):
+        for path in (PROJECT_ROOT / 子目录).rglob("*.py"):
+            if path.name == "selfcheck.py":
+                continue
+            if "__pycache__" in path.parts:
+                continue
+            扫描.append(path)
+    assert 扫描, "未找到任何源码文件，扫描范围异常"
+
+    hits = []
+    for path in 扫描:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError as err:
+            raise AssertionError(f"源码语法错误，无法扫描: {path}: {err}")
+        skip = _docstring_nodes(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
+                if drive_re.search(node.value):
+                    hits.append(f"{path.relative_to(PROJECT_ROOT).as_posix()}:{node.lineno}: {node.value[:70]}")
+    assert not hits, "源码内存在硬编码本机绝对路径:\n      " + "\n      ".join(hits)
+
+
+def check_regression_fixes():
+    """本轮修复项的回归断言（全部在临时工作区内完成，不触碰 output/）。"""
+    import json
+    import tempfile
+
+    from src.cli import _owner_line
+    from src.core.task_cleanup import find_module_note
+    from src.core.workspace import TaskWorkspace
+    from src.generator.block_synthesizer import BlockSynthesizer
+    from src.generator.integrator import ArticleIntegrator
+
+    # 1) merge_parts：局部运行不得丢历史分集，同 page 以新结果为准
+    merged = TaskWorkspace.merge_parts(
+        [{"page": 1, "title": "旧"}, {"page": 2, "title": "旧"}, {"page": 3, "title": "旧"}],
+        [{"page": 2, "title": "新"}],
+    )
+    assert [m["page"] for m in merged] == [1, 2, 3], f"合并后分集丢失/乱序: {merged}"
+    assert merged[1]["title"] == "新", "同 page 未以新结果覆盖"
+    assert TaskWorkspace.merge_parts([], [{"page": 5}]) == [{"page": 5}], "空缓存合并不正确"
+    assert TaskWorkspace.merge_parts([{"page": 1}], []) == [{"page": 1}], "空增量合并不正确"
+
+    # 2) 离线自愈元数据（owner 为字符串/空）不得让 parse 崩掉
+    assert "未知" in _owner_line({"owner": "", "owner_mid": 0}), "owner 为空串时未兜底"
+    assert "UP主" in _owner_line({"owner": {"name": "UP主", "mid": 7}}), "正常 owner 渲染异常"
+    assert "mid: 9" in _owner_line({"owner_mid": 9}), "仅 owner_mid 时渲染异常"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = TaskWorkspace(task_name="regression_probe", base_dir=tmp)
+        ws.save_parts([{"page": 1, "title": "绪论"}, {"page": 2, "title": "数制"}])
+        article = ws.articles_dir / "P01_绪论_精读文章.md"
+        article.write_text(
+            "# 微型计算机概述\n"
+            "> 目标：讲清体系结构  \n"
+            "> 来源：P01 单集精读长文\n"
+            "\n"
+            "---\n"
+            "\n"
+            "## 1. 体系结构\n\n正文内容。\n",
+            encoding="utf-8",
+        )
+
+        # 3) 模块笔记复用：历史命名（无 `_笔记` 规范名）也必须被认出，不得重复派发
+        found = find_module_note(ws, 1)
+        assert found is None, "尚无笔记成品时不应命中"
+        legacy_note = ws.notes_dir / "模块01_微机系统基础_P01-P17_思维导图速查笔记.md"
+        legacy_note.write_text("笔记" * 600, encoding="utf-8")
+        assert find_module_note(ws, 1) == legacy_note, "历史命名的笔记成品未被识别"
+        res = BlockSynthesizer.synthesize_block(
+            {"block_id": 1, "block_title": "微机系统基础", "episodes": [1], "core_theme": "x"},
+            [article], ws=ws,
+        )
+        assert res["status"] == "cached", f"已有笔记成品时仍重复派发任务书: {res['status']}"
+        assert not (ws.notes_dir / "模块01_微机系统基础_TASK.md").exists(), "重复派发出了任务书"
+
+        # 4) 教材整编：多行引用抬头与 H1 必须剥净、H2 降级，且默认复用 / --force 重编
+        integrator = ArticleIntegrator(ws.root_dir)
+        out = integrator.integrate_module(1, "绪论", [{"page": 1, "title": "绪论"}], "测试课程")
+        text = out.read_text(encoding="utf-8")
+        out_lines = text.splitlines()
+        assert "微型计算机概述" not in text, "长文 H1 未被剥离"
+        assert "目标：讲清体系结构" not in text and "来源：P01 单集精读长文" not in text, "多行抬头未被剥净"
+        assert "### 1. 体系结构" in out_lines, "章内 H2 未降级为 H3"
+        assert "## 1. 体系结构" not in out_lines, "章内 H2 仍以 H2 层级残留（与教材章标题同级）"
+        assert "正文内容。" in text, "正文被误删"
+
+        out.write_text(text + "\n<!-- MARK -->\n", encoding="utf-8")
+        integrator.integrate_module(1, "绪论", [{"page": 1, "title": "绪论"}], "测试课程")
+        assert "<!-- MARK -->" in out.read_text(encoding="utf-8"), "默认未复用已存在的模块教材"
+        integrator.integrate_module(1, "绪论", [{"page": 1, "title": "绪论"}], "测试课程", force=True)
+        assert "<!-- MARK -->" not in out.read_text(encoding="utf-8"), "--force 未强制重新整编"
+
+        # 5) 任务书回收计数：删除失败与成品未产出必须分开统计
+        from src.core.task_cleanup import cleanup_completed_tasks
+
+        (ws.articles_dir / "P01_绪论_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.articles_dir / "P02_数制_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.articles_dir / "P02_数制_精读文章.md").write_text("正文" * 400, encoding="utf-8")
+        result = cleanup_completed_tasks(ws, keep_per_category=1)
+        counts = result["counts"]["articles"]
+        assert "failed_delete" in counts and "skipped_pending" in counts, f"回收计数未拆分: {counts}"
+        assert counts["failed_delete"] == 0, f"正常删除不应计入失败: {counts}"
+        assert list(result["failed_delete"]) == [], "正常删除不应留下失败清单"
+
+        # 6) 清单路径可移植性（与 check_manifest_paths_portable 互补，此处走真实写入链路）
+        textbook_path = str(ws.root_dir / "textbooks" / "模块01_绪论_精读全书.md")
+        ws.save_manifest({"textbooks": [textbook_path]})
+        stored = json.loads(ws.manifest_file.read_text(encoding="utf-8"))["textbooks"][0]
+        assert stored == TaskWorkspace.to_relative(textbook_path), \
+            f"textbooks 落盘形态与 to_relative 不一致: {stored}"
+
+
 def main():
     print("=" * 62)
     print("bili-video2book / omni-media-mcp 自检")
@@ -569,8 +930,16 @@ def main():
     check("缓存与凭证路径锚定仓库根", check_cache_paths_anchored)
     check("宿主旁路目录不入库", check_host_artifacts_ignored)
     check("交付物渲染兼容约束（Typora）", check_render_compat_rules)
-    check("模块笔记契约（文章直供/零套话/视觉规范/任务书回收）", check_module_note_contract)
+    check("长文提示词风格契约（学习/旧版 + 未确认即终止）", check_article_prompt_types)
+    check("模块笔记契约（文章直供/只写结论/版式规范/任务书回收）", check_module_note_contract)
     check("交付物机器门禁（告警块/围栏配对）", check_deliverable_lint_gate)
+    check("文档无已删除笔记风格残留", check_docs_style_matrix_clean)
+    check("交付矩阵长文类型表齐备", check_delivery_matrix_article_types)
+    check("版本号三处一致", check_version_consistency)
+    check("质检文档口径与门禁一致", check_quality_gate_copy)
+    check("清单路径可移植（无绝对路径落盘）", check_manifest_paths_portable)
+    check("源码无硬编码本机路径", check_no_hardcoded_machine_paths)
+    check("本轮修复项回归", check_regression_fixes)
     check("死代码与验证产物已移除", check_dead_modules_removed)
     check("两份 SKILL 同步", check_skill_copies_in_sync)
     print("=" * 62)

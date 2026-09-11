@@ -120,11 +120,30 @@ class ArticleIntegrator:
             modules[module_key].append(p)
         return modules
 
-    def integrate_module(self, module_idx: int, module_name: str, episodes: List[dict], course_title: str) -> Path:
-        """Compiles articles of a module into a single unified textbook."""
+    def integrate_module(
+        self,
+        module_idx: int,
+        module_name: str,
+        episodes: List[dict],
+        course_title: str,
+        force: bool = False,
+        min_product_bytes: int = 200,
+    ) -> Path:
+        """Compiles articles of a module into a single unified textbook.
+
+        成品已存在且非 force 时直接复用（与 SKILL §7.2「模块教材自动复用」一致），
+        需要按最新章节重编时显式传 force=True（CLI：`cluster-articles --force`）。
+        """
         clean_name = sanitize_filename(module_name)
         out_filename = f"模块{module_idx:02d}_{clean_name}_精读全书.md"
         out_path = self.textbooks_dir / out_filename
+
+        try:
+            if out_path.exists() and out_path.stat().st_size >= min_product_bytes and not force:
+                print(f"    [cached] 模块教材已存在，跳过整编: {out_filename}")
+                return out_path
+        except OSError:
+            pass
 
         ep_pages = [ep["page"] for ep in episodes]
         page_range = f"P{min(ep_pages):02d} ~ P{max(ep_pages):02d}"
@@ -179,10 +198,23 @@ class ArticleIntegrator:
                         norm_lines.append(l)
                 art_content = "\n".join(norm_lines)
 
-                # Strip out top H1 and header block / separator
-                art_content = re.sub(r"^#\s+.*?\n+", "", art_content.strip())
-                art_content = re.sub(r"^>\s+.*?\n+", "", art_content)
-                art_content = re.sub(r"^---*\s*\n+", "", art_content.strip())
+                # Strip the leading H1 + metadata quote block + separator (header only)：
+                # 长文抬头可能是多行引用块，必须逐行剥离到第一行正文为止，
+                # 否则第二行 `>` 会残留在教材章首（旧实现只剥一行）。
+                head_lines = art_content.strip().splitlines()
+                head_idx = 0
+                while head_idx < len(head_lines):
+                    head_text = head_lines[head_idx].strip()
+                    if (
+                        not head_text
+                        or head_text.startswith(">")
+                        or re.match(r"^#\s", head_text)      # 长文 H1（篇名）：由教材章标题接管
+                        or re.fullmatch(r"-{3,}", head_text)  # 抬头与正文之间的分隔线
+                    ):
+                        head_idx += 1
+                        continue
+                    break
+                art_content = "\n".join(head_lines[head_idx:])
                 
                 # Demote existing H2 (##) to H3 (###) and H3 to H4 for hierarchical consistency
                 demoted = []
@@ -227,12 +259,15 @@ class ArticleIntegrator:
         out_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
         return out_path
 
-    def run(self, course_title: str) -> List[Path]:
-        """Runs the complete module integration process."""
+    def run(self, course_title: str, force: bool = False) -> List[Path]:
+        """Runs the complete module integration process.
+
+        force=False（默认）时复用已存在的模块教材；force=True 时全部重新整编。
+        """
         parts = self.load_parts()
         grouped = self.group_episodes_by_module(parts)
         results = []
         for idx, (mod_name, eps) in enumerate(grouped.items(), 1):
-            path = self.integrate_module(idx, mod_name, eps, course_title)
+            path = self.integrate_module(idx, mod_name, eps, course_title, force=force)
             results.append(path)
         return results

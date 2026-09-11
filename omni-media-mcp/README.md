@@ -50,21 +50,26 @@ omni-media inspect /path/to/media.mp4
 各宿主通过独立的 Host Adapter 适配，支持指定 `--target`。接入只写入服务启动命令与 `PYTHONPATH`，**不写入任何凭证**：
 
 ### 1. ZCode (Z.ai) (`--target zcode`)
-- **配置路径**：`~/.zcode/mcp_config.json` 或项目 `./zcode.json`
-- **配置结构**：
+- **配置路径**（按优先级自动探测）：项目 `.zcode/config.json` → 项目 `./zcode.json` → `~/.zcode/cli/config.json`（规范位置）→ `~/.zcode/config.json`（旧版位置）
+- **配置结构**（写入规范 schema `mcp.servers.<name>`）：
   ```json
   {
-    "mcpServers": {
-      "omni-media": {
-        "command": "python",
-        "args": ["-m", "omni_media_mcp.server"],
-        "env": {
-          "PYTHONPATH": "/path/to/omni-media-mcp"
+    "mcp": {
+      "servers": {
+        "omni-media": {
+          "type": "stdio",
+          "command": "python",
+          "args": ["-m", "omni_media_mcp.server"],
+          "env": {
+            "PYTHONPATH": "/path/to/omni-media-mcp"
+          },
+          "enabled": true
         }
       }
     }
   }
   ```
+- 兼容读取旧的 `mcpServers.<name>` 结构，但新写入一律用上面的规范结构。
 
 ### 2. OpenCode (`--target opencode`)
 - **配置路径**：`~/.config/opencode/opencode.jsonc` 或项目 `./opencode.jsonc`
@@ -79,6 +84,9 @@ omni-media inspect /path/to/media.mp4
 
 ### 5. Google Antigravity (`--target antigravity`)
 - **配置路径**：`~/.gemini/config/mcp_config.json`
+
+> 上列路径以各 Adapter 的自动探测顺序为准（项目级配置优先于全局）。接入前可用
+> `omni-media status` 查看每个宿主的**实际**配置文件路径与挂载状态，再决定 `--target`。
 
 ---
 
@@ -124,3 +132,5 @@ Agent 仅需在下一轮调用中传入 `start_time="00:15:00"` 即可无缝衔�
 - **凭证**：无需任何 API Key，服务不读取、不存储、不传输任何密钥。
 - **系统依赖**：`ffmpeg`（含 `ffprobe`）需在 `PATH` 中；缺失时切片与探测功能不可用。
 - **Python 依赖**：仅 `mcp>=1.0.0`。
+- **可用但当前流程未调用的库方法**：`MediaPreprocessor.slice_video` / `extract_video_keyframes` / `compress_video_for_multimodal`
+  属对外导出的工具函数，`read_audio` / `inspect_media` 两个 MCP 工具**不使用**它们；保留是为了给二次开发留接口，不是死代码。

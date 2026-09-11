@@ -50,13 +50,14 @@ def main() -> int:
 
     keep_n = max(0, int(args.keep))
     report: List[Dict[str, Any]] = []
-    total_deleted = total_kept = total_skipped = 0
+    total_deleted = total_kept = total_skipped = total_failed_delete = 0
 
     for ws in workspaces:
         result = cleanup_completed_tasks(ws, keep_per_category=keep_n, dry_run=args.dry_run)
         total_deleted += len(result["deleted"])
         total_kept += len(result["kept"])
         total_skipped += len(result["skipped_pending"])
+        total_failed_delete += len(result.get("failed_delete", []))
         report.append({"workspace": ws.root_dir.name, **result})
 
     if args.json:
@@ -65,6 +66,7 @@ def main() -> int:
             "total_deleted": total_deleted,
             "total_kept": total_kept,
             "total_skipped_pending": total_skipped,
+            "total_failed_delete": total_failed_delete,
             "workspaces": report,
         }, ensure_ascii=False, indent=2))
         return 0
@@ -77,14 +79,16 @@ def main() -> int:
         for category, stat in item["counts"].items():
             print(
                 f"    {CATEGORY_LABELS[category]:<12} 共 {stat['total']:>4} 份 | "
-                f"回收 {stat['deleted']:>4} | 保留范本 {stat['kept']} | 成品未产出仍保留 {stat['skipped_pending']}"
+                f"回收 {stat['deleted']:>4} | 保留范本 {stat['kept']} | "
+                f"成品未产出仍保留 {stat['skipped_pending']} | 删除失败 {stat.get('failed_delete', 0)}"
             )
         for path in item["kept"]:
             print(f"    [留] {path}")
 
     print("\n" + "=" * 68)
     verb = "可回收" if args.dry_run else "已回收"
-    print(f"[✓] {verb}任务书 {total_deleted} 份 | 保留范本 {total_kept} 份 | 成品未产出仍保留 {total_skipped} 份")
+    print(f"[✓] {verb}任务书 {total_deleted} 份 | 保留范本 {total_kept} 份 | "
+          f"成品未产出仍保留 {total_skipped} 份 | 删除失败 {total_failed_delete} 份")
     print("[i] topic_plan_TASK.md 属课程级规划任务书，唯一存在，永不回收。")
     print("=" * 68)
     return 0

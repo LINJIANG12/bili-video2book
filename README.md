@@ -12,7 +12,7 @@
 
 ## 功能特性
 
-- **多态输入支持**：支持 B 站单 P、多 P 连载网课、UGC 合集链接，以及本地常见音视频格式（`.mp4`, `.mkv`, `.mov`, `.flv`, `.m4a`）和本地多讲网课文件夹。
+- **多态输入支持**：支持 B 站单 P、多 P 连载网课与本地常见音视频格式（`.mp4`, `.mkv`, `.mov`, `.flv`, `.m4a`）及本地多讲网课文件夹。**UGC 合集的跨稿件遍历尚未实现**：合集链接可用 `parse` 查看全季清单，实际处理范围是**当前稿件的 1..N 个分 P**；若课程是一个合集里每集独立 BV，请逐集指定 BV 号处理。
 - **两阶段解耦调度**：将单集高并发转录与跨集模块系统整编彻底解耦。阶段一通过全局扁平队列与滑动窗口维持高并发流水线；阶段二按模块知识边界统一整编。
 - **三轨结构化交付**：同时输出单集教材长文（`articles/`）、模块合辑教材（`textbooks/`）与考纲思维导图笔记（`notes/`），满足深入自学、系统通读与考前速记需求。
 - **轻量与多模态原生**：通过 FFmpeg 极速提取轻量人声音频，依托多模态模型原生读取，不依赖本地下载与运行大型离线模型权重（如 Whisper），避免占用本地显存。
@@ -26,9 +26,9 @@
 
 | 交付形态 | 存储路径 | 适用场景 | 核心特征 |
 | :--- | :--- | :--- | :--- |
-| **单集教材长文** | `output/<task>/articles/` | 单集深入自学、替代长视频 | 完整还原核心原理推导、代码实现与演算过程；文末配备 2~3 道自测题与溯源解析。**模块整编时严格保留，不予删除**。 |
+| **单集教材长文** | `output/<task>/articles/` | 单集深入自学、替代长视频 | 完整还原核心原理推导、代码实现与演算过程，按所选长文风格成稿（`learning` 学习＝保住讲师讲课口吻，`legacy` 旧版＝教材腔＋随堂自测）；**文末题目只在讲师课上确实提到时才还原**。**模块整编时严格保留，不予删除**。 |
 | **模块合辑教材** | `output/<task>/textbooks/` | 系统章节精读、全卷通读 | 跨分集知识整合，消除单集孤立感；增加章节承上启下的过渡桥梁段落，形成体系化教材。 |
-| **模块复习笔记** | `output/<task>/notes/` | 考前复习、日常速查、脑图构建 | **由子智能体基于模块单集长文重写生成**（非知识元拼接）；需显式指定 `--style`（系统不设默认），推荐 `minimal` 对齐 CS-Xmind-Note 考研思维导图规范；须满足「笔记结构规范 v2」七个必备构件与四条禁令，原生支持 VS Code Markmap 与 XMind 导入。 |
+| **模块复习笔记** | `output/<task>/notes/` | 考前复习、日常速查、脑图构建 | **由子智能体基于模块单集长文重写生成**（非知识元拼接）；**笔记只有这一种风格**（旧版八种风格矩阵已删除，无需 `--style`）；须满足「笔记规范」：知识拓扑树 + 主题分节 + 概念块 + 溯源标注，**只写结论不写推导**，原生支持 VS Code Markmap 与 XMind 导入。 |
 
 ---
 
@@ -66,7 +66,7 @@
 
 > **动态队列追踪工具**：配套提供 `python scripts/queue_tracker.py`（支持 `--next N`、`--json`、`--summary`），用于实时监测全局队列出队状态与阶段门禁流转。
 >
-> **交付前机器质检**：`python scripts/note_quality_check.py --strict` 把「套话填充 / 分集平铺标题 / 行内残缺引用 / 分集口吻」四类必查项与「断句 / 结构缺件」两类提示项变成可复算指标；`python scripts/render_compat_check.py --strict` 检查 GitHub 告警块、围栏外裸字符画与围栏配对。
+> **交付前机器质检**：`python scripts/note_quality_check.py --strict` 把「套话填充 / 空壳标题 / 分集平铺标题 / 行内残缺引用 / 分集口吻」五类必查项与「断句 / 结构缺件」两类提示项变成可复算指标；`python scripts/render_compat_check.py --strict` 检查 GitHub 告警块、围栏外裸字符画与围栏配对（**「围栏缺语言标识」默认只提示，加 `--require-lang` 才纳入门禁**）。
 >
 > 逐步操作规范（含阶段二门禁与子智能体派发规范、任务书对照表）见 [SKILL.md](SKILL.md)；自检命令为 `python scripts/selfcheck.py`。
 
@@ -100,6 +100,10 @@ python -m omni_media_mcp.cli apply --target zcode
 把本仓库安装为我的全局 Skill。
 ```
 本仓库内置 `.agents/skills/bili-video2book`，符合 Open Agent Skills 标准规范，可直接通过 Agent 自然语言触发。
+
+> **注意（工作目录契约）**：Skill 本体只有 `SKILL.md` 与 `references/`，**命令与脚本都在仓库里**。
+> 挂载时请保持**整个仓库可达**（整仓复制或软链），并让 Agent **以仓库根为工作目录**执行
+> `python src/cli.py …` / `python scripts/…`，否则 SKILL.md 里的命令会找不到文件。
 
 ### 4. 本地安装与命令行使用
 
@@ -143,11 +147,14 @@ bili-video2book cluster-articles "https://www.bilibili.com/video/BV14VqVBrEhc"
 
 ### 场景四：生成模块思维导图复习笔记
 ```bash
-# 使用 minimal 精简树状风格 (推荐考研与日常速记)
-bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --style minimal
+# 模块复习笔记：笔记只有一种风格，无需 --style
+bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc"
 
-# 使用 detailed 详细全景风格
-bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --style detailed
+# --force：强制重导全部模块任务书（已产出笔记成品的模块默认会自动复用）
+bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --force
+
+# --force-plan：强制重出 topic_plan_TASK.md（丢弃旧规划，重新做模块边界规划）
+bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --force-plan
 ```
 
 ### 场景五：查看与监控任务队列状态
@@ -157,14 +164,19 @@ python scripts/queue_tracker.py
 
 # 获取待处理队列中接下来的 5 个分集及路径
 python scripts/queue_tracker.py --next 5
+
+# 多课程并存时指定工作区（否则取最近活动的那个）
+python scripts/queue_tracker.py --pattern "微机原理" --next 5
 ```
 
 ### 场景六：交付前质检与收尾
 ```bash
-# 笔记成色体检：套话填充 / 分集平铺标题 / 行内残缺引用 / 分集口吻 / 断句 / 结构缺件
+# 笔记成色体检（致命项：套话填充 / 空壳标题 / 分集平铺标题 / 行内残缺引用 / 分集口吻；
+#              提示项：断句 / 结构缺件——加 --require-structure 才纳入门禁）
 python scripts/note_quality_check.py --strict
 
-# 渲染合规体检：GitHub 告警块 / 围栏外裸字符画 / 围栏配对 / 语言标识
+# 渲染合规体检（致命项：GitHub 告警块 / 围栏外裸字符画 / 围栏配对；
+#              提示项：围栏语言标识——加 --require-lang 才纳入门禁）
 python scripts/render_compat_check.py --strict
 
 # 任务书回收：成品产出后才回收，每类保留 1 份范本（先 --dry-run 预演）
@@ -173,6 +185,9 @@ python src/cli.py cleanup
 
 # 账本对账：以磁盘产物为唯一真相回填 manifest.json
 python src/cli.py sync
+
+# 可选：模块教材默认复用已有 textbooks/，需要按最新章节重编时加 --force
+python src/cli.py cluster-articles "https://www.bilibili.com/video/BV14VqVBrEhc" --force
 ```
 
 > **任务书是临时派发物**：`*_TASK.md` 在成品产出后由 `cleanup`（或 pipeline 收尾）自动回收，

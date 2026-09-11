@@ -29,6 +29,7 @@ from src.core.workspace import TaskWorkspace, sanitize_filename
 from src.core.kernel_extractor import KernelExtractor
 from src.generator.topic_planner import SemanticTopicPlanner
 from src.generator.block_synthesizer import BlockSynthesizer
+from src.generator.prompt_templates import ArticlePromptTypeError
 
 # 仓库根目录（状态文件与断点续跑提示的换算基准）
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -110,6 +111,13 @@ def get_audio_stream(
         raise RuntimeError(enrich_network_error(err, resume_hint)) from err
 
 
+def resolve_article_type(article_type: str) -> Dict[str, str]:
+    """解析长文提示词风格（供派发门禁与 manifest 记录复用）。"""
+    from src.generator.prompt_templates import resolve_article_prompt
+
+    return resolve_article_prompt(article_type)
+
+
 def export_article_task(
     ws: TaskWorkspace,
     page_num: int,
@@ -118,14 +126,19 @@ def export_article_task(
     title: str = "",
     cid: int = 0,
     chunk_minutes: int = 60,
+    article_type: str = "",
 ) -> Path:
     """导出单集精读文章任务书（零中间逐字稿：听音后直接撰写 articles/）。
 
+    长文写作提示词按 article_type 从提示词风格矩阵取用：风格未指定、拼写有误，
+    或该类型尚无提示词时，一律抛 ArticlePromptTypeError（工具层不猜、不降级）。
     无外部 HTTP 依赖、无第三方 API Key 依赖，且不产出任何中间逐字稿。
     """
     import re as _re
     from src.core.audio_chunker import AudioChunker
-    from src.generator.prompt_templates import ARTICLE_LEARNING_PROMPT
+    from src.generator.prompt_templates import resolve_article_prompt
+
+    resolved = resolve_article_prompt(article_type)
 
     prefix = "" if _re.match(r"^P\d{2}_", clean_title) else f"P{page_num:02d}_"
     task_file = ws.articles_dir / f"{prefix}{clean_title}_TASK.md"
@@ -157,7 +170,7 @@ def export_article_task(
         slices_section = f"- [ ] P{page_num:02d} 完整音频 (00:00 起): `{audio_file}`"
 
     article_prompt = (
-        ARTICLE_LEARNING_PROMPT
+        resolved["prompt"]
         .replace("{title}", title or clean_title)
         .replace("{part_title}", f"P{page_num:02d} {clean_title}")
         .replace(
@@ -170,6 +183,7 @@ def export_article_task(
     content = (
         f"# P{page_num:02d} {clean_title} 单集精读文章任务书（ARTICLE_TASK）\n\n"
         f"> 状态：need-agent-article | 零中间逐字稿：听音后直接撰写精读长文\n"
+        f"> 长文风格：{resolved['label']}（{resolved['key']}）\n"
         f"> 深度支持平台：Antigravity（Gemini 多模态内核）与 ChatGPT（GPT-4o Audio / Codex 内核）\n\n"
         f"## 1. 任务输入与待听音切片清单\n\n"
         f"- 课程全称：{title}\n"
@@ -304,11 +318,14 @@ class PipelineCoordinator:
         skip_failed: bool = False,
         quality: str = "low",
         chunk_minutes: int = 60,
+        article_type: str = "",
     ) -> Dict[str, Any]:
         """执行完整流水线；硬门禁失败时抛出 PipelineGateError（由 CLI 转换为退出码）。"""
         from concurrent.futures import ThreadPoolExecutor
 
-        info = resolve_target_info(url, sessdata=sessdata)
+        # 工作区参数必须一并传入：离线自愈按 base_dir/task 找 parts.json 缓存，
+        # 漏传会退化成当前目录下的默认 output/，导致 --base-dir 指定时自愈失效。
+        info = resolve_target_info(url, sessdata=sessdata, custom_task=task, base_dir=base_dir)
         bvid = info["bvid"]
 
         ws = TaskWorkspace.create(
@@ -426,9 +443,11 @@ class PipelineCoordinator:
                         "error": str(err), "category": classify_audio_error(err), "status": "failed",
                     })
         # 阶段一结束后写检查点 parts.json + manifest
+        # 局部运行（--page/--range）只处理选中分集：必须与既有拓扑**合并**而非覆盖，
+        # 否则会把分集拓扑缓存截断成子集（离线自愈与 sync 对账都会据此误判规模）。
         try:
             _clean_parts = [{k: v for k, v in p.items() if not k.startswith("_")} for p in selected_parts]
-            ws.save_parts(_clean_parts)
+            ws.save_parts(TaskWorkspace.merge_parts(ws.load_parts(), _clean_parts))
         except Exception:
             pass
         ws.save_manifest({
@@ -483,10 +502,10 @@ class PipelineCoordinator:
             raise PipelineGateError(2)
         print("=" * 65)
         print(f"[*] 阶段二：派发单集精读文章任务书（共 {len(effective_parts)} 集，零中间逐字稿）")
+        print(f"[*] 长文提示词风格：{article_type or '未指定（将在派发时终止并给出风格菜单）'}")
         print("=" * 65)
 
         manifest_entries: List[Dict[str, Any]] = []
-        failed_entries: List[Dict[str, Any]] = []
         for idx, p in enumerate(effective_parts, 1):
             p_num = p["page"]
             audio_file, clean_p_title = _audio_paths(p)
@@ -506,10 +525,20 @@ class PipelineCoordinator:
                 })
                 continue
 
+            # 长文风格门禁（二次防线）：CLI 层（cmd_pipeline）已在入口前确认风格并 exit 4；
+            # 此处再校验一次，保证直接调用领域服务的调用方也拿不到未命中预设的提示词。
+            try:
+                _resolved_type = resolve_article_type(article_type)
+            except ArticlePromptTypeError as err:
+                print("\n" + err.report, file=sys.stderr)
+                print("去向：主 Agent 先依课程标题与分集标题判定类型，再用 --article-type 重跑本命令。", file=sys.stderr)
+                raise PipelineGateError(4, f"长文提示词风格门禁终止：{err.reason}") from err
+
             try:
                 task_file = export_article_task(
                     ws, p_num, clean_p_title, audio_file,
                     title=info["title"], cid=p["cid"], chunk_minutes=chunk_minutes,
+                    article_type=article_type,
                 )
             except Exception as err:
                 print("\n" + "=" * 65, file=sys.stderr)
@@ -523,17 +552,10 @@ class PipelineCoordinator:
             manifest_entries.append({
                 "page": p_num, "title": p["title"], "cid": p["cid"],
                 "audio": str(audio_file), "task_prompt": str(task_file),
-                "article": str(article_file),
+                "article": str(article_file), "article_type": _resolved_type["key"],
                 "asr_engine": "agent-native", "doc_engine": "agent-native",
                 "status": "need-agent-article",
             })
-
-        if failed_entries:
-            print("\n" + "=" * 65)
-            print(f"[!] 本趟共 {len(failed_entries)} 集处理失败，已显式记入 manifest，重跑 pipeline --all 自动补齐：")
-            for f_ep in failed_entries:
-                print(f"    - P{f_ep['page']:02d} {f_ep['title']}: {str(f_ep['error'])[:160]}")
-            print("=" * 65)
 
         # ===== 阶段三「知识块聚合」：规划与知识元均由宿主 Agent 产出后才合成笔记 =====
         plan = None
@@ -597,7 +619,7 @@ class PipelineCoordinator:
                             print(f"    [gate] 模块 {b['block_id']:02d}: {len(missing)} 集尚无单集精读长文"
                                   f"（{_missing_str}），跳过本模块笔记派发")
                             continue
-                        # 笔记风格需显式指定，pipeline 不设默认；此处先按无风格导出，供 cluster-notes --style 重导
+                        # 笔记只有一种风格（文章直供 + 只写结论），无需再指定风格
                         res = BlockSynthesizer.synthesize_block(b, articles, ws=ws)
                         block_results.append(res)
         elif info["has_multi_pages"]:
@@ -609,14 +631,14 @@ class PipelineCoordinator:
         for d in manifest_entries:
             _merged[d.get("page")] = d
         _failed_merged = {d.get("page"): d for d in _existing.get("failed_episodes", []) if isinstance(d, dict)}
-        for d in failed_entries:
-            _failed_merged[d.get("page")] = d
 
-        # 仅当所有有效分集转录成功（且无失败分集）时才标记全流程完毕
+        # 仅当所有有效分集转录成功（且无历史失败分集）时才标记全流程完毕
+        # 说明：本趟的失败集在阶段一/阶段二就以 PipelineGateError 终止，不存在「本趟失败清单」，
+        # 因此此处只继承 manifest 里的历史失败记录。
         _all_success = (
             len(_merged) >= len(effective_parts)
             and all(d.get("status") == "success" for d in _merged.values())
-            and not failed_entries
+            and not _failed_merged
         )
         _existing["pipeline_completed"] = bool(_all_success and (not process_all or plan is not None))
         _existing["processed_episodes"] = sum(1 for d in _merged.values() if d.get("status") == "success")
@@ -651,7 +673,8 @@ class PipelineCoordinator:
             from .state_sync import reconcile_workspace_manifest as _reconcile
             _sync = _reconcile(ws)
             print(f"[*] 账本对账：分集 {_sync['success']}/{_sync['total']} 集达标 | "
-                  f"待办 {_sync['pending']} | 模块笔记 {_sync['notes']} 份 | 教材 {_sync['textbooks']} 部 | "
+                  f"待办 {_sync['pending']} | 模块笔记 {_sync['notes']} 份 | "
+                  f"教材 {_sync['textbooks']} 部 | "
                   f"pipeline_completed={_sync['pipeline_completed']}")
         except Exception as _sync_err:
             print(f"[!] 账本对账已跳过：{_sync_err}", file=sys.stderr)
@@ -661,5 +684,5 @@ class PipelineCoordinator:
             "manifest": _existing,
             "plan": plan,
             "block_results": block_results,
-            "failed_entries": failed_entries,
+            "failed_entries": list(_failed_merged.values()),
         }

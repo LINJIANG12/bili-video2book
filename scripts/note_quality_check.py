@@ -163,7 +163,7 @@ def main() -> int:
             print(f"    ── 合计：致命 {report['fatal_total']} 处 | 套话 {t.get('boilerplate', 0)} | "
                   f"空壳标题 {t.get('hollow_headings', 0)} | 分集标题 {t.get('episode_headings', 0)} | "
                   f"行内引用 {t.get('inline_quote', 0)} | 分集口吻 {t.get('episode_voice', 0)} | "
-                  f"断句 {t.get('truncated', 0)}（阈值 {report['truncated_threshold']}）| "
+                  f"断句合计 {t.get('truncated', 0)}（阈值按**每份**笔记 {report['truncated_threshold']} 处判定）| "
                   f"结构缺件 {t.get('structure_missing', 0)}")
             if report["failed"]:
                 print(f"    ── 未通过：{len(report['failed'])} 份（{'；'.join(Path(f).name for f in report['failed'][:4])}）")

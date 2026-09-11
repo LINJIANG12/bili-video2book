@@ -12,10 +12,10 @@ Automated pipeline converting Bilibili video courses and local media into struct
 
 ## Features
 
-- **Multi-Modal Input**: Supports Bilibili single-episode, multi-episode series, and UGC collections, as well as local media files (`.mp4`, `.mkv`, `.mov`, `.flv`, `.m4a`) and directory-based local courses.
+- **Multi-Modal Input**: Supports Bilibili single-episode and multi-episode (multi-P) courses, plus local media files (`.mp4`, `.mkv`, `.mov`, `.flv`, `.m4a`) and directory-based local courses. **Cross-BV UGC season traversal is not implemented**: a season link can be inspected with `parse`, but the processed range is the current submission's episodes 1..N — when every season episode is a separate BV, process them one BV at a time.
 - **Two-Stage Decoupled Pipeline**: Decouples single-episode high-throughput processing from cross-episode modular synthesis. Stage 1 maintains a flat queue with a continuous sliding window pool (5~6 concurrent workers); Stage 2 consolidates modular assets once all episodes finish.
 - **Triple-Delivery Structured Assets**: Produces standalone single-episode textbook articles (`articles/`), compiled chapter textbooks (`textbooks/`), and syllabus-aligned mindmap notes (`notes/`).
-- **Lightweight & Multimodal Native**: Extracts 64kbps speech audio via FFmpeg and delegates listening directly to multimodal dialogue models. No local Whisper weights required, saving local GPU memory and disk space.
+- **Lightweight & Multimodal Native**: Extracts 16 kHz mono speech audio via FFmpeg and delegates listening directly to multimodal dialogue models. No local Whisper weights required, saving local GPU memory and disk space.
 - **Isolated Sandbox Workspaces**: Manages each task in an independent directory with incremental resume support, disk probing, and real-time dynamic queue tracking.
 
 ---
@@ -26,9 +26,9 @@ The pipeline delivers three distinct deliverables tailored to different study wo
 
 | Deliverable | Storage Path | Use Case | Key Characteristics |
 | :--- | :--- | :--- | :--- |
-| **Single-Episode Articles** | `output/<task>/articles/` | In-depth self-study replacing long video watching | Step-by-step mathematical and logical derivations, fully annotated code examples, and 2~3 self-test exercises with sourced answers. **Strictly preserved during modular synthesis.** |
+| **Single-Episode Articles** | `output/<task>/articles/` | In-depth self-study replacing long video watching | Step-by-step mathematical and logical derivations and fully annotated code examples, written in the chosen article style (`learning` = keeps the lecturer's voice, `legacy` = academic textbook tone with self-tests); **the exercise section is restored only when the lecturer actually mentioned exercises**. **Strictly preserved during modular synthesis.** |
 | **Modular Chapter Books** | `output/<task>/textbooks/` | Systematic reading across complete chapters | Merges multi-episode articles into cohesive textbooks with transitional bridge paragraphs and topic summaries. |
-| **Mindmap Review Notes** | `output/<task>/notes/` | Quick review, exams, and mindmap rendering | **Re-authored by sub-agents from the module's own single-episode articles** (not stitched from knowledge kernels). Requires an explicit `--style` (no default); `minimal` follows the CS-Xmind-Note tree structure and must satisfy the "note structure spec v2" (7 mandatory building blocks + 4 prohibitions). Natively supports VS Code Markmap and XMind. |
+| **Mindmap Review Notes** | `output/<task>/notes/` | Quick review, exams, and mindmap rendering | **Re-authored by sub-agents from the module's own single-episode articles** (not stitched from knowledge kernels). **A single note style** (the legacy 8-style matrix has been removed, so `--style` is gone): topology tree + topic sections + concept blocks + source marks, **conclusions only (no derivations)**. Natively supports VS Code Markmap and XMind. |
 
 ---
 
@@ -66,7 +66,7 @@ The execution architecture separates single-episode generation from modular cons
 
 > **Queue Tracker Tool**: Run `python scripts/queue_tracker.py` (supports `--next N`, `--json`, `--summary`) to inspect sliding pool throughput and phase gating in real time.
 >
-> **Pre-delivery gates**: `python scripts/note_quality_check.py --strict` turns "boilerplate filler / per-episode headings / broken inline quotes / episode voice" plus "truncation / missing structure" into recomputable metrics; `python scripts/render_compat_check.py --strict` checks GitHub alert blocks, bare ASCII art outside fences, and fence pairing.
+> **Pre-delivery gates**: `python scripts/note_quality_check.py --strict` turns "boilerplate filler / hollow container headings / per-episode headings / broken inline quotes / episode voice" (all gating) plus "truncation / missing structure" (advisory) into recomputable metrics; `python scripts/render_compat_check.py --strict` gates GitHub alert blocks, bare ASCII art outside fences and fence pairing, while **missing fence language tags stay advisory unless you add `--require-lang`**.
 >
 > Step-by-step operating rules (including the Stage-2 gate flow, sub-agent dispatch rules and task-file matrix) live in [SKILL.md](SKILL.md); run `python scripts/selfcheck.py` for a self-check.
 
@@ -100,6 +100,11 @@ In Antigravity, ChatGPT, or OpenAI Codex:
 Install this repository as my global skill.
 ```
 The repository includes `.agents/skills/bili-video2book` compliant with Open Agent Skills specifications.
+
+> **Working-directory contract**: the skill bundle itself only ships `SKILL.md` and `references/`; every command and
+> script lives in the repository. When installing globally, keep the **whole repository reachable** (copy or symlink it)
+> and run `python src/cli.py …` / `python scripts/…` **from the repository root**, otherwise the documented commands
+> will not resolve.
 
 ### 4. Local CLI Installation
 
@@ -143,11 +148,14 @@ bili-video2book cluster-articles "https://www.bilibili.com/video/BV14VqVBrEhc"
 
 ### Scenario 4: Generate Mindmap Review Notes
 ```bash
-# Minimal tree style (recommended for review and Markmap rendering)
-bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --style minimal
+# Module review notes: a single note style, so --style is gone
+bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc"
 
-# Detailed comprehensive style
-bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --style detailed
+# --force: re-export every module task-file (modules whose notes already exist are reused by default)
+bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --force
+
+# --force-plan: re-export topic_plan_TASK.md (discard the previous module plan and plan again)
+bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc" --force-plan
 ```
 
 ### Scenario 5: Inspect Dynamic Queue Status
@@ -157,14 +165,19 @@ python scripts/queue_tracker.py
 
 # Retrieve next 5 pending episodes and file targets
 python scripts/queue_tracker.py --next 5
+
+# Pick a specific workspace when several courses live side by side
+python scripts/queue_tracker.py --pattern "微机原理" --next 5
 ```
 
 ### Scenario 6: Pre-delivery Quality Gates & Housekeeping
 ```bash
-# Note quality gate: boilerplate filler / per-episode headings / broken inline quotes / truncation / missing structure
+# Note quality gate (fatal: boilerplate / hollow headings / per-episode headings / inline quotes / episode voice;
+#                    advisory: truncation, missing structure — add --require-structure to gate them)
 python scripts/note_quality_check.py --strict
 
-# Render compatibility gate: GitHub alert blocks / bare ASCII art outside fences / unbalanced fences
+# Render compatibility gate (fatal: GitHub alert blocks / bare ASCII art / unbalanced fences;
+#                            advisory: missing fence language tags — add --require-lang to gate them)
 python scripts/render_compat_check.py --strict
 
 # Reclaim dispatch task-files once their products exist (keeps one prompt sample per category)
@@ -173,6 +186,9 @@ python src/cli.py cleanup
 
 # Reconcile manifest.json with what is actually on disk
 python src/cli.py sync
+
+# Optional: cluster-articles reuses existing textbooks/; pass --force to re-integrate from latest articles
+python src/cli.py cluster-articles "https://www.bilibili.com/video/BV14VqVBrEhc" --force
 ```
 
 > **Task-files are transient dispatch artifacts**: `*_TASK.md` is reclaimed by `cleanup` (or at the end of
