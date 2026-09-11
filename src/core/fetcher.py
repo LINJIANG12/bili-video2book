@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .wbi import WbiSigner
+from .proc import run_quiet
 
 
 # 浏览器级请求头（模拟桌面浏览器行为）
@@ -378,7 +379,7 @@ class AudioFetcher:
                 str(临时),
             ]
             try:
-                结果 = subprocess.run(命令, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+                结果 = run_quiet(命令, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
                 if 结果.returncode == 0 and 临时.exists() and 临时.stat().st_size > 10 * 1024:
                     _atomic_replace(临时, 目标)
                     return str(目标)
@@ -434,7 +435,7 @@ class AudioFetcher:
                 str(临时),
             ]
             try:
-                结果 = subprocess.run(命令, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+                结果 = run_quiet(命令, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
                 if 结果.returncode == 0 and 临时.exists() and 临时.stat().st_size > 0:
                     if 临时_m4s.exists():
                         try:

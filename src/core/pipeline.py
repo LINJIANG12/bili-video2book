@@ -185,10 +185,28 @@ def export_article_task(
         )
     )
 
+    # 本集预算（供子智能体判断上下文占用、供主 Agent 判断并发与打包粒度）
+    from src.core import budget as _budget
+
+    _时长秒 = 0.0
+    if slices:
+        try:
+            _时长秒 = float(slices[-1].get("end_sec") or 0.0)
+        except (TypeError, ValueError):
+            _时长秒 = 0.0
+    _系数 = _budget.audio_tokens_per_sec()
+    _音频token = _budget.est_audio_tokens(_时长秒)
+    _时长文本 = (
+        f"{int(_时长秒 // 60):02d}:{int(_时长秒 % 60):02d}" if _时长秒 > 0 else "未知"
+    )
+
     content = (
         f"# P{page_num:02d} {clean_title} 单集精读文章任务书（ARTICLE_TASK）\n\n"
         f"> 状态：need-agent-article | 零中间逐字稿：听音后直接撰写精读长文\n"
         f"> 长文风格：{resolved['label']}（{resolved['key']}）\n"
+        f"> 执行者要求：由**子智能体**承担（一集一个；课程总时长 ≤ 60 分钟时主 Agent 可串行亲做）；\n"
+        f"> 　　　　　　完成后只回报一行 `P{page_num:02d} | 文件路径 | 字节数 | 执行者`，**不回传正文**\n"
+        f"> 本集预算：时长 {_时长文本} × {_系数:g} tok/s ≈ {_音频token:,} token 音频；切片 {len(slices) if slices else 1} 个\n"
         f"> 深度支持平台：Antigravity（Gemini 多模态内核）与 ChatGPT（GPT-4o Audio / Codex 内核）\n\n"
         f"## 1. 任务输入与待听音切片清单\n\n"
         f"- 课程全称：{title}\n"

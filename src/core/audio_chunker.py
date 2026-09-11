@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from .local_media import PROBE_TIMEOUT_SEC, TRANSCODE_TIMEOUT_SEC
+from .proc import run_quiet
 
 SUPPORTED_VIDEO_EXTS = {
     ".mp4", ".mkv", ".mov", ".avi", ".flv", ".wmv", ".webm", ".ts", ".m4v", ".rmvb"
@@ -33,7 +34,7 @@ class AudioChunker:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(audio_filepath),
             ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
+            res = run_quiet(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
             if res.returncode == 0 and res.stdout.strip():
                 try:
                     return float(res.stdout.strip())
@@ -44,7 +45,7 @@ class AudioChunker:
         ffmpeg_bin = shutil.which("ffmpeg")
         if ffmpeg_bin:
             cmd = [ffmpeg_bin, "-i", str(audio_filepath)]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
+            res = run_quiet(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
             output = res.stderr
             # Parse Duration: 00:40:09.12
             import re
@@ -146,7 +147,7 @@ class AudioChunker:
                 str(chunk_path),
             ]
             try:
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=TRANSCODE_TIMEOUT_SEC)
+                run_quiet(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=TRANSCODE_TIMEOUT_SEC)
             except subprocess.TimeoutExpired as err:
                 raise RuntimeError(
                     f"FFmpeg 音频切片超时（>{TRANSCODE_TIMEOUT_SEC}s）：第 {index} 段切片失败。"

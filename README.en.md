@@ -46,12 +46,17 @@ The execution architecture separates single-episode generation from modular cons
   └── Downloads and extracts speech audio into audio/ (60min threshold)
                  │
                  ▼
-【Stage 1: Global Dynamic Sliding Pipeline】
+【Stage 1: Dispatch Loop + Global Dynamic Sliding Pipeline】
   Maintains a flat global FIFO queue and saturates the worker pool:
-  ├── Concurrency: 5~6 lightweight micro-agents running concurrently
+  ├── Dispatch rule: **total course length ≤ 60 minutes → the main agent may do it serially;
+  │                  longer than 60 minutes → dispatch is mandatory**
+  │                  (one sub-agent per episode by default; batch 3~5 episodes when ≥15 episodes and ≤40k tokens each)
+  ├── Payload: `queue_tracker.py --next 5 --json --log-dispatch` (task file / slices / target article / per-episode budget)
+  ├── Concurrency: 5~6 sub-agent slots running concurrently (`SUGGEST_WORKERS` in `--summary`)
   ├── Sliding Dispatch: Immediate respawn upon completion (probe hit ➔ retire ➔ spawn next)
-  ├── Single step: read_audio slice ➔ view_file native listening ➔ author the textbook article (zero intermediate transcript)
-  └── Phase Gate: Stage 1 concludes only when 100% of episodes are completed
+  ├── Single step: read_audio slice ➔ view_file native listening ➔ author the textbook article (zero intermediate transcript);
+  │                each sub-agent reports one line `P07 | path | bytes | executor` and never returns the article body
+  └── Phase Gate: Stage 1 concludes only when 100% of episodes are completed (`STAGE1_DONE=1`)
                  │
                  ▼
 【Stage 2: Modular Synthesis & Notes Generation (two passes)】

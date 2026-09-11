@@ -14,6 +14,7 @@ Run: python scripts/selfcheck.py
 """
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,7 @@ if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
 from src.core import paths as _paths  # noqa: E402
+from src.core.proc import run_quiet  # noqa: E402  （统一抑制 Windows 控制台窗口）
 
 # 容器根（skill/、mcp/、output/ 的共同父目录）与产物根
 HOME_ROOT = _paths.home_root()
@@ -57,7 +59,7 @@ def check_cli_help():
     for sub in ("parse", "audio", "transcribe",
                 "pipeline", "cluster-notes", "cluster-articles", "dedup",
                 "cleanup", "sync", "login", "logout", "info"):
-        res = subprocess.run(
+        res = run_quiet(
             [sys.executable, str(SKILL_ROOT / "src" / "cli.py"), sub, "--help"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60,
         )
@@ -109,7 +111,7 @@ def check_products_root_resolution():
             "import sys; sys.path.insert(0, r'%s');"
             "from src.core import paths; print(paths.products_root())" % SKILL_ROOT
         )
-        res = subprocess.run(
+        res = run_quiet(
             [sys.executable, "-c", code],
             cwd=tmp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
         )
@@ -218,18 +220,54 @@ def check_zero_transcript_pipeline():
 
 def check_subprocess_timeouts():
     """bili-video2book 侧所有 ffmpeg/ffprobe 调用必须有硬超时。"""
+def check_subprocess_timeouts():
+    """子进程契约：所有外部程序调用都必须 (1) 走 run_quiet（抑制 Windows 控制台窗口）
+    且 (2) 带硬超时；源码里不得再出现裸 subprocess.run / Popen。
+
+    背景：ffmpeg/ffprobe 每次调用都会新建进程，宿主后台托管 + 多子智能体并发时
+    Windows 会为每个控制台程序新开窗口（成片闪黑窗，一门 84 集课程约 250 次）。
+    窗口抑制集中在 src/core/proc.py，此处防止有人回退成裸调用。
+    """
     import src.core.audio_chunker as ac
     import src.core.local_media as lm
+    import src.core.proc as proc_mod
+    import ast as _ast
 
     assert lm.PROBE_TIMEOUT_SEC > 0 and lm.TRANSCODE_TIMEOUT_SEC > 0
     assert ac.PROBE_TIMEOUT_SEC == lm.PROBE_TIMEOUT_SEC
     assert ac.TRANSCODE_TIMEOUT_SEC == lm.TRANSCODE_TIMEOUT_SEC
+    assert hasattr(proc_mod, "run_quiet") and hasattr(proc_mod, "CREATE_NO_WINDOW")
 
-    for rel in ("src/core/local_media.py", "src/core/audio_chunker.py"):
-        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
-        for line in text.splitlines():
-            if "subprocess.run(" in line:
-                assert "timeout=" in line, f"{rel} 存在无超时的 subprocess.run: {line.strip()}"
+    import os as _os
+
+    if _os.name == "nt":
+        # Windows 下必须真正带上窗口抑制标志
+        kwargs = proc_mod.quiet_kwargs()
+        assert kwargs.get("creationflags") == proc_mod.CREATE_NO_WINDOW and proc_mod.CREATE_NO_WINDOW, \
+            "run_quiet 在 Windows 下未启用 CREATE_NO_WINDOW"
+
+    bare = []
+    timeoutless = []
+    for path in list((SKILL_ROOT / "src").rglob("*.py")) + list((SKILL_ROOT / "scripts").rglob("*.py")):
+        if "__pycache__" in path.parts or path.name == "proc.py":
+            continue  # proc.py 是唯一允许直接调用 subprocess.run 的地方
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(SKILL_ROOT).as_posix()
+        tree = _ast.parse(text)
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.Call):
+                continue
+            func = node.func
+            attr = getattr(func, "attr", None)
+            base = getattr(func, "value", None)
+            base_name = getattr(base, "id", None)
+            if attr in {"run", "Popen", "call", "check_output"} and base_name in {"subprocess", "_sp"}:
+                bare.append(f"{rel}:{node.lineno}")
+            if getattr(func, "id", None) == "run_quiet":
+                if not any(kw.arg == "timeout" for kw in node.keywords):
+                    timeoutless.append(f"{rel}:{node.lineno}")
+    assert not bare, "存在未抑制控制台窗口的裸子进程调用（应改走 run_quiet）: " + ", ".join(bare)
+    assert not timeoutless, "run_quiet 调用缺少 timeout=（硬超时是强制契约）: " + ", ".join(timeoutless)
 
 
 def check_mcp_repo_optional():
@@ -245,7 +283,7 @@ def check_mcp_repo_optional():
         print(f"       (未发现 MCP 仓库自检 {entry}，跳过可选段落)")
         return
 
-    res = _sp.run(
+    res = run_quiet(
         [sys.executable, str(entry)],
         cwd=str(MCP_REPO), stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True, timeout=300,
     )
@@ -285,9 +323,9 @@ def check_host_artifacts_ignored():
 
     repos = [SKILL_ROOT] + ([HOME_ROOT / "mcp"] if (HOME_ROOT / "mcp" / ".git").is_dir() else [])
     for repo in repos:
-        tracked = _sp.run(
+        tracked = run_quiet(
             ["git", "ls-files", "--", ".workbuddy", ".aide", ".zcode", "output", ".sessdata.json", ".archive"],
-            cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
+            cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, timeout=60,
         )
         assert not tracked.stdout.strip(), \
             f"{repo.name} 仓库纳入了宿主旁路目录/产物: {tracked.stdout.strip()}"
@@ -478,9 +516,9 @@ def check_sessdata_store_safety():
     for repo in (SKILL_ROOT, HOME_ROOT / "mcp"):
         if not (repo / ".git").is_dir():
             continue
-        tracked = _sp.run(
+        tracked = run_quiet(
             ["git", "ls-files", "--", DEFAULT_STORE_NAME],
-            cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
+            cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, timeout=60,
         )
         assert not tracked.stdout.strip(), f"凭证存档已进入 {repo.name} 版本控制: {tracked.stdout.strip()}"
         try:
@@ -839,6 +877,107 @@ def check_quality_gate_copy():
             f"{rel} 未说明围栏语言标识的体检口径"
 
 
+def check_dispatch_discipline_documented():
+    """阶段一派发纪律必须写进文档，不能停留在含糊措辞上（防止回退）。
+
+    阈值：课程总时长 ≤ 60 分钟 → 主 Agent 可串行；超过 → 必须派发（一集一子智能体，
+    或集数多且单集短时 3~5 集打包）。回报协议：只回报一行、不回传正文。
+    """
+    skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    for 关键词 in ("60 分钟", "一集一子智能体", "执行者", "不回传正文", "BVB_AUDIO_TOKENS_PER_SEC"):
+        assert 关键词 in skill, f"SKILL.md 缺少阶段一派发纪律关键词：{关键词}"
+
+    readme = (SKILL_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "60 分钟" in readme and ("派发" in readme), "README.md 未写明阶段一派发阈值"
+    readme_en = (SKILL_ROOT / "README.en.md").read_text(encoding="utf-8")
+    assert "60 minutes" in readme_en or "60-minute" in readme_en, "README.en.md 未写明阶段一派发阈值"
+
+
+def check_dispatch_payload_shape():
+    """派发载荷契约：临时工作区跑一次 queue_tracker，断言字段齐备、台账可写、默认零写入。"""
+    import json
+    import tempfile
+
+    from src.core import budget
+    from src.core.workspace import TaskWorkspace
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = TaskWorkspace(task_name="dispatch_probe", base_dir=tmp)
+        ws.save_parts([
+            {"page": 1, "title": "导学", "duration": 900},
+            {"page": 2, "title": "变量", "duration": 1200},
+        ])
+        (ws.audio_dir / "P01_导学.m4a").write_bytes(b"x" * 20000)
+        (ws.audio_dir / "P02_变量.m4a").write_bytes(b"x" * 20000)
+        (ws.articles_dir / "P01_导学_TASK.md").write_text("任务书" * 100, encoding="utf-8")
+
+        tracker = SKILL_ROOT / "scripts" / "queue_tracker.py"
+
+        def _run(*extra, base=None):
+            return run_quiet(
+                [sys.executable, str(tracker), "--base-dir", str(base or ws.root_dir), *extra],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120,
+            )
+
+        log_path = ws.root_dir / ".dispatch_log.jsonl"
+        assert not log_path.exists()
+
+        # 0) --base-dir 既支持「产物根（含工作区）」也支持「工作区目录本身」
+        res_root = _run("--summary", base=ws.base_dir)
+        assert res_root.returncode == 0, f"--base-dir 指向产物根时失败: {res_root.stdout[-200:]}"
+        res_ws = _run("--summary", base=ws.root_dir)
+        assert res_ws.returncode == 0, f"--base-dir 指向工作区本身时失败: {res_ws.stdout[-200:]}"
+        assert res_root.stdout.split(";")[0] == res_ws.stdout.split(";")[0], "两种 --base-dir 口径结果不一致"
+
+        # 1) 默认零写入
+        res = _run("--next", "1", "--json")
+        assert res.returncode == 0, f"queue_tracker 退出码 {res.returncode}: {res.stdout[-300:]}"
+        assert not log_path.exists(), "未加 --log-dispatch 时不应写台账（--next 必须保持纯读）"
+
+        payload = json.loads(res.stdout)
+        for key in ("budget", "next"):
+            assert key in payload, f"派发载荷缺少顶层字段：{key}"
+        for key in ("suggest_workers", "suggest_batch", "audio_tokens_per_sec", "context_window_tokens",
+                    "dispatch_required", "total_audio_min"):
+            assert key in payload["budget"], f"budget 缺少字段：{key}"
+
+        item = payload["next"][0]
+        for key in ("page", "title", "duration_sec", "est_audio_tokens", "est_episode_prefill_tokens",
+                    "task_file", "task_file_exists", "audio_file", "audio_slices", "target_article"):
+            assert key in item, f"派发载荷缺少每集字段：{key}"
+        assert item["page"] == 1 and item["duration_sec"] == 900
+        assert item["est_audio_tokens"] == budget.est_audio_tokens(900)
+        assert item["task_file_exists"] is True, "任务书已存在却报告不存在"
+        assert item["target_article"].endswith("P01_导学_精读文章.md"), item["target_article"]
+        assert item["audio_slices"] and item["audio_slices"][0]["path"].endswith("P01_导学.m4a")
+        assert item["slices_ready"] is True
+
+        # 2) --log-dispatch 写台账，且内容与建议分集一致
+        res2 = _run("--next", "2", "--json", "--log-dispatch")
+        assert res2.returncode == 0, f"queue_tracker --log-dispatch 失败: {res2.stdout[-300:]}"
+        assert log_path.exists(), "--log-dispatch 未写出台账"
+        entry = json.loads(log_path.read_text(encoding="utf-8").strip().splitlines()[-1])
+        assert entry["suggested"] == [1, 2], f"台账建议分集与载荷不一致: {entry}"
+        assert entry["requested"] == 2 and entry["audio_tokens_per_sec"] == budget.audio_tokens_per_sec()
+
+        # 3) 系数可配置：环境变量覆盖后 est_audio_tokens 同步变化
+        env = dict(os.environ, BVB_AUDIO_TOKENS_PER_SEC="100")
+        res3 = run_quiet(
+            [sys.executable, str(tracker), "--base-dir", str(ws.root_dir), "--summary"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120, env=env,
+        )
+        assert "AUDIO_TOKENS_PER_SEC=100" in res3.stdout, f"系数覆盖未生效: {res3.stdout.strip()[:200]}"
+        assert "SUGGEST_WORKERS=" in res3.stdout and "DISPATCH_REQUIRED=" in res3.stdout
+
+        # 4) 阈值口径：短课程（30 分钟）可串行，长课程必须派发
+        assert budget.serial_ok(30 * 60) is True, "30 分钟课程应允许串行"
+        assert budget.dispatch_required(30 * 60, episodes=4) is False, "30 分钟 4 集不应强制派发"
+        assert budget.dispatch_required(4 * 3600, episodes=40) is True, "4 小时课程必须派发"
+        assert budget.suggest_workers(190) == 6 and budget.suggest_workers(2) == 2
+        assert budget.suggest_batch([35_000] * 20, 20) == 5, "短集多集应建议打包"
+        assert budget.suggest_batch([80_000] * 20, 20) == 1, "长集不应打包"
+
+
 def check_manifest_paths_portable():
     """清单路径必须可移植：路径字段（含列表型）一律按 to_relative 归一，绝不原样落盘绝对路径。
 
@@ -1067,6 +1206,8 @@ def main():
     check("质检文档口径与门禁一致", check_quality_gate_copy)
     check("清单路径可移植（无绝对路径落盘）", check_manifest_paths_portable)
     check("源码无硬编码本机路径", check_no_hardcoded_machine_paths)
+    check("阶段一派发纪律已写入文档", check_dispatch_discipline_documented)
+    check("派发载荷与台账契约", check_dispatch_payload_shape)
     check("本轮修复项回归", check_regression_fixes)
     check("死代码与验证产物已移除", check_dead_modules_removed)
     check("两份 SKILL 同步", check_skill_copies_in_sync)

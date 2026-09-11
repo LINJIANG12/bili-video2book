@@ -37,6 +37,16 @@ metadata:
 >      仍然确认不了就**以退出码 4 终止任务**（工具层不猜、不兜底）；
 >    - 另有咨询答疑 / 访谈对谈 / 测评体验 / 直播闲聊四种形态只登记、未提供提示词：命中即终止；
 >      **严禁换个名字硬套、严禁手工套用别的提示词继续写**。
+> 5. **阶段一派发纪律（执行者约束，2026-09 起）**：
+>    - **课程总时长 ≤ 60 分钟** → 主 Agent 可串行亲做（听音 + 写作都在主上下文里完成）；
+>    - **总时长 > 60 分钟** → **必须派发**：默认 **一集一子智能体**；当「集数 ≥ 15 且单集预算 ≤ 40k token」时，
+>      按 `suggest_batch` 建议改为 **3~5 集打包给一个子智能体**（省派发协调开销，代价是返修粒度变粗）；
+>    - **窗口兜底**：实算音频 token（时长 × 系数）超过窗口 60% 时，即使不足 60 分钟也必须派发。
+>      音频 token 系数与窗口**随宿主而异**，可用 `BVB_AUDIO_TOKENS_PER_SEC`（默认 `32`，Gemini 原生音频口径；
+>      OpenAI input_audio 约 `100`）与 `BVB_CONTEXT_WINDOW_TOKENS`（默认 `1000000`）覆盖；工具会打印实算值；
+>    - **主 Agent 不得代听代写**（除上两条兜底），只负责取载荷、派生、收回报与验收；
+>    - 宿主不具备子智能体能力时，显式声明「单集串行模式」，每 5~8 集换新会话，**不得**因此跳过红线 2（音频保真）；
+>    - **纪律与门禁的边界**：执行者身份、是否真听音频，工具层**无法校验**（见 § 4.5）；不要把它当成机器门禁。
 
 ---
 
@@ -102,13 +112,16 @@ python src/cli.py logout                          # 撤销保存
   └── 可选去重：python src/cli.py dedup "<链接或路径>"（pipeline 不会自动调用，需手动执行）
           │
           ▼
-【阶段一：单集教材长文直出 (极速多模态听音，零中间逐字稿)】
-  运行 python scripts/queue_tracker.py --next 5 获取待办分集：
-  ├── 1. 提取切片：read_audio(file_path="...", output_mode="file")（切片已按 60 分钟预算切好，一次听完）
-  ├── 2. 多模态听音：view_file(slice_path) 原生感知讲师原声与板书案例
-  ├── 3. 编写教材：依音频实际讲解内容撰写深入技术长文 (载入 ARTICLE_LEARNING_PROMPT)
-  ├── 4. 写入长文：write_to_file 写入 articles/PXX_*.md (严格保留，严禁八股模板)
-  └── 5. 验收门禁：python scripts/queue_tracker.py 确认 100% 达标后方可放行
+【阶段一：单集教材长文直出（派发回路；总时长 ≤ 60 分钟可主 Agent 串行）】
+  主 Agent 取载荷：python scripts/queue_tracker.py --next 5 --log-dispatch --json
+  （载荷已含每集 任务书路径 / 切片清单 / 目标长文路径 / 本集 token 预算，禁止手抄路径）
+  ├── 1. 派生：一集一个子智能体（集数 ≥15 且单集 ≤40k token 时 3~5 集打包），并发 5~6
+  ├── 2. 子智能体取切片：read_audio(file_path="...", output_mode="file")（切片已按 60 分钟预算切好，一次听完）
+  ├── 3. 子智能体听音：view_file(slice_path) 原生感知讲师原声与板书案例（必须真听，见红线 2）
+  ├── 4. 子智能体撰写教材：依音频实际讲解内容撰写深入技术长文 (载入所选风格提示词)
+  ├── 5. 子智能体落盘：write_to_file 写入 articles/PXX_*_精读文章.md（严格保留，严禁八股模板）
+  ├── 6. 子智能体回报一行：P07 | 文件路径 | 字节数 | 执行者（**不回传正文**）
+  └── 7. 主 Agent 验收门禁：python scripts/queue_tracker.py --summary 确认 STAGE1_DONE=1 方可放行
           │
           ▼
 【阶段二：按模块统一收敛整编（两趟门禁，需 Agent + 子智能体往返）】
@@ -166,15 +179,44 @@ python src/cli.py logout                          # 撤销保存
    - 讲师只在幻灯片上展示、音频里没有逐字念出的代码或表格**不要替他补写**，更不要基于补写出来的内容做逐行解析；
 4. **落盘保存**：调用 `write_to_file` 写入 `output/<task>/articles/PXX_*_精读文章.md`（≥ 1000 字节方视为完成）。
 
-### 4.3 阶段验收
+### 4.3 派发与回报协议（与阶段二 § 5.3 同构）
+
+阶段一按**执行者纪律**（§ 1 红线 5）推进：主 Agent 只做调度与验收，听音与写作交给子智能体。
+
+| 环节 | 做法 |
+| :--- | :--- |
+| 取载荷 | 派发前**必须**跑 `python scripts/queue_tracker.py --next N --log-dispatch --json`；载荷已含每集 `task_file` / `audio_slices` / `target_article` / 本集 token 预算，**禁止手抄路径**（手抄会导致同一集被派两次，白烧 35~90k token） |
+| 派发粒度 | 默认 **一集一子智能体**；当「集数 ≥ 15 且单集预算 ≤ 40k token」时按 `suggest_batch` 建议改为 **3~5 集/子智能体** |
+| 并发 | 建议 5~6（`suggest_workers` 给出建议值；不得超过宿主并发上限） |
+| 子智能体输入 | 自行读该集任务书（`articles/PXX_*_TASK.md`）与切片清单；**主 Agent 不代读、不代听** |
+| 子智能体输出 | 只写 `articles/PXX_*_精读文章.md`，**不回传正文**（正文回传会把主上下文重新撑满） |
+| 回报格式 | 固定一行：`P07 | 文件路径 | 字节数 | 执行者`（打包派发写成 `P07-P11 | …`） |
+| 验收 | `queue_tracker.py --summary` 看 `STAGE1_DONE`；`--next N` 复核剩余待办 |
+| 返修 | 质检不达标时，把「文件:行号:原文」贴回该集（或该包）子智能体重派，最多 2 轮；仍不达标由主 Agent 亲自返修该集 |
+
+> **派发台账（观察性证据）**：加 `--log-dispatch` 会把本次建议的分集追加写入 `<task>/.dispatch_log.jsonl`。
+> 它记录的是「工具建议派发了哪些集」，**不等于**「谁真的写了」——执行者身份无法在工具层验证；
+> 台账的用途是事后复盘派发节奏（例如某工作区从未出现台账，说明阶段一没有走派发流程）。
+
+### 4.4 阶段验收
 
 ```bash
-python scripts/queue_tracker.py --next 5     # 列出待办分集及其音频/长文目标路径
-python scripts/queue_tracker.py --summary    # 单行状态：TOTAL/DONE/PENDING/STAGE1_DONE
+python scripts/queue_tracker.py --next 5 --json --log-dispatch   # 取派发载荷（含任务书/切片/目标路径/预算）
+python scripts/queue_tracker.py --summary    # 单行状态：TOTAL/DONE/PENDING/STAGE1_DONE + 派发建议
 python scripts/queue_tracker.py --pattern "<目录名关键字>"   # 多课程并存时指定工作区（否则取最近活动的那个）
 ```
 
 仅当 `STAGE1_DONE=1`（全部分集长文均 ≥ 1000 字节）时，方可进入阶段二。
+
+### 4.5 门禁 vs 纪律（边界声明，不要把纪律当成机器门禁）
+
+| 项 | 性质 | 工具层能否校验 |
+| :--- | :--- | :--- |
+| 长文 ≥ 1000 字节、任务书存在、切片清单齐备 | **机器门禁** | ✅ 可校验（`queue_tracker` / `sync` / `note_quality_check`） |
+| 长文风格命中已提供预设（`learning` / `legacy`） | **机器门禁** | ✅ 未命中即 `exit 4` |
+| **谁写的**（主 Agent 还是子智能体） | **纪律条款** | ❌ 不可校验（只能靠 `.dispatch_log.jsonl` 观察派发节奏） |
+| **是否真的听了音频**（红线 2） | **纪律条款** | ❌ 不可校验（只能要求正文含音频里的真实案例/例题） |
+| 并发与打包是否按建议执行 | **纪律条款** | ❌ 不可校验 |
 
 ---
 
@@ -286,9 +328,10 @@ python src/cli.py transcribe "<链接或本地路径>" --page 1 --article-type l
 # 4. 音频指纹去重（自动复用相同分集的语料与长文，0 Token 消耗）
 python src/cli.py dedup "<链接或本地路径>"
 
-# 5. 动态任务队列追踪器（查看待办分集与阶段门禁状态）
-python scripts/queue_tracker.py --next 5
-python scripts/queue_tracker.py --summary
+# 5. 动态任务队列追踪器（待办分集 + 阶段门禁 + 派发建议/载荷/台账）
+python scripts/queue_tracker.py --next 5                          # 待办分集与目标路径
+python scripts/queue_tracker.py --next 5 --json --log-dispatch     # 派发载荷（转交子智能体）+ 写派发台账
+python scripts/queue_tracker.py --summary                         # 单行状态 + SUGGEST_WORKERS/BATCH
 
 # 6. 阶段二：整编模块教材全书（输出至 textbooks/，原有 articles/ 完整保留）
 python src/cli.py cluster-articles "<链接或本地路径>"                             # 已有教材默认复用
@@ -335,7 +378,7 @@ python src/cli.py logout
 | `sync` | `--dry-run` `--task 关键字` `--all` | 按磁盘对账回填 manifest |
 | `note_quality_check.py` | `--strict` `--require-structure` `--max-truncated N`（默认 4） `--dir` `--task` `--base-dir` `--json` | 结构缺件默认只提示，`--require-structure` 才纳入门禁 |
 | `render_compat_check.py` | `--strict` `--require-lang` `--dir` `--task` `--base-dir` `--json` | 语言标识默认只提示，`--require-lang` 才纳入门禁 |
-| `queue_tracker.py` | `--next N` `--summary` `--json` `--dir PATH` `--pattern 关键字` `--base-dir DIR` | 多课程并存时必须用 `--dir`/`--pattern` 指定工作区；`--base-dir` 缺省即产物根 |
+| `queue_tracker.py` | `--next N` `--summary` `--json` `--dir PATH` `--pattern 关键字` `--base-dir DIR` `--log-dispatch` | 派发前取载荷：`--next N --json`（含任务书/切片/目标长文/预算）；多课程并存时必须用 `--dir`/`--pattern`；`--base-dir` 缺省即产物根；`--log-dispatch` 追加派发台账（默认关闭） |
 | `cleanup_tasks.py` | `--keep N` `--dry-run` `--task` `--json` `--strict` | `cleanup` 的独立脚本入口（功能一致） |
 
 ---

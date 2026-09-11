@@ -13,6 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from .proc import run_quiet
 
 SUPPORTED_VIDEO_EXTS = {
     ".mp4", ".mkv", ".mov", ".avi", ".flv", ".wmv", ".webm", ".ts", ".m4v", ".rmvb"
@@ -69,7 +70,7 @@ class LocalMediaParser:
                 str(target),
             ]
             try:
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
+                res = run_quiet(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
                 if res.returncode == 0 and res.stdout.strip():
                     return float(res.stdout.strip())
             except Exception:
@@ -80,7 +81,7 @@ class LocalMediaParser:
         if ffmpeg_bin:
             cmd = [ffmpeg_bin, "-i", str(target)]
             try:
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
+                res = run_quiet(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=PROBE_TIMEOUT_SEC)
                 output = res.stderr
                 m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", output)
                 if m:
@@ -133,7 +134,7 @@ class LocalMediaParser:
             str(target),
         ]
         try:
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=TRANSCODE_TIMEOUT_SEC)
+            res = run_quiet(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=TRANSCODE_TIMEOUT_SEC)
         except subprocess.TimeoutExpired as err:
             raise RuntimeError(
                 f"FFmpeg 音频提取超时（>{TRANSCODE_TIMEOUT_SEC}s）：{src.name}。建议先用 ffmpeg 切片后再处理。"
