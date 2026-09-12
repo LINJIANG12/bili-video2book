@@ -1,5 +1,0 @@
-# Core functionality uses Python Standard Library only (zero mandatory third-party dependencies)!
-# Requires Python >= 3.8
-
-# System dependency (recommended for audio lossy/lossless container remux and zero-transcode chunking):
-# - ffmpeg (accessible via system PATH)

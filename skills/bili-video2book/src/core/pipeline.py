@@ -153,7 +153,7 @@ def export_article_task(
     audio_path = Path(audio_file).resolve() if audio_file else None
     target_article = ws.articles_dir / f"{prefix}{clean_title}_精读文章.md"
 
-    # 自动执行微切片（单片 <= 10 分钟，受控在 4MB 以内），供 Antigravity view_file 及 ChatGPT 附件挂载
+    # 自动执行微切片（单片 <= 10 分钟，受控在 4MB 以内），供宿主的文件查看能力（原生多模态读文件）直接挂载
     slices = []
     if audio_path and audio_path.exists() and audio_path.stat().st_size > 1024:
         try:
@@ -209,7 +209,7 @@ def export_article_task(
         f"> 执行者要求：由**子智能体**承担（一集一个；课程总时长 ≤ 60 分钟时主 Agent 可串行亲做）；\n"
         f"> 　　　　　　完成后只回报一行 `P{page_num:02d} | 文件路径 | 字节数 | 执行者`，**不回传正文**\n"
         f"> 本集预算：时长 {_时长文本} × {_系数:g} tok/s ≈ {_音频token:,} token 音频；切片 {len(slices) if slices else 1} 个\n"
-        f"> 深度支持平台：Antigravity（Gemini 多模态内核）与 ChatGPT（GPT-4o Audio / Codex 内核）\n\n"
+        f"> 深度支持：宿主模型具备原生音频模态（可本地听音）\n\n"
         f"## 1. 任务输入与待听音切片清单\n\n"
         f"- 课程全称：{title}\n"
         f"- 分集序号：P{page_num:02d} {clean_title}\n"
@@ -222,7 +222,7 @@ def export_article_task(
         f"1. **取音频并处理**：先看自己的工具列表，按原生音频能力二选一（两条通道的分页契约同构，续读循环可复用）：\n"
         f"   - **通道 A（工具列表里有 `read_audio`，优先）**：\n"
         f"     a. 对清单中的切片调用 `omni-media:read_audio`（`output_mode=\"file\"`）取得本地切片绝对路径；\n"
-        f"     b. 调用宿主原生 `view_file` 工具读取该切片路径，直接聆听讲师原声、例题与板书讲解；\n"
+        f"     b. 用**宿主自己的文件查看能力**（能直接感知音频内容的那件工具；各平台工具名见技能内 references/host-tools/）打开该切片路径，直接聆听讲师原声、例题与板书讲解；\n"
         f"   - **通道 B（只有 `read_media`，宿主无原生音频）**：\n"
         f"     a. 对清单中的切片调用 `omni-media-ext:read_media`"
         f"（`mode=\"transcribe\"`，需要总结/问答时换 `mode`），直接取回文本；\n"
@@ -230,7 +230,7 @@ def export_article_task(
         f"     c. 注意 `mode` 在状态注释里指切片模式（`oneshot`/`chunked`），本次任务预设看 `task` 字段；\n"
         f"   - **共同要求**：不得跳过取音频这一步直接编造；正文须含讲师亲口讲的内容。\n"
         f"2. **撰写长文**：依据所得的真实讲解内容，按下方【文章撰写提示词】撰写深入技术长文；\n"
-        f"3. **落盘**：调用 `write_to_file` 将长文写入上方目标长文落盘路径（严格保留，模块整编时不得删除）。\n\n"
+        f"3. **落盘**：用**宿主的文件写入能力**将长文写入上方目标长文落盘路径（严格保留，模块整编时不得删除）。\n\n"
         f"---\n\n"
         f"## 3. 文章撰写提示词\n\n"
         f"{article_prompt}\n"

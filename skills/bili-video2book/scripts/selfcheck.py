@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Minimal runnable self-check for the bili-video2book skill repo (四域分离后的技能侧自检).
+"""Minimal runnable self-check for the bili-video2book skill repo (三域分离后的技能侧自检).
 
 Not a test framework: a flat sequence of assertions covering the invariants that
 matter after the architecture refactor (Agent-native kernel/plan chain, zero
@@ -20,8 +20,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-# 代码根（skill/）：文档、源码、脚本的基准
+# 两个基准根（技能自包含后必须分开，否则一堆断言会指向错位置）：
+#   SKILL_ROOT = skills/bili-video2book/  ← SKILL.md / references/ / src/ / scripts/ 都在这里（= 安装单元）
+#   REPO_ROOT  = 插件根（仓库根）          ← .git / .gitignore / README / pyproject / 平台声明在这里
 SKILL_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = SKILL_ROOT.parent.parent
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
@@ -32,16 +35,42 @@ from src.core.proc import run_quiet  # noqa: E402  （统一抑制 Windows 控�
 # 控制台硬化：自检输出含中文与 `[PASS]/[FAIL]`，管道捕获时若按 locale(cp936) 编码会崩。
 enable_utf8_console()
 
-# 容器根（skill/、mcp/、output/ 的共同父目录）与产物根
+# 容器根（skill/、omni-media/、output/ 的共同父目录）与产物根
 HOME_ROOT = _paths.home_root()
 PRODUCTS_ROOT = _paths.products_root()
-MCP_REPO = Path(os.environ.get("OMNI_MEDIA_MCP_DIR", "").strip() or (HOME_ROOT / "mcp"))
+# 两个 MCP 的位置**不在本文件里猜**：统一走 paths.py 的解析
+# （含 $OMNI_MEDIA_MCP_DIR 覆盖、新布局优先与迁移前旧布局兜底）。
+MCP_REPO = _paths.mcp_repo()
+MCP_EXT_REPO = _paths.mcp_ext_repo()
+# 承载两个 MCP 的仓库根（新布局为 <home>/omni-media）。迁移前两者各自独立成仓，
+# 故下面的仓库边界断言对旧布局另有一条分支。
+MCP_REPO_BASE = HOME_ROOT / _paths.DEFAULT_MCP_REPO_DIRNAME
 
 FAILURES = []
 
 # git 可用性：有两处断言要靠 `git ls-files` 校验「产物/凭证未入库」。
 # 无 git（精简环境、zip 解压安装）时降级为提示，而不是抛 FileNotFoundError 让自检整体变红。
 _HAS_GIT = shutil.which("git") is not None
+
+# 是否处于「插件/仓库布局」：技能被单独安装到某平台的技能目录时（例如 ~/.claude/skills/bili-video2book/），
+# 仓库级文件（README / pyproject / 平台清单）根本不存在——这类断言必须降级为提示，
+# 否则用户装完技能一跑自检就是一片红，反而以为装坏了。
+#
+# 探测标记**必须避开 `CLAUDE.md`**：单独安装时 `REPO_ROOT` 就是宿主配置根（如 `~/.claude`），
+# 那里几乎必然存在用户自己的全局 `CLAUDE.md`——拿它当标记会把「单独安装」误判成「仓库布局」，
+# 于是所有仓库级断言集体去读不存在的文件而全部报红。改用本仓库特有的清单目录与 `pyproject.toml`。
+PLUGIN_LAYOUT = any(
+    (REPO_ROOT / rel).exists()
+    for rel in (".codex-plugin", ".claude-plugin", ".agents", "pyproject.toml")
+)
+
+
+def _require_plugin_layout(name: str) -> bool:
+    """仓库级断言的前置门：不在插件布局时打印说明并让调用方提前返回。"""
+    if PLUGIN_LAYOUT:
+        return True
+    print(f"       (技能为单独安装，未检测到插件/仓库布局，跳过仓库级断言：{name})")
+    return False
 
 
 def check(name, fn):
@@ -78,15 +107,15 @@ def check_cli_help():
 
 
 def check_repo_separation():
-    """四域分离契约：skill/ 与 mcp/、mcp-ext/ 各自独立，产物根在它们之外。
+    """三域分离契约：skill/ 与承载两个 MCP 的 omni-media/ 各自独立成仓，产物根在两者之外。
 
     容器布局（存在 `.bvb-home` 或 `$BVB_HOME`）下这些是硬约束；**独立克隆 / zip 解压安装**
     时容器根本就不存在，相应断言降级为提示——否则一份正常的独立使用会在自检第一步就 FAIL。
     """
     container = _paths.is_container_layout()
 
-    if (SKILL_ROOT / ".git").is_dir():
-        assert (SKILL_ROOT / ".gitattributes").is_file(), "skill/ 缺少 .gitattributes（行尾契约）"
+    if (REPO_ROOT / ".git").is_dir():
+        assert (REPO_ROOT / ".gitattributes").is_file(), "仓库根缺少 .gitattributes（行尾契约）"
     else:
         print("       (skill/ 不是 git 工作树——zip 下载安装，跳过仓库边界断言)")
 
@@ -96,19 +125,29 @@ def check_repo_separation():
     else:
         print(f"       (未检测到容器布局标记，跳过「容器根不得是 git 仓库」断言: home={HOME_ROOT})")
 
-    # 产物根必须位于两个仓库工作树之外，避免产物被误提交
-    for repo_name, repo_root in (("skill", SKILL_ROOT), ("mcp", HOME_ROOT / "mcp")):
-        if not repo_root.exists():
-            continue
-        try:
-            PRODUCTS_ROOT.relative_to(repo_root)
-        except ValueError:
-            continue
-        raise AssertionError(f"产物根 {PRODUCTS_ROOT} 位于 {repo_name} 仓库工作树内")
+    # 产物根必须位于两个仓库工作树之外，避免产物被误提交。
+    # 只在插件布局下判定：技能被单独安装时 REPO_ROOT 只是平台目录（如 ~/.claude），
+    # 默认产物根必然落在它里面，这条断言在该场景下没有意义。
+    if PLUGIN_LAYOUT:
+        for repo_name, repo_root in (("skill", REPO_ROOT),
+                                     (_paths.DEFAULT_MCP_REPO_DIRNAME, MCP_REPO_BASE)):
+            if not repo_root.exists():
+                continue
+            try:
+                PRODUCTS_ROOT.relative_to(repo_root)
+            except ValueError:
+                continue
+            raise AssertionError(f"产物根 {PRODUCTS_ROOT} 位于 {repo_name} 仓库工作树内")
 
-    if container and (HOME_ROOT / "mcp").exists():
-        assert (HOME_ROOT / "mcp" / ".git").is_dir(), "mcp/ 应是独立 git 仓库（缺 .git）"
-        assert not (SKILL_ROOT / "omni-media-mcp").exists(), "skill/ 内不应再残留 omni-media-mcp/"
+    if container:
+        if MCP_REPO_BASE.is_dir():
+            assert (MCP_REPO_BASE / ".git").is_dir(), \
+                f"{_paths.DEFAULT_MCP_REPO_DIRNAME}/ 应是独立 git 仓库（缺 .git）"
+        elif (HOME_ROOT / _paths.DEFAULT_MCP_DIRNAME).is_dir():
+            # 迁移前的旧布局：mcp/ 曾自己就是一个仓库
+            assert (HOME_ROOT / _paths.DEFAULT_MCP_DIRNAME / ".git").is_dir(), \
+                "mcp/ 应是独立 git 仓库（缺 .git）"
+        assert not (REPO_ROOT / "omni-media-mcp").exists(), "仓库根不应再残留 omni-media-mcp/"
 
     # 产物根必须可用：不存在就按工具的默认语义建出来（任何命令首次写入也会建它），
     # 这样全新克隆下自检不必依赖「恰好已经跑过一次 pipeline」。
@@ -190,10 +229,12 @@ def check_no_cross_repo_imports():
         assert not _re.search(r"^\s*(import|from)\s+omni_media_mcp", text, _re.M), \
             f"{path.relative_to(SKILL_ROOT)} 出现了对 MCP 包的 import"
 
-    mcp_root = HOME_ROOT / "mcp"
-    if mcp_root.exists():
+    # 反向扫描两个 MCP 服务：它们同样不得 import 技能包 `src`（正向见上面的技能侧扫描）
+    for mcp_root, pkg_dir in ((MCP_REPO, "omni_media_mcp"), (MCP_EXT_REPO, "omni_media_ext")):
+        if not (mcp_root / pkg_dir).is_dir():
+            continue
         bad = []
-        for path in (mcp_root / "omni_media_mcp").rglob("*.py"):
+        for path in (mcp_root / pkg_dir).rglob("*.py"):
             if "__pycache__" in path.parts:
                 continue
             if "src" in _imported_modules(path):
@@ -358,9 +399,9 @@ def check_subprocess_timeouts():
 
 
 def check_mcp_repo_optional():
-    """可选段落：同级存在 mcp/ 独立仓库时，调用它自己的自检（技能侧不依赖 MCP）。
+    """可选段落：存在 MCP 仓库时调用它自己的自检（技能侧不依赖 MCP）。
 
-    MCP 的全部不变量（工具契约、limits、适配器、废弃链路）由 `mcp/selfcheck.py` 负责，
+    MCP 的全部不变量（工具契约、limits、适配器、废弃链路）由 MCP 自己的 `selfcheck.py` 负责，
     避免两处断言各自漂移；找不到 MCP 仓库即跳过，不视为失败。
     """
     import subprocess as _sp
@@ -380,35 +421,56 @@ def check_mcp_repo_optional():
 
 
 def check_dead_modules_removed():
+    # 技能目录内（随 skill 移动）
     for rel in (
         "src/core/http_client.py",
         "src/generator/cleaner.py",
         "src/generator/classifier.py",
         "src/generator/doc_builder.py",
+        "scripts/validate_skill.py",
+    ):
+        assert not (SKILL_ROOT / rel).exists(), f"{rel} 应已删除"
+
+    if not _require_plugin_layout("仓库根的死代码清单"):
+        return
+    # 仓库根（迁移前的老位置，与"技能已自包含"互斥）
+    for rel in (
+        "SKILL.md",
+        "src",
+        "scripts",
+        "references",
+        ".agents/skills",
+        "requirements.txt",  # 空壳：5 行纯注释、全仓零引用；依赖声明在 pyproject + 平台清单里
         "tests",
         "MCP_TOOL_AUDIT_REPORT.md",
         "config.example.json",
-        "scripts/validate_skill.py",
-        # 四域分离后，MCP 的实现不再属于本仓库（其死代码断言见 mcp/selfcheck.py）
+        # 三域分离后，MCP 的实现不再属于本仓库（其死代码断言由 MCP 自己的 selfcheck.py 负责）
         "omni-media-mcp",
     ):
-        assert not (SKILL_ROOT / rel).exists(), f"{rel} 应已删除"
+        assert not (REPO_ROOT / rel).exists(), f"仓库根不应存在 {rel}"
 
 
 def check_host_artifacts_ignored():
     """宿主/编辑器旁路目录与产物根都不得进入任一仓库。
 
-    .workbuddy、.zcode 这类目录由编辑器在会话中自动写入（含对话记忆）——四域分离后它们位于
+    .workbuddy、.zcode 这类目录由编辑器在会话中自动写入（含对话记忆）——三域分离后它们位于
     容器根，不在任何仓库工作树内；产物根同理。这里同时验证「不在工作树内」这一结构事实，
     以及两个仓库的 .gitignore 仍留有安全网条目（防止有人把产物根搬回仓库内）。
     """
     import subprocess as _sp
 
-    ignore = (SKILL_ROOT / ".gitignore").read_text(encoding="utf-8")
+    if not _require_plugin_layout("旁路目录/产物不入库"):
+        return
+
+    ignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
     for name in (".workbuddy", ".aide", ".zcode", "output", ".sessdata.json", ".archive"):
         assert name in ignore, f"{name} 未被 skill/.gitignore 覆盖（安全网缺失）"
 
-    repos = [SKILL_ROOT] + ([HOME_ROOT / "mcp"] if (HOME_ROOT / "mcp" / ".git").is_dir() else [])
+    # 把可能存在的 MCP 仓库一并纳入校验（新布局认 omni-media/，旧布局认 mcp/）
+    repos = [REPO_ROOT] + [
+        p for p in (MCP_REPO_BASE, HOME_ROOT / _paths.DEFAULT_MCP_DIRNAME)
+        if (p / ".git").is_dir()
+    ]
 
     if not _HAS_GIT:
         print("       (未找到 git 命令，跳过「旁路目录/产物未入库」的 git 校验)")
@@ -508,16 +570,270 @@ def check_workspace_name_derivation():
                 "多个同源候选时应当放弃（不猜），却挑了一个"
 
 
-def check_skill_copies_in_sync():
-    """两份 SKILL.md 及 references 必须保持一致（validate_skill.py 已移除，靠本检查兜底）。"""
-    pairs = [
-        ("SKILL.md", ".agents/skills/bili-video2book/SKILL.md"),
-        ("references/delivery_matrix.md", ".agents/skills/bili-video2book/references/delivery_matrix.md"),
-    ]
-    for a, b in pairs:
-        pa, pb = SKILL_ROOT / a, SKILL_ROOT / b
-        assert pa.exists() and pb.exists(), f"{a} 或 {b} 缺失"
-        assert pa.read_text(encoding="utf-8") == pb.read_text(encoding="utf-8"), f"{a} 与 {b} 不同步"
+# 宿主私有工具名黑名单：技能正文只讲**行动语义**，写死这些名字会让技能换个平台直接失效。
+# 注意 `bash` 不在名单里——它是 Markdown 围栏语言标识（```bash），不是工具调用。
+_PRIVATE_TOOL_NAMES = (
+    "view_file",
+    "write_to_file",
+    "read_file",
+    "apply_patch",
+    "todowrite",
+    "todo_write",
+    "webfetch",
+    "web_fetch",
+    "str_replace_editor",
+    "multi_edit",
+    "create_file",
+    "edit_file",
+    "search_files",
+    "run_command",
+    "list_dir",
+)
+
+# 技能必须覆盖的宿主平台（与 references/install.md 的对照表同源）。
+#
+# **只收有实据的平台**：claude / codex / 通用 agents 的清单 schema 有真实原文，opencode 的工具名映射
+# 已核实。没有实据的平台一律不进这个元组——一旦列进来，下面的断言就会逼着仓库留下"待确认"占位记录。
+HOST_TARGETS = ("claude", "codex", "opencode")
+
+# 未证实平台与外部参照项目名：**文档层不得出现**。
+#
+# 为什么禁止：没有实据的平台名一旦写进文档，使用者会以为技能支持它，装上却可能失效；
+# 指向外部项目名则会把读者引向仓库之外（本仓库的策略是按 Agent Skills 规范自述）。
+# 要支持新平台：**先取得实据**（官方文档 / 官方清单 schema / 实测工具列表），
+# 再补 `references/host-tools/<平台>.md` 并加进 `HOST_TARGETS`，而不是先留一个"待确认"文件。
+#
+# 刻意豁免（不是漏网）：
+#   - `.gitignore`：`.zcode/` `.workbuddy/` `.aide/` 是**防误提交的安全网**（宿主会自动往工作目录
+#     写对话记忆），它们保护仓库，不是支持声明，因此不在扫描范围内；
+#   - 本文件自身：这份禁用名单与容器根忽略规则断言的字面量就写在里面。
+#
+# ⚠️ 新增平台支持时是**两步**（漏一步自检就会红，且失败信息只会说"出现未证实平台名"）：
+#   ① 补 `references/host-tools/<平台>.md` 并加进 `HOST_TARGETS`；
+#   ② 把该名字从下面这个元组里**移除**。
+#
+# ⚠️ 「豆包」在名单里意味着：`references/` 下不得再引用课程原文里出现的该产品举例
+#   （它可能作为讲师的举例出现在教材内容里）。这类原文若要进仓库，应先脱敏。
+_UNVERIFIED_TRACE_NAMES = ("zcode", "workbuddy", "dsh", "doubao", "豆包",
+                           "antigravity", "superpowers", "obra")
+
+
+def check_skill_root_layout():
+    """技能自包含布局：仓库根是**插件单元**，技能本体与它依赖的工具链同住 `skills/<name>/`。
+
+    这是「只安装核心 skill 及依赖，不安装多余内容」的结构保证：
+    安装 = 复制或软链 `skills/bili-video2book/` 这**一个**目录。
+    """
+    name = SKILL_ROOT.name
+    assert name == "bili-video2book", f"技能目录名异常：{SKILL_ROOT}"
+    assert SKILL_ROOT.parent.name == "skills", f"技能目录应位于 skills/ 下：{SKILL_ROOT}"
+
+    for rel in ("SKILL.md", "references", "scripts", "src"):
+        assert (SKILL_ROOT / rel).exists(), \
+            f"技能目录缺少 {rel}（自包含被破坏：装上去跑不起来）"
+
+    if not _require_plugin_layout("仓库根不得残留技能内容"):
+        return
+    # 仓库根只留"分发单元"该有的东西，技能内容不得再散落在根上
+    for rel in ("SKILL.md", "src", "scripts", "references", ".agents/skills", "requirements.txt"):
+        assert not (REPO_ROOT / rel).exists(), \
+            f"仓库根不应再出现 {rel}（技能内容应全部在 {name}/ 内）"
+
+
+def check_frontmatter_portable():
+    """frontmatter 只允许跨工具安全字段，且 name 与技能目录名一致。
+
+    跨工具生态里只有 `name` / `description` 是通用必需，`license` / `metadata` 属安全可选；
+    `allowed-tools` / `model` / `user-invocable` / `disable-model-invocation` 等是**工具私有**字段，
+    写进抬头会让技能在别的平台行为不一致甚至失效（原先的 `compatibility` 也是非标字段，已并入 metadata）。
+    """
+    text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    assert m, "SKILL.md 缺少 YAML frontmatter"
+    block = m.group(1)
+
+    keys = re.findall(r"^([A-Za-z0-9_-]+):", block, re.M)
+    allowed = {"name", "description", "license", "metadata"}
+    extra = [k for k in keys if k not in allowed]
+    assert not extra, f"frontmatter 含非跨工具安全字段：{extra}（应并入 metadata）"
+
+    assert re.search(r"^name:\s*bili-video2book\s*$", block, re.M), \
+        "frontmatter 的 name 与技能目录名不一致"
+    assert re.search(r"^\s+version:\s*\S+$", block, re.M), "metadata 缺少 version"
+    # 触发语义：description 要同时说明"做什么"和"什么时候用"，否则跨平台命中率低
+    assert "使用本技能" in block or "use this skill" in block.lower(), \
+        "description 未写明「何时使用」（跨平台触发依赖它）"
+
+
+def check_no_private_tool_names():
+    """技能正文只讲行动语义，不得写死宿主私有工具名（否则换平台即失效）。
+
+    MCP 工具名 `read_audio` / `read_media` 是跨平台标准（挂了对应 MCP 就能用），不在此列；
+    平台差异收在 `references/host-tools/` 里，一个平台一个文件——那是**唯一**允许写私有工具名的位置。
+    """
+    targets = (
+        "SKILL.md",
+        "references/delivery_matrix.md",
+        "references/install.md",
+        "references/host-tools/README.md",
+    )
+    hits = []
+    for rel in targets:
+        path = SKILL_ROOT / rel
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for tool in _PRIVATE_TOOL_NAMES:
+            if tool in text:
+                hits.append(f"{rel}: {tool}")
+    assert not hits, "技能正文写死了宿主私有工具名（应改为行动语义）：\n      " + "\n      ".join(hits)
+
+
+def check_host_declarations():
+    """平台声明层自洽：各平台"装到哪、以什么身份被识别"必须有据可依。
+
+    - Codex：清单必须显式声明 `"skills": "./skills/"`
+    - Claude Code：抬头**不含**路径字段（靠插件根 `skills/` 自动发现）
+    - 通用 agents marketplace：插件源必须指向本仓库自身
+    - 入口说明文件齐备，且**不得用符号链接**（Windows 上 clone 后易退化成普通文件）
+    """
+    import json as _json
+
+    if not _require_plugin_layout("平台声明层"):
+        return
+
+    codex = _json.loads((REPO_ROOT / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
+    assert codex.get("skills") == "./skills/", f"codex 清单的 skills 路径异常：{codex.get('skills')!r}"
+    assert codex.get("name") == SKILL_ROOT.name, "codex 清单的 name 与技能目录名不一致"
+
+    claude = _json.loads((REPO_ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
+    assert claude.get("name") == SKILL_ROOT.name, "claude 清单的 name 与技能目录名不一致"
+    for forbidden in ("skills", "skillsPath", "skillsDir", "directories"):
+        assert forbidden not in claude, \
+            f"claude 清单不应声明 {forbidden} 路径字段（Claude Code 靠插件根 skills/ 自动发现）"
+
+    market = _json.loads((REPO_ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
+    plugins = market.get("plugins") or []
+    assert plugins, "通用 agents marketplace 清单缺少 plugins"
+    assert (plugins[0].get("source") or {}).get("url") == "./", "marketplace 插件源应指向本仓库自身"
+
+    for rel in ("AGENTS.md", "CLAUDE.md", ".opencode/INSTALL.md"):
+        assert (REPO_ROOT / rel).is_file(), f"缺少平台入口/安装说明：{rel}"
+    for rel in ("AGENTS.md", "CLAUDE.md"):
+        assert not (REPO_ROOT / rel).is_symlink(), f"{rel} 不应是符号链接（Windows 兼容性）"
+
+    # OpenAI 侧声明：字段 schema 未在官方文档证实，保持原样但纳入断言防漂移
+    openai_yaml = REPO_ROOT / "agents" / "openai.yaml"
+    assert openai_yaml.is_file(), "缺少 agents/openai.yaml（OpenAI 侧声明）"
+    text = openai_yaml.read_text(encoding="utf-8")
+    for key in ("interface:", "policy:", "dependencies:"):
+        assert key in text, f"agents/openai.yaml 缺少 {key}"
+
+
+def check_host_tools_matrix():
+    """工具映射层齐备：`HOST_TARGETS` 里每个平台各一份，且**不得编造工具名**。
+
+    平台文件只对**有实据**的平台保留（清单 schema 有真实原文，或工具名映射已核实）。
+    没有实据的平台不进 `HOST_TARGETS`，也不在文档里留「待确认」占位记录——占位记录会让使用者
+    以为技能支持它，实装却可能失效（反方向由 `check_no_unverified_platform_traces` 守住）。
+    真要支持新平台：先拿到实据，再补 `<平台>.md` 并加进 `HOST_TARGETS`。
+    """
+    base = SKILL_ROOT / "references" / "host-tools"
+    assert base.is_dir(), "缺少 references/host-tools/（工具映射层）"
+    assert (base / "README.md").is_file(), "缺少 host-tools/README.md（行动语义基线）"
+
+    install = (SKILL_ROOT / "references/install.md").read_text(encoding="utf-8").lower()
+    for host in HOST_TARGETS:
+        path = base / f"{host}.md"
+        assert path.is_file(), f"缺少 {host} 的工具映射文件"
+        text = path.read_text(encoding="utf-8")
+        assert "行动语义" in text, f"{host}.md 未声明行动语义对照"
+        assert host in install, f"references/install.md 未覆盖平台 {host}"
+        if "待确认" in text.splitlines()[0]:
+            assert "判断方法" in text, f"{host}.md 标了待确认却没给「判断方法」（不能只写不知道）"
+
+
+def check_no_unverified_platform_traces():
+    """文档层不得出现未证实平台名与外部参照项目名。
+
+    与 `check_host_tools_matrix` 互补：那条保证"该有的平台文件都在"，这条保证"不该出现的平台名
+    一个都没有"。**只删不守，下一轮又会被加回来**——把「不保留未证实平台的记录」固化成可复算断言。
+
+    扫描面分两档，**按布局自适应**——技能被单独安装到某平台技能目录时（`~/.claude/skills/…`），
+    仓库级文件根本不存在，硬扫会把别人的自检跑成一片红：
+
+    - 任何布局都扫：`SKILL.md` + `references/**/*.md`（技能自带，一定存在）；
+    - 仅插件/仓库布局扫：README / 入口文件 / `.opencode/INSTALL.md`（Markdown 层），以及
+      `pyproject.toml` / `agents/openai.yaml` / 三个插件清单（**非 Markdown 的声明层**——
+      它们的 `description` 同样会被用户读到，不能留成无守区）。
+
+    刻意不扫 `.gitignore` 与本文件自身（豁免理由见 `_UNVERIFIED_TRACE_NAMES` 上方注释）。
+    """
+    import re
+
+    doc_targets = [SKILL_ROOT / "SKILL.md"]
+    doc_targets.extend(sorted((SKILL_ROOT / "references").rglob("*.md")))
+
+    # 仓库级文件只在**确认是本仓库**时才纳入扫描。原因有两层：
+    #   ① 技能被装到 `~/.claude/skills/bili-video2book/` 时 `REPO_ROOT` 就是 `~/.claude`，
+    #      那里的 `CLAUDE.md` 是**用户自己的全局记忆文件**——扫它等于把用户内容当本仓库痕迹判定；
+    #   ② 通用布局探测（`PLUGIN_LAYOUT`）对这种情况会误判为真（它有 `CLAUDE.md` 这一项）。
+    # 归属判定用**本仓库特有的清单目录**，它们不会出现在用户的宿主配置根里。
+    _REPO_MARKERS = (".codex-plugin", ".claude-plugin", ".agents")
+    if any((REPO_ROOT / marker).is_dir() for marker in _REPO_MARKERS):
+        doc_targets.extend([
+            REPO_ROOT / "README.md",
+            REPO_ROOT / "README.en.md",
+            REPO_ROOT / "AGENTS.md",
+            REPO_ROOT / "CLAUDE.md",
+            REPO_ROOT / ".opencode/INSTALL.md",
+            REPO_ROOT / "pyproject.toml",
+            REPO_ROOT / "agents" / "openai.yaml",
+            REPO_ROOT / ".claude-plugin" / "plugin.json",
+            REPO_ROOT / ".codex-plugin" / "plugin.json",
+            REPO_ROOT / ".agents" / "plugins" / "marketplace.json",
+        ])
+    else:
+        print("       (非本仓库布局：文档层只扫技能自带文件 SKILL.md + references/)")
+
+    # 边界写法：**不能用 `\b`**。Python 3 的 `\w` 是 Unicode 语义（含 CJK 汉字与下划线），
+    # `\bzcode\b` 会漏掉「平台ZCode」「zcode技能」「my_zcode」「zcode1」这些中文文档里最自然的
+    # 写法（实测漏报）。改用「左右都不是 ASCII 字母/数字」的显式边界：紧贴汉字、下划线一律命中，
+    # 同时仍不误伤 handshake（内含 dsh）、cobra（内含 obra）这类无关词。中文名直接子串匹配。
+    patterns = []
+    for name in _UNVERIFIED_TRACE_NAMES:
+        if name.isascii():
+            patterns.append(re.compile(
+                rf"(?<![0-9A-Za-z]){re.escape(name)}(?![0-9A-Za-z])", re.IGNORECASE))
+        else:
+            patterns.append(re.compile(re.escape(name)))
+
+    scanned = 0
+    hits = []
+    for path in doc_targets:
+        if not path.is_file():
+            continue
+        scanned += 1
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if any(pattern.search(line) for pattern in patterns):
+                hits.append(f"{rel}:{lineno}: {line.strip()[:90]}")
+
+    # 下限哨兵：`SKILL.md` + `references/` 若干文档是最小可信集合（单独安装时也存在）。
+    # 不写死成「全部 12 个文档」——那会让单独安装的合法布局必然 FAIL（`PLUGIN_LAYOUT` 已判过）。
+    assert (SKILL_ROOT / "SKILL.md").is_file(), "缺少 SKILL.md，扫描范围无从谈起"
+    assert scanned >= 5, f"扫描范围异常，只找到 {scanned} 个文档文件"
+    assert not hits, (
+        "文档层出现未证实平台名或外部参照项目名（不要留「待确认」式记录）：\n      "
+        + "\n      ".join(hits)
+        + "\n      如需支持新平台：先取得实据，再补 references/host-tools/<平台>.md，"
+          "加进 HOST_TARGETS，并从 _UNVERIFIED_TRACE_NAMES 移除同名条目（两步都要做）。"
+    )
+
+    # Gemini 刻意**不在**禁用名单里：它同时是合法的**模型口径**名（音频模态示例、音频 token
+    # 系数标定），删掉会让音频预算失去依据。因此单独钉住"它不作为宿主平台出现"——根入口文件不得再有。
+    assert not (REPO_ROOT / "GEMINI.md").exists(), \
+        "GEMINI.md 不应存在（Gemini 不作为宿主平台声明；模型口径的 Gemini 表述另行保留）"
 
 
 def check_task_file_export_end_to_end():
@@ -675,15 +991,16 @@ def check_sessdata_store_safety():
     assert resolve_sessdata("   ") == SessdataStore.load(), "空白显式值应回退到本地存档"
 
     # 默认存档路径：必须落在产物根（两仓库工作树之外），且 skill/.gitignore 留有安全网
-    assert DEFAULT_STORE_NAME in (SKILL_ROOT / ".gitignore").read_text(encoding="utf-8"), \
-        f"{DEFAULT_STORE_NAME} 未被 skill/.gitignore 覆盖（安全网缺失）"
+    if PLUGIN_LAYOUT:
+        assert DEFAULT_STORE_NAME in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8"), \
+            f"{DEFAULT_STORE_NAME} 未被仓库 .gitignore 覆盖（安全网缺失）"
     assert store_path().name == DEFAULT_STORE_NAME
     assert store_path().parent == PRODUCTS_ROOT, \
         f"凭证存档不在产物根: {store_path()} (期望目录 {PRODUCTS_ROOT})"
     if not _HAS_GIT:
         print("       (未找到 git 命令，跳过「凭证未入库」的 git 校验)")
         return
-    for repo in (SKILL_ROOT, HOME_ROOT / "mcp"):
+    for repo in (REPO_ROOT, MCP_REPO_BASE):
         if not (repo / ".git").is_dir():
             continue
         tracked = run_quiet(
@@ -706,7 +1023,8 @@ def check_cache_paths_anchored():
     for label, p in (("WBI 密钥", WbiSigner._解析密钥文件路径()), ("凭证存档", store_path())):
         assert p.is_absolute(), f"{label}路径不是绝对路径: {p}"
         assert PRODUCTS_ROOT in p.parents, f"{label}路径未锚定产物根: {p}"
-        assert SKILL_ROOT not in p.parents, f"{label}路径落在了代码仓库内: {p}"
+        if PLUGIN_LAYOUT:
+            assert REPO_ROOT not in p.parents, f"{label}路径落在了代码仓库内: {p}"
 
     # 显式传入的相对路径按**容器根**解析（兼容拆分前的 `output/.wbi_keys.json` 写法）。
     # 注意这是字面路径语义：`$BVB_OUTPUT_DIR` 覆盖产物根时，两者的落点并不相同。
@@ -747,14 +1065,11 @@ def check_render_compat_rules():
     assert RENDER_COMPAT_RULES in BlockSynthesizer.build_synthesis_prompt(block_meta, []), \
         "模块笔记提示词未注入渲染兼容规则"
 
-    # 5) 格式总纲（含镜像）必须写明阅读器为 Typora
-    for rel in (
-        "references/delivery_matrix.md",
-        ".agents/skills/bili-video2book/references/delivery_matrix.md",
-    ):
-        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
-        assert "Typora" in text, f"{rel} 未声明 Typora 阅读场景"
-        assert "```text" in text, f"{rel} 未写入字符画围栏要求"
+    # 5) 格式总纲必须写明阅读器为 Typora
+    rel = "references/delivery_matrix.md"
+    text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
+    assert "Typora" in text, f"{rel} 未声明 Typora 阅读场景"
+    assert "```text" in text, f"{rel} 未写入字符画围栏要求"
 
 
 def check_module_note_contract():
@@ -1001,13 +1316,12 @@ def check_deliverable_lint_gate():
 
 def check_docs_style_matrix_clean():
     """文档不得再残留已删除的旧笔记风格：minimal / detailed 只存在于历史记忆里。"""
-    for rel in (
-        "README.md",
-        "README.en.md",
-        "SKILL.md",
-        "references/delivery_matrix.md",
-    ):
-        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
+    # SKILL.md 与 references 随技能目录走；README 留在插件根（单独安装时不存在）
+    pairs = [("SKILL.md", SKILL_ROOT), ("references/delivery_matrix.md", SKILL_ROOT)]
+    if PLUGIN_LAYOUT:
+        pairs += [("README.md", REPO_ROOT), ("README.en.md", REPO_ROOT)]
+    for rel, root in pairs:
+        text = (root / rel).read_text(encoding="utf-8")
         low = text.lower()
         for 已删除 in ("minimal", "detailed"):
             assert 已删除 not in low, f"{rel} 仍残留已删除的笔记风格字样：{已删除}"
@@ -1017,31 +1331,40 @@ def check_delivery_matrix_article_types():
     """交付矩阵的长文类型表必须覆盖全部已登记类型，且标明 legacy 的存在与 learning 的推荐地位。"""
     from src.generator.prompt_templates import ARTICLE_PROMPT_TYPES, IMPLEMENTED_ARTICLE_TYPES
 
-    for rel in (
-        "references/delivery_matrix.md",
-        ".agents/skills/bili-video2book/references/delivery_matrix.md",
-    ):
-        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
-        for key in ARTICLE_PROMPT_TYPES:
-            assert f"`{key}`" in text, f"{rel} 的类型表缺少 {key} 行"
-        assert "推荐" in text or "已提供（推荐" in text, f"{rel} 未标出推荐风格"
-        assert set(IMPLEMENTED_ARTICLE_TYPES) == {"learning", "legacy"}, \
-            f"已提供提示词的类型集合变化，文档需同步：{IMPLEMENTED_ARTICLE_TYPES}"
+    rel = "references/delivery_matrix.md"
+    text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
+    for key in ARTICLE_PROMPT_TYPES:
+        assert f"`{key}`" in text, f"{rel} 的类型表缺少 {key} 行"
+    assert "推荐" in text or "已提供（推荐" in text, f"{rel} 未标出推荐风格"
+    assert set(IMPLEMENTED_ARTICLE_TYPES) == {"learning", "legacy"}, \
+        f"已提供提示词的类型集合变化，文档需同步：{IMPLEMENTED_ARTICLE_TYPES}"
 
 
 def check_version_consistency():
-    """版本号三处必须一致：SKILL 抬头 / pyproject / src.__version__。"""
+    """版本号必须处处一致：SKILL 抬头 / pyproject / src.__version__ / 各平台清单。"""
     import re as _re
 
+    import json
     import src
 
     skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     m_skill = _re.search(r"^\s*version:\s*([^\s]+)\s*$", skill, _re.M)
     assert m_skill, "SKILL.md 抬头缺少 version 字段"
-    pyproject = (SKILL_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    m_proj = _re.search(r'^version\s*=\s*"([^"]+)"', pyproject, _re.M)
-    assert m_proj, "pyproject.toml 缺少 version"
-    versions = {"SKILL.md": m_skill.group(1), "pyproject.toml": m_proj.group(1), "src.__version__": src.__version__}
+
+    # 技能级一致性：无论装在哪，SKILL.md 抬头与 src.__version__ 都必须一致
+    versions = {"SKILL.md": m_skill.group(1), "src.__version__": src.__version__}
+
+    # 仓库级一致性：pyproject 与各平台清单（单独安装时不存在，跳过）
+    if _require_plugin_layout("pyproject 与平台清单的版本号"):
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        m_proj = _re.search(r'^version\s*=\s*"([^"]+)"', pyproject, _re.M)
+        assert m_proj, "pyproject.toml 缺少 version"
+        versions["pyproject.toml"] = m_proj.group(1)
+        for rel in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json"):
+            path = REPO_ROOT / rel
+            assert path.is_file(), f"平台声明缺失：{rel}"
+            versions[rel] = str(json.loads(path.read_text(encoding="utf-8")).get("version", ""))
+
     assert len(set(versions.values())) == 1, f"版本号不一致: {versions}"
 
 
@@ -1050,14 +1373,19 @@ def check_quality_gate_copy():
     from src.core.deliverable_lint import FATAL_NOTE_KEYS
 
     assert len(FATAL_NOTE_KEYS) == 5, f"致命项集合变化，文档需同步：{FATAL_NOTE_KEYS}"
-    readme = (SKILL_ROOT / "README.md").read_text(encoding="utf-8")
-    for 中文标签 in ("套话填充", "空壳标题", "分集平铺标题", "行内残缺引用", "分集口吻"):
-        assert 中文标签 in readme, f"README.md 质检说明缺少致命项：{中文标签}"
-    readme_en = (SKILL_ROOT / "README.en.md").read_text(encoding="utf-8").lower()
-    for 英文标签 in ("boilerplate", "hollow", "per-episode headings", "inline quote", "episode voice"):
-        assert 英文标签 in readme_en, f"README.en.md 质检说明缺少致命项：{英文标签}"
-    for rel in ("SKILL.md", "README.md", "README.en.md"):
-        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
+
+    targets = [("SKILL.md", SKILL_ROOT)]
+    if PLUGIN_LAYOUT:
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        for 中文标签 in ("套话填充", "空壳标题", "分集平铺标题", "行内残缺引用", "分集口吻"):
+            assert 中文标签 in readme, f"README.md 质检说明缺少致命项：{中文标签}"
+        readme_en = (REPO_ROOT / "README.en.md").read_text(encoding="utf-8").lower()
+        for 英文标签 in ("boilerplate", "hollow", "per-episode headings", "inline quote", "episode voice"):
+            assert 英文标签 in readme_en, f"README.en.md 质检说明缺少致命项：{英文标签}"
+        targets += [("README.md", REPO_ROOT), ("README.en.md", REPO_ROOT)]
+
+    for rel, root in targets:
+        text = (root / rel).read_text(encoding="utf-8")
         assert "语言标识" in text or "language tag" in text.lower() or "language identifier" in text.lower(), \
             f"{rel} 未说明围栏语言标识的体检口径"
 
@@ -1072,10 +1400,11 @@ def check_dispatch_discipline_documented():
     for 关键词 in ("60 分钟", "一集一子智能体", "执行者", "不回传正文", "BVB_AUDIO_TOKENS_PER_SEC"):
         assert 关键词 in skill, f"SKILL.md 缺少阶段一派发纪律关键词：{关键词}"
 
-    readme = (SKILL_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "60 分钟" in readme and ("派发" in readme), "README.md 未写明阶段一派发阈值"
-    readme_en = (SKILL_ROOT / "README.en.md").read_text(encoding="utf-8")
-    assert "60 minutes" in readme_en or "60-minute" in readme_en, "README.en.md 未写明阶段一派发阈值"
+    if _require_plugin_layout("README 的阶段一派发阈值"):
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        assert "60 分钟" in readme and ("派发" in readme), "README.md 未写明阶段一派发阈值"
+        readme_en = (REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
+        assert "60 minutes" in readme_en or "60-minute" in readme_en, "README.en.md 未写明阶段一派发阈值"
 
 
 def check_dispatch_payload_shape():
@@ -1668,14 +1997,18 @@ def check_fsutil_contract():
 
 def main():
     print("=" * 62)
-    print("bili-video2book 技能仓库自检（四域分离：skill / mcp / mcp-ext / output）")
-    print(f"  代码根  : {SKILL_ROOT}")
+    print("bili-video2book 技能自检（技能自包含 + 多宿主声明 + 三域分离）")
+    print(f"  技能根  : {SKILL_ROOT}   ← 安装单元（SKILL.md + references/ + src/ + scripts/）")
+    if PLUGIN_LAYOUT:
+        print(f"  仓库根  : {REPO_ROOT}   ← 插件单元（平台声明 / README / LICENSE）")
+    else:
+        print("  仓库根  : （技能为单独安装，无插件/仓库布局，仓库级断言已跳过）")
     print(f"  容器根  : {HOME_ROOT}")
     print(f"  产物根  : {PRODUCTS_ROOT}")
     print("=" * 62)
     check("模块导入无 ImportError", check_imports)
     check("CLI 全部子命令 --help 可用", check_cli_help)
-    check("四域分离契约（仓库边界/产物在仓库外）", check_repo_separation)
+    check("三域分离契约（仓库边界/产物在仓库外）", check_repo_separation)
     check("产物根解析与 cwd 无关", check_products_root_resolution)
     check("跨仓库不互引（skill ⇎ mcp）", check_no_cross_repo_imports)
     check("KernelExtractor 契约（无本地伪造抽取）", check_kernel_extractor_contract)
@@ -1705,12 +2038,17 @@ def main():
     check("源码无硬编码本机路径", check_no_hardcoded_machine_paths)
     check("Python 3.8 语法与接口兼容（无 3.9+ 构造）", check_python38_syntax_compat)
     check("文件系统健壮性契约（坏链接只跳过不崩）", check_fsutil_contract)
+    check("文档层无未证实平台痕迹（不留待确认记录）", check_no_unverified_platform_traces)
     check("阶段一派发纪律已写入文档", check_dispatch_discipline_documented)
     check("派发载荷与台账契约", check_dispatch_payload_shape)
     check("本轮修复项回归", check_regression_fixes)
     check("死代码与验证产物已移除", check_dead_modules_removed)
     check("工作区名推导与找回（BV 号保留/幂等/空壳/歧义）", check_workspace_name_derivation)
-    check("两份 SKILL 同步", check_skill_copies_in_sync)
+    check("技能自包含布局（skills/<name>/ = 安装单元）", check_skill_root_layout)
+    check("frontmatter 跨工具安全（仅 name/description/license/metadata）", check_frontmatter_portable)
+    check("技能正文无宿主私有工具名（只讲行动语义）", check_no_private_tool_names)
+    check("平台声明层自洽（codex/claude/agents 清单 + 入口文件）", check_host_declarations)
+    check("宿主工具映射层齐备（未证实平台不编造）", check_host_tools_matrix)
     print("=" * 62)
     if FAILURES:
         print(f"[FAILED] {len(FAILURES)} 项未通过:")

@@ -20,8 +20,10 @@ from typing import Any, Dict, List, Optional, Union
 from . import paths as _paths
 
 
-# 容器根（= skill/、mcp/、output/ 的共同父目录）：同时作为 manifest 相对路径的换算基准，
+# **容器根**（= skill/、omni-media/、output/ 的共同父目录）：同时作为 manifest 相对路径的换算基准，
 # 从而保证 `output/<task>/...` 这类历史清单路径在三域分离后依然逐字节有效。
+# ⚠️ 命名历史遗留：下面把它叫作 `_仓库根目录` / `REPO_ROOT`，但它的语义是**容器根**，
+#    与 selfcheck 里的 `REPO_ROOT`（仓库根 = 插件单元）**不是一回事**，读代码时不要混淆。
 _仓库根目录 = _paths.home_root()
 
 

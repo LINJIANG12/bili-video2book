@@ -4,7 +4,7 @@
 
 [![开源协议: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Python 版本: 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg?style=flat-square)](#)
-[![环境适配: Antigravity | ChatGPT | Codex | 命令行](https://img.shields.io/badge/Environment-CLI%20%7C%20Agents-111827?style=flat-square)](SKILL.md)
+[![环境适配: Claude Code | Codex | OpenCode | 命令行](https://img.shields.io/badge/Environment-CLI%20%7C%20Agents-111827?style=flat-square)](skills/bili-video2book/SKILL.md)
 
 **[English Documentation](README.en.md)** &nbsp;·&nbsp; [功能特性](#功能特性) &nbsp;·&nbsp; [交付产物体系](#交付产物体系) &nbsp;·&nbsp; [两阶段解耦流水线](#两阶段解耦流水线) &nbsp;·&nbsp; [安装与快速开始](#安装与快速开始) &nbsp;·&nbsp; [CLI 使用指南](#cli-使用指南) &nbsp;·&nbsp; [许可证](#许可证)
 
@@ -40,7 +40,7 @@
 
 > 下图中**阶段一那一块是「主 Agent 需要维持的纪律」，不是工具层的机器架构**：
 > 队列、槽位与滑动调度都由主 Agent 自己维持，工具层只负责出载荷、记台账、判门禁，
-> **无法校验**谁写的、是否真听了音频（边界见 [SKILL.md](SKILL.md) § 4.5）。
+> **无法校验**谁写的、是否真听了音频（边界见 [SKILL.md](skills/bili-video2book/SKILL.md) § 4.5）。
 
 ```text
 [输入 URL 或本地课程目录]
@@ -60,7 +60,7 @@
   ├── 并发维持：主 Agent 自行保持 5~6 个子智能体槽位并行（`--summary` 里的 SUGGEST_WORKERS 是建议值）
   ├── 滑动调度：主 Agent 自行执行“完成一个，立即派生一个”(磁盘探针命中 ➔ 回收 ➔ 派发新集)
   ├── 单集一步：按宿主能力二选一取音频事实，然后直接撰写教材长文（不落盘成交付物）
-  │             · 有 read_audio（原生音频）：read_audio 取切片 ➔ view_file 原生听音
+  │             · 有 read_audio（原生音频）：read_audio 取切片 ➔ 用宿主的文件查看能力原生听音
   │             · 只有 read_media（无原生音频）：read_media 外部模型代读，取回逐字稿
   │             子智能体只回报一行 `P07 | 路径 | 字节数 | 执行者`，不回传正文
   └── 阶段门禁：所有分集全部竣工且无未完成任务时，阶段一结束（STAGE1_DONE=1）
@@ -82,27 +82,37 @@
 >
 > **交付前机器质检**：`python scripts/note_quality_check.py --strict` 把「套话填充 / 空壳标题 / 分集平铺标题 / 行内残缺引用 / 分集口吻」五类必查项与「断句 / 结构缺件」两类提示项变成可复算指标；`python scripts/render_compat_check.py --strict` 检查 GitHub 告警块、围栏外裸字符画与围栏配对（**「围栏缺语言标识」默认只提示，加 `--require-lang` 才纳入门禁**）。
 >
-> 逐步操作规范（含阶段二门禁与子智能体派发规范、任务书对照表）见 [SKILL.md](SKILL.md)；自检命令为 `python scripts/selfcheck.py`。
+> 逐步操作规范（含阶段二门禁与子智能体派发规范、任务书对照表）见 [SKILL.md](skills/bili-video2book/SKILL.md)；自检命令为 `python scripts/selfcheck.py`。
 
 ---
 
-## 目录结构（四域隔离）
+## 目录结构（技能自包含 + 三域隔离）
 
-本项目按**职责**分成四个互不打扰的域：代码、两个 MCP 服务、产物各占一处，任何一个的升级/搬迁都不会影响其他几个。
+本仓库是**插件 / 分发单元**；技能本体与它依赖的工具链**自包含**在同一个目录里，
+因此安装只需带走那一个目录。两个音视频 MCP 服务同属**另一个仓库**，与产物各自独立成域：
 
 ```text
 <容器根>/
-├── skill/     ← 本仓库：技能与工具链（SKILL.md、src/、scripts/、references/、.agents/）
-├── mcp/       ← 独立仓库：omni-media MCP（宿主原生听音 read_audio，纯本地，零凭证）
-├── mcp-ext/   ← 独立目录：omni-media-ext MCP（外部模型代读 read_media，Gemini / OpenAI 协议，读 config.json）
-└── output/    ← 产物根：每门课一个工作区 + .sessdata.json / .wbi_keys.json / .cli_status.json
+├── skill/                          ← 本仓库（插件单元）
+│   ├── skills/bili-video2book/     ← ★ 技能（安装单元）：SKILL.md + references/ + src/ + scripts/
+│   ├── .codex-plugin/  .claude-plugin/  .agents/plugins/  .opencode/  ← 各平台识别用声明
+│   └── AGENTS.md / CLAUDE.md                              ← 各 agent 自动加载的入口
+├── omni-media/                     ← 另一个仓库：两个音视频 MCP 服务
+│   ├── mcp/                        ←   宿主原生听音版（read_audio，纯本地，零凭证）
+│   └── mcp-ext/                    ←   外部模型代读版（read_media，读 config.json）
+└── output/                         ← 产物根：每门课一个工作区 + .sessdata.json / .wbi_keys.json / .cli_status.json
 ```
 
-- **各仓库/目录互相独立**（`skill/`、`mcp/` 各有自己的 `.git`），可分别克隆、升级、发布；MCP 从不 import 技能代码，技能也从不 import MCP 代码（`selfcheck` 强制校验，只做目录存在性判断与 AST/正则静态扫描，从不真实 import）；
+- **安装单元只有一个目录**：`skills/bili-video2book/`。复制或软链它即可，其余文件（README / LICENSE / 平台声明）都不需要安装；
+- **各仓库/目录互相独立**（`skill/`、`omni-media/` 各有自己的 `.git`），可分别克隆、升级、发布；MCP 从不 import 技能代码，技能也从不 import MCP 代码（`selfcheck` 强制校验，只做目录存在性判断与 AST/正则静态扫描，从不真实 import）；
+- **配套 MCP 仓库**：[LINJIANG12/omni-media](https://github.com/LINJIANG12/omni-media) —— 本技能的**阶段一听音通道**由它的两个服务提供（`read_audio` / `read_media`），仅通过 MCP 协议协作；位置由 `src/core/paths.py` 统一解析（新布局 `<容器根>/omni-media/{mcp,mcp-ext}`，并兼容旧的平级布局与 `OMNI_MEDIA_MCP_DIR` 覆盖）；
 - **产物永远在代码之外**：不会出现在任何 `git status` 里，删除/迁移仓库都不会动到成品；
 - **命令与工作目录解耦**：`--base-dir` 缺省即产物根（绝对路径），因此在任意目录执行 CLI/脚本都能找到同一批工作区；
   需要换位置时用 `--base-dir <路径>`，或设置环境变量 `BVB_HOME`（容器根）/ `BVB_OUTPUT_DIR`（产物根）；
-- `python src/cli.py info` 会打印当前解析出的「代码根 / 容器根 / 产物根」三行，便于确认。
+- `python src/cli.py info` 会打印当前解析出的「代码根 / 容器根 / 产物根 / MCP 仓库」四行，便于确认。
+
+**各平台装到哪、怎么装**：见 [`skills/bili-video2book/references/install.md`](skills/bili-video2book/references/install.md)
+（平台对照表 + 手动安装三法 + 工具名映射）。
 
 ---
 
@@ -122,40 +132,57 @@
 
 | 通道 | 适用宿主 | 工具 | 安装 |
 | :--- | :--- | :--- | :--- |
-| **A. 宿主原生听音** | 模型自身有音频模态（Gemini / GPT-4o Audio / Codex 等） | `read_audio` | `mcp/`（独立仓库，**无需任何 API Key**） |
-| **B. 外部模型代读** | 只有文本能力的宿主 | `read_media` | `mcp-ext/`（读取 `config.json` 里的端点与 api_key） |
+| **A. 宿主原生听音** | 模型自身有音频模态（Gemini / GPT-4o Audio / Codex 等） | `read_audio` | [`omni-media/mcp/`](https://github.com/LINJIANG12/omni-media)（**无需任何 API Key**） |
+| **B. 外部模型代读** | 只有文本能力的宿主 | `read_media` | [`omni-media/mcp-ext/`](https://github.com/LINJIANG12/omni-media)（读取 `config.json` 里的端点与 api_key） |
 
 ```bash
+# 两个 MCP 同属一个仓库（本技能的阶段一听音通道提供方）
+cd .. && git clone https://github.com/LINJIANG12/omni-media.git   # 容器布局里已存在则跳过
+
 # 通道 A：宿主能自己听音频（优先选它，零凭证）
-cd ../mcp && pip install -e .                        # 若未克隆：git clone <omni-media-mcp 仓库地址> mcp
-python -m omni_media_mcp.cli apply --target zcode    # --target 也可用 opencode/dsh/codex/antigravity/all
+cd omni-media/mcp && pip install -e .
+python -m omni_media_mcp.cli apply --target codex    # --target 还可用 opencode/all（完整取值以该仓库为准）
 python selfcheck.py                                  # 可选：MCP 侧自检
 
 # 通道 B：宿主听不了音频（由外部模型代读）
 cd ../mcp-ext && pip install -e .                    # 若未安装
 python -m omni_media_ext.cli config --init           # 生成 config.json，填入端点与 api_key
 python -m omni_media_ext.cli status --probe          # 环境 + 配置 + 端点可达性 + 该挂哪一个
-python -m omni_media_ext.cli apply --target zcode
+python -m omni_media_ext.cli apply --target codex
 python selfcheck.py                                  # 可选：本版本自检（含与原版的兼容契约）
 ```
 
 > **通道 A 无需任何 API Key**：音频由宿主多模态模型原生聆听，接入只写入服务启动命令与 `PYTHONPATH`，不涉及任何凭证。
-> 唯一的外部依赖是系统 `ffmpeg`。**通道 B** 的凭证只放在 `mcp-ext/config.json`（已被 `.gitignore` 排除），不写入宿主配置。
+> 唯一的外部依赖是系统 `ffmpeg`。**通道 B** 的凭证只放在 `omni-media/mcp-ext/config.json`（已被该仓库的 `.gitignore` 排除），不写入宿主配置。
 >
 > 两个服务可以**同时挂载**（注册键 `omni-media` / `omni-media-ext` 互不覆盖），此时 Agent 优先走 `read_audio`，
 > 需要 `summarize` / `qa` 这类加工时再用 `read_media`。选择规则与契约对照见 `SKILL.md` §4.2 与容器根 README。
 
-### 3. 作为 AI Agent Skill 挂载（推荐）
+### 3. 作为 AI Agent Skill 安装（推荐）
 
-在 Antigravity、ChatGPT、OpenAI Codex 等环境中直接说明：
-```text
-把本仓库安装为我的全局 Skill。
-```
-本仓库内置 `.agents/skills/bili-video2book`，符合 Open Agent Skills 标准规范，可直接通过 Agent 自然语言触发。
+本仓库遵循 **Agent Skills 开放规范**：`skills/bili-video2book/` 就是一个自包含的技能目录
+（`SKILL.md` + `references/` + `src/` + `scripts/`），**装它一个目录即可**。
 
-> **注意（工作目录契约）**：Skill 本体只有 `SKILL.md` 与 `references/`，**命令与脚本都在仓库里**。
-> 挂载时请保持**整个仓库可达**（整仓复制或软链），并让 Agent **以本仓库根（`skill/`）为工作目录**执行
-> `python src/cli.py …` / `python scripts/…`，否则 SKILL.md 里的命令会找不到文件。
+**让平台自己装**（推荐）：把仓库链接交给平台的原生插件 / 技能安装通道，或直接让该平台的 agent 阅读
+[`skills/bili-video2book/references/install.md`](skills/bili-video2book/references/install.md) 自行判断。
+仓库已备好各平台声明：`.codex-plugin/plugin.json`（Codex）、`.claude-plugin/plugin.json`（Claude Code）、
+`.agents/plugins/marketplace.json`（通用 agents）、`.opencode/INSTALL.md`（OpenCode）。
+
+**手动安装**（任何平台都可用）：把 `skills/bili-video2book/` 复制或软链到该平台的技能目录。
+
+| 平台 | 用户级 | 项目级 |
+| :--- | :--- | :--- |
+| Claude Code | `~/.claude/skills/bili-video2book/` | `<项目>/.claude/skills/bili-video2book/` |
+| Codex | `~/.codex/skills/bili-video2book/` | `<项目>/.codex/skills/bili-video2book/` |
+| OpenCode | 见 `.opencode/INSTALL.md`（无打包插件，按目录安装） | `<项目>/.opencode/skills/bili-video2book/` |
+| 通用 agents | `~/.agents/skills/bili-video2book/` | `<项目>/.agents/skills/bili-video2book/` |
+| 其它平台 | 该平台自己的技能目录 | `<项目>/.<平台>/skills/bili-video2book/` |
+
+> **工作目录契约**：技能的命令写成 `python src/cli.py …` / `python scripts/…` 的相对形式，
+> **请以技能目录（`SKILL.md` 所在目录）为当前工作目录执行**——工具链就在同一个目录里。
+>
+> **诚实边界**：除末行兜底外，表内每行的安装位都有公开依据；其它平台请以**该平台实际**的工具与目录
+> 为准，不要照搬别处看到的路径（`references/install.md` 有手动安装三法，`references/host-tools/` 有工具名映射与判断方法）。
 
 ### 4. 本地安装与命令行使用
 
@@ -177,19 +204,21 @@ pip install -e .
 | `read_audio` 或 `read_media` | 必需 | 阶段一停下并要求先挂载其一，不会跳过音频保真 |
 
 ```bash
+# 以下命令在技能目录（skills/bili-video2book/）下执行
 python src/cli.py info        # 一次看全：Python 版本 / ffmpeg / ffprobe / 听音通道 / 三域路径
-python scripts/selfcheck.py   # 全量契约自检（含 Python 3.8 语法与接口兼容断言）
+python scripts/selfcheck.py   # 全量契约自检（技能自包含 + 多宿主声明 + Python 3.8 兼容）
 ```
 
 `info` 会把每个缺失项连同**可照做的下一步**一起打印：ffmpeg 缺失时给出
 `winget install Gyan.FFmpeg` / `brew install ffmpeg` / `apt install ffmpeg`；Python 低于 3.8 时明确提示升级；
-两条听音通道都不可用时提示先挂载。五类缺失情形与降级口径详见 [SKILL.md §8](SKILL.md)。
+两条听音通道都不可用时提示先挂载。五类缺失情形与降级口径详见 [SKILL.md §8](skills/bili-video2book/SKILL.md)。
 
 ---
 
 ## CLI 使用指南
 
-若已执行 `pip install -e .`，可直接使用 `bili-video2book`；亦可在本仓库根目录（`skill/`）直接运行 `python src/cli.py`。
+若已执行 `pip install -e .`，可直接使用 `bili-video2book`；亦可在**技能目录**（`skills/bili-video2book/`）下
+直接运行 `python src/cli.py`。下文所有 `python src/cli.py …` / `python scripts/…` 示例均**以技能目录为当前工作目录**。
 产物一律落在产物根（默认 `<容器根>/output/`），与代码目录分离；下文示例中的 `output/<task>/…` 均**相对产物根**。
 
 ### 场景一：处理整门课程流水线

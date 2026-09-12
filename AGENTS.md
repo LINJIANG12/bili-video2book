@@ -1,0 +1,14 @@
+# bili-video2book — Agent 入口
+
+本仓库是一个跨 agent 的 **Agent Skill**（把 B 站网课/本地音视频重构为教材长文、模块全书与思维导图笔记）。
+
+**完整说明以 [`CLAUDE.md`](CLAUDE.md) 为准**（本文件只是同一份内容的通用入口，便于各平台自动加载）。
+
+快速事实：
+
+- 技能定义：`skills/bili-video2book/SKILL.md`（唯一真源）
+- 工具链（技能的依赖，必须一起安装）：`skills/bili-video2book/src/` 与 `skills/bili-video2book/scripts/`
+- **安装单元 = `skills/bili-video2book/` 整个目录**（其余 README/平台声明/LICENSE 无需安装）
+- 各平台安装对照：`skills/bili-video2book/references/install.md`
+- 运行前置：Python 3.8+、系统 `ffmpeg`、以及配套仓库 [`omni-media`](https://github.com/LINJIANG12/omni-media) 提供的 `read_audio` 或 `read_media` 听音通道之一
+- 自检：`cd skills/bili-video2book && python scripts/selfcheck.py`

@@ -1,0 +1,19 @@
+{
+  "name": "bili-video2book",
+  "version": "2.2.0",
+  "description": "Core skills library for Bilibili/local course videos: deep-dive episode articles, compiled textbooks, and mindmap review notes.",
+  "author": {
+    "name": "LINJIANG12"
+  },
+  "homepage": "https://github.com/LINJIANG12/bili-video2book",
+  "repository": "https://github.com/LINJIANG12/bili-video2book",
+  "license": "MIT",
+  "keywords": [
+    "bilibili",
+    "video-to-markdown",
+    "study-notes",
+    "textbook",
+    "mindmap",
+    "skills"
+  ]
+}

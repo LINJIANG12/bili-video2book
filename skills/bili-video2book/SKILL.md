@@ -1,17 +1,17 @@
 ---
 name: bili-video2book
-description: 将 B 站长视频/系列网课或本地音视频重构为精读教材长文、模块合辑全书与思维导图笔记。提供音频提取、两趟语义聚合、双通道听音（宿主原生或多模态外部模型）、多阶段门禁调度与知识整编的完整工具链。
+description: 把 B 站长视频/系列网课或本地音视频重构为精读教材长文、模块合辑全书与思维导图复习笔记的完整技能，自带纯标准库的音频提取、两趟语义聚合、双通道听音与多阶段门禁工具链。当用户提出「把网课/视频做成教材」「整理成复习笔记或思维导图」「这门课帮我精读一遍」「B 站这个合集重构成文档」，或给出本地课程目录要求系统化整理时，使用本技能。
 license: MIT
-compatibility: Python 3.8+（junction 去重需 3.12+，旧版本自动降级为仅识别符号链接）, ffmpeg in PATH, Multimodal or text-only LLM Agent (Antigravity, ChatGPT/Codex)
 metadata:
   author: LINJIANG12
-  version: 2.1.0
+  version: 2.2.0
   category: learning-and-education
+  compatibility: Python 3.8+（junction 去重需 3.12+，旧版本自动降级为仅识别符号链接）；系统 ffmpeg 在 PATH；宿主需具备 read_audio 或 read_media 听音通道之一。
 ---
 
 # Bili-Video2Book: 视频网课重构教材与复习笔记 Skill
 
-本 Skill 面向 AI Agent（Antigravity、OpenAI Codex / ChatGPT 等）与系统终端，用于将 B 站长视频/系列网课或本地音视频转换为结构化技术教材、模块合辑全书与思维导图复习笔记。
+本 Skill 面向**任意支持 Agent Skills 规范的宿主**（Claude Code、Codex、OpenCode 等）与系统终端，用于将 B 站长视频/系列网课或本地音视频转换为结构化技术教材、模块合辑全书与思维导图复习笔记。平台差异（安装位置、工具名）见 `references/install.md` 与 `references/host-tools/`。
 
 ---
 
@@ -26,7 +26,7 @@ metadata:
 >    - **严禁编写任何 `gen_*.py` 等离线批量造文脚本**来伪造、填充产物。所有任务必须通过官方 CLI 命令与原生多模态工具链推进；
 > 2. **音频事实保真原则（Strict Audio Grounding）**：
 >    - 所有 `articles/PXX_*.md` 的撰写，必须建立在**真正处理过本集音频**的基础之上。按宿主能力二选一（先看自己的工具列表里有哪个，不要猜）：
->      - **有原生音频模态**（工具列表里有 `read_audio`）→ 调用 `read_audio(output_mode="file")` 提取切片，再用 `view_file` 真正聆听；
+>      - **有原生音频模态**（工具列表里有 `read_audio`）→ 调用 `read_audio(output_mode="file")` 提取切片，再用**宿主自己的文件查看能力**（能直接感知音频内容的那件工具，各平台工具名见 `references/host-tools/`）真正聆听；
 >      - **没有原生音频模态**（只有 `read_media`）→ 调用 `read_media` 由**外部模型代读**，取回逐字稿/讲解文本作为事实依据；
 >      - 两条通道的选择规则与分页契约见 §4.2；**无论走哪条，都必须拿到本集真实讲解内容**，不得跳过取音频这一步直接编造；
 >    - 正文必须包含原视频讲师亲口讲述的真实案例、例题或板书比喻（Grounding Evidence），严禁脱离音频凭空脑补；
@@ -79,21 +79,22 @@ python src/cli.py logout                          # 撤销保存
 ## 3. 标准作业流程 (Standard Operating Procedures - SOP)
 
 > [!IMPORTANT]
-> **运行前置（四域布局与工作目录契约）**：本仓库是**技能域**，只含代码与文档；两个 MCP 服务与产物各自独立成域：
+> **运行前置（技能目录与工作目录契约）**：本仓库是**插件/分发单元**；技能本体与它依赖的工具链**自包含**在同一个目录里，**安装这一个目录即可**：
 >
 > ```text
 > <容器根>/
-> ├── skill/     ← 本仓库（技能/CLI/脚本；命令里的 src/ 与 scripts/ 都指这里）
-> ├── mcp/       ← 独立仓库：omni-media（宿主原生听音版，read_audio）
-> ├── mcp-ext/   ← 独立目录：omni-media-ext（外部模型代读版，read_media）
-> └── output/    ← 产物根：各课程工作区 + .sessdata.json / .wbi_keys.json / .cli_status.json
+> ├── skill/skills/bili-video2book/   ← 本技能：SKILL.md + references/ + src/ + scripts/（安装单元）
+> ├── omni-media/                     ← 独立仓库：两个音视频 MCP 服务
+> │   ├── mcp/                      ←   宿主原生听音版（read_audio，零凭证）
+> │   └── mcp-ext/                  ←   外部模型代读版（read_media，配置驱动）
+> └── output/                         ← 产物根：各课程工作区 + .sessdata.json / .wbi_keys.json / .cli_status.json
 > ```
 >
-> - 所有命令写成 `python src/cli.py …` / `python scripts/…` 的相对形式，**请以本仓库根（`skill/`）为当前工作目录执行**；
+> - 所有命令写成 `python src/cli.py …` / `python scripts/…` 的相对形式，**请以本技能目录（`SKILL.md` 所在目录）为当前工作目录执行**；
 > - **产物根默认就是容器根下的 `output/`**，与代码彻底分离：命令可在任意目录执行（`--base-dir` 缺省即产物根，绝对路径）；
 >   需要改位置时用 `--base-dir <路径>`，或设 `BVB_HOME`（容器根）/ `BVB_OUTPUT_DIR`（产物根）；
-> - `.agents/skills/bili-video2book/` 里只有 `SKILL.md` 与 `references/`，**不含 `src/`、`scripts/`**：
->   挂载为全局 Skill 时请保持**整个仓库可达**（整仓复制或软链），不要只复制 SKILL.md。
+> - **安装/挂载时把整个技能目录一起带走**（`SKILL.md` 与 `src/`、`scripts/` 同在），不要只复制 `SKILL.md`；
+>   各平台装到哪、怎么装，见 `references/install.md`。
 
 整个重构流水线分为一个准备阶段与两个核心阶段，Agent 只需按顺序执行指定命令与工具：
 
@@ -119,10 +120,10 @@ python src/cli.py logout                          # 撤销保存
   主 Agent 取载荷：python scripts/queue_tracker.py --next 5 --log-dispatch --json
   （载荷已含每集 任务书路径 / 切片清单 / 目标长文路径 / 本集 token 预算，禁止手抄路径）
   ├── 1. 派生：一集一个子智能体（集数 ≥15 且单集 ≤40k token 时 3~5 集打包），并发 5~6
-  ├── 2. 子智能体取音频：有 `read_audio` 走原生听音（read_audio → view_file）；无则用 `read_media` 交由外部模型代读（两条通道同一分页契约，见 §4.2）
-  ├── 3. 子智能体处理音频：原生通道用 view_file 感知讲师原声与板书案例；外部模型通道直接读回逐字稿/讲解文本（必须真过一遍，见红线 2）
+  ├── 2. 子智能体取音频：有 `read_audio` 走原生听音（read_audio → 宿主的文件查看能力）；无则用 `read_media` 交由外部模型代读（两条通道同一分页契约，见 §4.2）
+  ├── 3. 子智能体处理音频：原生通道用宿主的文件查看能力感知讲师原声与板书案例；外部模型通道直接读回逐字稿/讲解文本（必须真过一遍，见红线 2）
   ├── 4. 子智能体撰写教材：依音频实际讲解内容撰写深入技术长文 (载入所选风格提示词)
-  ├── 5. 子智能体落盘：write_to_file 写入 articles/PXX_*_精读文章.md（严格保留，严禁八股模板）
+  ├── 5. 子智能体落盘：用宿主的文件写入能力写入 articles/PXX_*_精读文章.md（严格保留，严禁八股模板）
   ├── 6. 子智能体回报一行：P07 | 文件路径 | 字节数 | 执行者（**不回传正文**）
   └── 7. 主 Agent 验收门禁：python scripts/queue_tracker.py --summary 确认 STAGE1_DONE=1 方可放行
           │
@@ -191,7 +192,7 @@ python src/cli.py logout                          # 撤销保存
    任务书里的切片本就是按 **60 分钟预算**切好的（每片 ≤ 60 分钟，`omni-media` 对 ≤ 75 分钟文件一次性整片就绪），
    因此**不要传 `duration_minutes`**，一次听完整片即可；只有返回文本里 `OMNI_STATUS` 显示 `is_finished=false`（超长媒体自动分卷）时，
    才用返回的 `start_time` / `duration_minutes` 续读下一卷；
-2. **多模态感知**：调用宿主原生 `view_file` 工具读取切片绝对路径，直接聆听讲师原声、例题推导与板书讲解；超长音频按返回的续读参数逐片听完；
+2. **多模态感知**：用**宿主自己的文件查看能力**（能直接感知音频内容的那件工具；各平台工具名见 `references/host-tools/`）打开切片绝对路径，直接聆听讲师原声、例题推导与板书讲解；超长音频按返回的续读参数逐片听完；
 
 **通道 B（只有 `read_media` 时）**：
 
@@ -221,7 +222,7 @@ python src/cli.py logout                          # 撤销保存
   - 载入任务书内所选类型的文章撰写提示词（当前提供 `learning` 学习版与 `legacy` 旧版）；
   - 结合**真正处理过**的案例、例题、板书比喻因材施教撰写长文，严禁脱离音频凭空脑补；
   - 讲师只在幻灯片上展示、音频里没有逐字念出的代码或表格**不要替他补写**，更不要基于补写出来的内容做逐行解析；
-- **落盘保存**：调用 `write_to_file` 写入 `<产物根>/<task>/articles/PXX_*_精读文章.md`（≥ 1000 字节方视为完成）。
+- **落盘保存**：用**宿主的文件写入能力**创建 `<产物根>/<task>/articles/PXX_*_精读文章.md`（≥ 1000 字节方视为完成）。
 
 ### 4.3 派发与回报协议（与阶段二 § 5.4 同构）
 
@@ -456,10 +457,11 @@ python src/cli.py login --sessdata "<SESSDATA>"
 python src/cli.py logout
 ```
 
-> 阶段一的音频处理依赖 MCP 工具：**有原生音频模态的宿主**用 `omni-media:read_audio`（容器根下的 `mcp/`，独立仓库，零凭证），
-> **没有原生音频模态的宿主**用 `omni-media-ext:read_media`（容器根下的 `mcp-ext/`，由配置文件指定的外部模型代读）。
+> 阶段一的音频处理依赖 MCP 工具：**有原生音频模态的宿主**用 `omni-media:read_audio`（`<容器根>/omni-media/mcp/`，零凭证），
+> **没有原生音频模态的宿主**用 `omni-media-ext:read_media`（`<容器根>/omni-media/mcp-ext/`，由配置文件指定的外部模型代读）。
+> 两个服务同属仓库 [LINJIANG12/omni-media](https://github.com/LINJIANG12/omni-media)。
 > 两者都是独立仓库/目录，与技能无运行时依赖，装一次即可长期使用；**分页契约同构**（同一 `OMNI_STATUS` 注释与续读循环），
-> 切换只需换工具名。选择规则见 §4.2，接入方式见 README 的安装章节。
+> 切换只需换工具名。选择规则见 §4.2，接入方式见 `references/install.md`。
 
 ### 6.1 完整参数表（速查表之外的开关都在这里）
 
@@ -496,7 +498,7 @@ python src/cli.py logout
 
 ### 7.1 工作区目录结构
 
-以下路径**均相对产物根**（默认 `<容器根>/output/`，与 `skill/`、`mcp/`、`mcp-ext/` 平级）：
+以下路径**均相对产物根**（默认 `<容器根>/output/`，与 `skill/`、`omni-media/` 平级）：
 
 ```text
 <产物根>/<task>/
@@ -613,7 +615,7 @@ python scripts/selfcheck.py   # 全量契约自检（含 Python 3.8 语法与接
 因此请以 `info` 的 FFmpeg 检查结果为准，而不要以命令是否报错来判断。
 
 **③ 两条听音通道都没挂（既无 `read_audio` 也无 `read_media`）**
-阶段一**必须停下**并提示用户先挂载其一（容器根下的 `mcp/` 或 `mcp-ext/`），**不得**跳过"真正处理过本集音频"这一步直接编造正文（见 §1 红线 2）。判断依据永远是**宿主自己的工具列表**，不要猜。
+阶段一**必须停下**并提示用户先挂载其一（`<容器根>/omni-media/` 下的 `mcp/` 或 `mcp-ext/`），**不得**跳过"真正处理过本集音频"这一步直接编造正文（见 §1 红线 2）。判断依据永远是**宿主自己的工具列表**，不要猜。
 
 **④ 没有外网 / B 站接口不可达**
 `parse` / `pipeline` 对元数据接口做带退避的重试，并对 412 频控记录状态（`info` 的「上次 412/熔断状态」可查）。仍然失败时：补 `--sessdata` 后重跑，或改用本地音视频目录（本地任务不走网络）。**已建立的工作区可以离线继续**：`cluster-notes` / `cluster-articles` 会先尝试在线解析，失败后按工作区的 `parts.json` / `manifest.json` 离线自愈——集号与标题基准始终取自工作区，不依赖在线结果（见 §7.1）。

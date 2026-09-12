@@ -1,0 +1,41 @@
+{
+  "name": "bili-video2book",
+  "version": "2.2.0",
+  "description": "Batch-transform Bilibili course videos & local media into publication-grade deep-dive textbooks and structured review notes.",
+  "author": {
+    "name": "LINJIANG12"
+  },
+  "homepage": "https://github.com/LINJIANG12/bili-video2book",
+  "repository": "https://github.com/LINJIANG12/bili-video2book",
+  "license": "MIT",
+  "keywords": [
+    "bilibili",
+    "video-to-markdown",
+    "study-notes",
+    "textbook",
+    "mindmap",
+    "agent-skill",
+    "learning-and-education"
+  ],
+  "skills": "./skills/",
+  "hooks": {},
+  "interface": {
+    "displayName": "Bili-Video2Book",
+    "shortDescription": "Turn Bilibili courses and local media into deep-dive textbooks and mindmap notes",
+    "longDescription": "Use Bili-Video2Book to rebuild long course videos into three linked deliverables: per-episode deep-dive articles, compiled modular textbooks, and mindmap-friendly review notes. The bundled toolchain extracts lightweight speech audio via ffmpeg, drives a two-pass semantic aggregation, and gates delivery with machine checks. Listening is delegated to the host: use the omni-media MCP tool read_audio when the model has a native audio modality, otherwise use read_media with an external multimodal model.",
+    "developerName": "LINJIANG12",
+    "category": "Education",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "把这个 B 站网课重构成精读教材和复习笔记",
+      "把这个本地课程目录做成教材长文",
+      "帮我把这门课的视频整理成思维导图笔记"
+    ],
+    "websiteURL": "https://github.com/LINJIANG12/bili-video2book",
+    "screenshots": []
+  }
+}

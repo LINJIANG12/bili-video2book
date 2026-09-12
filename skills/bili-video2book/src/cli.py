@@ -845,8 +845,10 @@ def cmd_info(args):
     print("• 架构模式      : 宿主 Agent 原生派发模式（零环境变量、零网络代理绑定；转录=对话模型原生唯一路径）")
     print("=" * 65)
     print("【阶段一听音通道（按宿主自己的工具列表选择，不要猜）】")
-    _mcp_dir = _paths.home_root() / "mcp"
-    _mcp_ext_dir = _paths.home_root() / "mcp-ext"
+    # 两个 MCP 的位置由 paths.py 统一解析（新布局 <容器根>/omni-media/{mcp,mcp-ext}，
+    # 兼容迁移前的旧布局与 $OMNI_MEDIA_MCP_DIR 覆盖）
+    _mcp_dir = _paths.mcp_repo()
+    _mcp_ext_dir = _paths.mcp_ext_repo()
     print("• read_audio（宿主原生听音）: " + (
         f"已就位 {_mcp_dir}" if fsutil.is_dir(_mcp_dir)
         else f"未发现 {_mcp_dir}（纯文本宿主请改用 read_media）"))
@@ -863,6 +865,8 @@ def cmd_info(args):
     print(f"• 容器根 home  : {_三域['home_root']}" + ("  [来自 ${}]".format(_paths.ENV_HOME) if _三域["home_from_env"] else ""))
     print(f"• 产物根       : {_products}  [{_products_state}]"
           + ("  [来自 ${}]".format(_paths.ENV_OUTPUT_DIR) if _三域["products_from_env"] else ""))
+    print(f"• MCP 仓库     : {_paths.home_root() / _paths.DEFAULT_MCP_REPO_DIRNAME}"
+          + ("  [mcp 由 ${} 覆盖]".format(_paths.ENV_MCP_DIR) if _三域["mcp_from_env"] else ""))
     print(f"  工作区清单   : {store_path().parent}")
     print(f"  覆盖方式     : export {_paths.ENV_HOME}=<容器根> / export {_paths.ENV_OUTPUT_DIR}=<产物根>，或用 --base-dir")
     print("=" * 65)

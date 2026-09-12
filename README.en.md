@@ -4,7 +4,7 @@ Automated pipeline converting Bilibili video courses and local media into struct
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 [![Python Version: 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg?style=flat-square)](#)
-[![Environment: Antigravity | ChatGPT | Codex | Terminal](https://img.shields.io/badge/Environment-CLI%20%7C%20Agents-111827?style=flat-square)](SKILL.md)
+[![Environment: Claude Code | Codex | OpenCode | Terminal](https://img.shields.io/badge/Environment-CLI%20%7C%20Agents-111827?style=flat-square)](skills/bili-video2book/SKILL.md)
 
 **[中文文档](README.md)** &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Output Assets](#output-assets) &nbsp;·&nbsp; [Two-Stage Decoupled Pipeline](#two-stage-decoupled-pipeline) &nbsp;·&nbsp; [Installation](#installation) &nbsp;·&nbsp; [CLI Usage](#cli-usage) &nbsp;·&nbsp; [License](#license)
 
@@ -41,7 +41,7 @@ The execution architecture separates single-episode generation from cross-episod
 > The **Stage-1 block below describes the discipline the main agent must uphold — it is not a machine
 > architecture**. The queue, worker slots and sliding dispatch are maintained by the main agent; the toolchain
 > only prepares payloads, records a dispatch log and evaluates gates, and it **cannot verify** who wrote what
-> or whether the audio was really listened to (see [SKILL.md](SKILL.md) § 4.5).
+> or whether the audio was really listened to (see [SKILL.md](skills/bili-video2book/SKILL.md) § 4.5).
 
 ```text
 [Bilibili URL or Local Course Directory]
@@ -62,7 +62,7 @@ The execution architecture separates single-episode generation from cross-episod
   ├── Concurrency: the main agent keeps 5~6 sub-agent slots running (`SUGGEST_WORKERS` in `--summary` is advice)
   ├── Sliding Dispatch: the main agent respawns immediately upon completion (probe hit ➔ retire ➔ spawn next)
   ├── Single step: obtain the audio facts by whichever channel the host supports, then author the article directly
-  │                · has read_audio (native audio): read_audio slices ➔ view_file native listening
+  │                · has read_audio (native audio): read_audio slices ➔ listen via the host's own file-viewing capability
   │                · only read_media (no native audio): read_media external transcription
   │                each sub-agent reports one line `P07 | path | bytes | executor` and never returns the article body
   └── Phase Gate: Stage 1 concludes only when 100% of episodes are completed (`STAGE1_DONE=1`)
@@ -85,33 +85,45 @@ The execution architecture separates single-episode generation from cross-episod
 >
 > **Pre-delivery gates**: `python scripts/note_quality_check.py --strict` turns "boilerplate filler / hollow container headings / per-episode headings / broken inline quotes / episode voice" (all gating) plus "truncation / missing structure" (advisory) into recomputable metrics; `python scripts/render_compat_check.py --strict` gates GitHub alert blocks, bare ASCII art outside fences and fence pairing, while **missing fence language tags stay advisory unless you add `--require-lang`**.
 >
-> Step-by-step operating rules (including the Stage-2 gate flow, sub-agent dispatch rules and task-file matrix) live in [SKILL.md](SKILL.md); run `python scripts/selfcheck.py` for a self-check.
+> Step-by-step operating rules (including the Stage-2 gate flow, sub-agent dispatch rules and task-file matrix) live in [SKILL.md](skills/bili-video2book/SKILL.md); run `python scripts/selfcheck.py` for a self-check.
 
 ---
 
-## Repository Layout (four isolated domains)
+## Repository Layout (self-contained skill + three isolated domains)
 
-The project is split by **responsibility** into four domains that never interfere with each other — code, two MCP
-servers and products each live in their own place, so upgrading or relocating one never touches the others:
+This repository is the **plugin / distribution unit**; the skill and the toolchain it depends on are
+**self-contained in a single directory**, so installing means taking that one directory. The two audio MCP servers
+live together in **another repository**, which together with the products forms its own domain:
 
 ```text
 <container root>/
-├── skill/     ← this repository: the skill & toolchain (SKILL.md, src/, scripts/, references/, .agents/)
-├── mcp/       ← separate repository: the omni-media MCP (host-native listening via read_audio, fully local, zero credentials)
-├── mcp-ext/   ← separate directory: the omni-media-ext MCP (external-model transcription via read_media, Gemini / OpenAI protocols, reads config.json)
-└── output/    ← products root: one workspace per course + .sessdata.json / .wbi_keys.json / .cli_status.json
+├── skill/                          ← this repository (plugin unit)
+│   ├── skills/bili-video2book/     ← ★ the skill (install unit): SKILL.md + references/ + src/ + scripts/
+│   ├── .codex-plugin/  .claude-plugin/  .agents/plugins/  .opencode/  ← per-platform declarations
+│   └── AGENTS.md / CLAUDE.md                               ← entry files each agent auto-loads
+├── omni-media/                     ← another repository: the two audio/video MCP servers
+│   ├── mcp/                        ←   host-native listening (read_audio, fully local, zero credentials)
+│   └── mcp-ext/                    ←   external-model delegation (read_media, reads config.json)
+└── output/                         ← products root: one workspace per course + .sessdata.json / .wbi_keys.json / .cli_status.json
 ```
 
-- **Independent repositories/directories** (`skill/` and `mcp/` each keep their own `.git`) that can be cloned,
+- **The install unit is one directory**: `skills/bili-video2book/`. Copy or symlink it; everything else
+  (README / LICENSE / platform declarations) does not need to be installed;
+- **Independent repositories/directories** (`skill/` and `omni-media/` each keep their own `.git`) that can be cloned,
   upgraded and released separately; the MCP never imports skill code and the skill never imports MCP code
   (enforced by `selfcheck`, which only does directory-existence checks plus AST/regex static scans and
   never actually imports the package);
+- **Companion MCP repository**: [LINJIANG12/omni-media](https://github.com/LINJIANG12/omni-media) — the **Stage-1
+  listening channels** of this skill are provided by its two servers (`read_audio` / `read_media`), reached over the
+  MCP protocol only. Their location is resolved centrally by `src/core/paths.py` (new layout
+  `<container root>/omni-media/{mcp,mcp-ext}`, still compatible with the older sibling layout and the
+  `OMNI_MEDIA_MCP_DIR` override);
 - **Products always live outside the code**: they can never show up in `git status`, and removing/relocating a repo
   never touches your deliverables;
 - **Commands are decoupled from the working directory**: `--base-dir` defaults to the products root (an absolute path),
   so running the CLI from any directory finds the same workspaces. Override it with `--base-dir <path>`, or set
   `BVB_HOME` (container root) / `BVB_OUTPUT_DIR` (products root);
-- `python src/cli.py info` prints the resolved code root / container root / products root for confirmation.
+- `python src/cli.py info` prints the resolved code root / container root / products root / MCP repository for confirmation.
 
 ---
 
@@ -132,26 +144,29 @@ Stage 1 offers **two channels**, chosen by whether the host model has a native a
 
 | Channel | Host | Tool | Install |
 | :--- | :--- | :--- | :--- |
-| **A. Host-native listening** | Model has an audio modality (Gemini / GPT-4o Audio / Codex …) | `read_audio` | `mcp/` (own repository, **no API key at all**) |
-| **B. External-model delegation** | Text-only hosts | `read_media` | `mcp-ext/` (endpoint + api_key from `config.json`) |
+| **A. Host-native listening** | Model has an audio modality (Gemini / GPT-4o Audio / Codex …) | `read_audio` | [`omni-media/mcp/`](https://github.com/LINJIANG12/omni-media) (**no API key at all**) |
+| **B. External-model delegation** | Text-only hosts | `read_media` | [`omni-media/mcp-ext/`](https://github.com/LINJIANG12/omni-media) (endpoint + api_key from `config.json`) |
 
 ```bash
+# both MCP servers live in one repository (the providers of this skill's Stage-1 listening channels)
+cd .. && git clone https://github.com/LINJIANG12/omni-media.git   # skip if already present in the container layout
+
 # Channel A: the host can listen for itself (prefer this — zero credentials)
-cd ../mcp && pip install -e .                        # if not cloned: git clone <omni-media-mcp repo> mcp
-python -m omni_media_mcp.cli apply --target zcode    # also: opencode/dsh/codex/antigravity/all
+cd omni-media/mcp && pip install -e .
+python -m omni_media_mcp.cli apply --target codex    # also available: opencode/all (see that repo for the full list)
 python selfcheck.py                                  # optional: MCP-side self-check
 
 # Channel B: the host cannot listen to audio (an external model reads it instead)
 cd ../mcp-ext && pip install -e .                    # if not installed yet
 python -m omni_media_ext.cli config --init           # create config.json, fill in endpoint + api_key
 python -m omni_media_ext.cli status --probe          # env + config + endpoint reachability + which one to mount
-python -m omni_media_ext.cli apply --target zcode
+python -m omni_media_ext.cli apply --target codex
 python selfcheck.py                                  # optional: this version's self-check (incl. compatibility contract)
 ```
 
 > **Channel A needs no API key**: audio is listened to natively by the host multimodal model; registration only writes the
 > server command and `PYTHONPATH`. The only external dependency is system `ffmpeg`. **Channel B** keeps its credentials in
-> `mcp-ext/config.json` (git-ignored) and never writes them into host configuration.
+> `omni-media/mcp-ext/config.json` (git-ignored by that repository) and never writes them into host configuration.
 >
 > Both services can be mounted **at the same time** (registration keys `omni-media` / `omni-media-ext` never overwrite each
 > other). When both are present the agent prefers `read_audio`, falling back to `read_media` for `summarize` / `qa`-style
@@ -159,16 +174,33 @@ python selfcheck.py                                  # optional: this version's 
 
 ### 3. Install as an AI Agent Skill (Recommended)
 
-In Antigravity, ChatGPT, or OpenAI Codex:
-```text
-Install this repository as my global skill.
-```
-The repository includes `.agents/skills/bili-video2book` compliant with Open Agent Skills specifications.
+This repository follows the **Agent Skills open standard**: `skills/bili-video2book/` is a self-contained skill
+directory (`SKILL.md` + `references/` + `src/` + `scripts/`) — **installing that one directory is enough**.
 
-> **Working-directory contract**: the skill bundle itself only ships `SKILL.md` and `references/`; every command and
-> script lives in the repository. When installing globally, keep the **whole repository reachable** (copy or symlink it)
-> and run `python src/cli.py …` / `python scripts/…` **from this repository root (`skill/`)**, otherwise the documented
-> commands will not resolve.
+**Let the platform install itself** (recommended): hand the repository URL to the platform's native plugin / skill
+installer, or simply let that platform's agent read
+[`skills/bili-video2book/references/install.md`](skills/bili-video2book/references/install.md) and decide.
+Per-platform declarations are already in place: `.codex-plugin/plugin.json` (Codex),
+`.claude-plugin/plugin.json` (Claude Code), `.agents/plugins/marketplace.json` (generic agents),
+`.opencode/INSTALL.md` (OpenCode).
+
+**Manual install** (works on any platform): copy or symlink `skills/bili-video2book/` into that platform's skill directory.
+
+| Platform | User level | Project level |
+| :--- | :--- | :--- |
+| Claude Code | `~/.claude/skills/bili-video2book/` | `<project>/.claude/skills/bili-video2book/` |
+| Codex | `~/.codex/skills/bili-video2book/` | `<project>/.codex/skills/bili-video2book/` |
+| OpenCode | see `.opencode/INSTALL.md` (no packaged plugin — install as a directory) | `<project>/.opencode/skills/bili-video2book/` |
+| Generic agents | `~/.agents/skills/bili-video2book/` | `<project>/.agents/skills/bili-video2book/` |
+| Any other platform | that platform's own skill directory | `<project>/.<platform>/skills/bili-video2book/` |
+
+> **Working-directory contract**: the skill's commands are written as `python src/cli.py …` / `python scripts/…`
+> relative to the **skill directory** (where `SKILL.md` lives) — the toolchain sits right next to it, so run them from there.
+>
+> **Honest boundaries**: apart from the last fallback row, every row's install location is backed by public
+> evidence; for any other platform, go by that platform's **actual** tools and directories rather than copying a
+> path you saw elsewhere (`references/install.md` has the three manual install methods, `references/host-tools/`
+> has the tool-name mapping).
 
 ### 4. Local CLI Installation
 
@@ -190,22 +222,24 @@ pip install -e .
 | `read_audio` or `read_media` | Required | Stage 1 stops and asks you to mount one first; audio grounding is never skipped |
 
 ```bash
+# run these from the skill directory (skills/bili-video2book/)
 python src/cli.py info        # Python version / ffmpeg / ffprobe / audio channels / domain paths at once
-python scripts/selfcheck.py   # full contract self-check (incl. Python 3.8 syntax & API compatibility)
+python scripts/selfcheck.py   # full contract self-check (self-contained layout + host declarations + Python 3.8)
 ```
 
 `info` prints each missing piece together with **the exact next step**: a missing ffmpeg lists
 `winget install Gyan.FFmpeg` / `brew install ffmpeg` / `apt install ffmpeg`; a Python below 3.8 is flagged
 for upgrade; with neither audio channel available it asks you to mount one first. The five missing-dependency
-cases and the degradation rules are spelled out in [SKILL.md §8](SKILL.md).
+cases and the degradation rules are spelled out in [SKILL.md §8](skills/bili-video2book/SKILL.md).
 
 ---
 
 ## CLI Usage
 
-If installed via `pip install -e .`, use `bili-video2book` directly; or run `python src/cli.py` in this repository root
-(`skill/`). All products land in the products root (default `<container root>/output/`), never inside the code
-repository; the `output/<task>/…` paths below are relative to that products root.
+If installed via `pip install -e .`, use `bili-video2book` directly; or run `python src/cli.py` from the **skill
+directory** (`skills/bili-video2book/`). Every `python src/cli.py …` / `python scripts/…` example below assumes that
+directory as the working directory. All products land in the products root (default `<container root>/output/`), never
+inside the code repository; the `output/<task>/…` paths below are relative to that products root.
 
 ### Scenario 1: Full Course Pipeline
 ```bash
