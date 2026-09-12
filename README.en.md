@@ -33,12 +33,14 @@
 
 </div>
 
+Give it a course URL or a directory, and it listens episode by episode, writes one article per episode, then consolidates them into books and review notes.
+
 > [!CAUTION]
 > This tool batch-fetches Bilibili video metadata and audio streams, and can store your login credential. Use it only on content you are entitled to access, and comply with Bilibili's terms of service and applicable law. `SESSDATA` grants access to your account: do not copy, upload or share it.
 
 ## Table of Contents
 
-- [What's Inside](#whats-inside)
+- [Overview](#overview)
 - [Features](#features)
 - [Quick Start](#quick-start)
 - [How It Works](#how-it-works)
@@ -51,35 +53,30 @@
 - [Security](#security)
 - [License](#license)
 
-## What's Inside
+## Overview
 
-A course passes through three kinds of deliverables on its way from a link to a book, and the toolchain is organised around them.
+Bili-Video2Book is a skill for AI coding assistants that turns a course into a textbook. It accepts a Bilibili collection or a local course directory, writes one article per episode, and consolidates those articles into a modular book and review notes.
 
-### Deliverables
+The hard part of a long course is that nobody can listen to all of it and remember it. The usual approach transcribes first, which leaves the reader to turn spoken language into revisable text, and the longer the transcript, the more likely it overflows the agent context. This skill slices the course into audio segments, and a host model with an audio modality listens to each segment and writes the article directly, with no intermediate transcript.
 
-| Capability | What it does |
-|---|---|
-| Per-episode article | One full article per episode, written directly from the listening result |
-| Modular book | Consolidates many episode articles into a chaptered book along knowledge boundaries |
-| Mindmap notes | Review notes produced by two-pass semantic aggregation |
+The output comes in three tracks: per-episode articles, modular books and mindmap notes, each in its own directory, usable on its own. Every deliverable passes a quality check before delivery, so problems such as boilerplate padding or hollow headings are stopped there rather than left for you to find while reading.
 
-### Listening channels
+The only thing you supply is a listening channel. When the host model has an audio modality, use it directly; when the host is text-only, use the external service in the companion repository. After installation, one command runs a whole course.
 
-| Capability | What it does |
-|---|---|
-| `read_audio` | Used when the host has an audio modality; requires no credential at all |
-| `read_media` | Used when the host is text-only; transcribes through an external service that needs an endpoint configured |
+<div align="right">
+
+[![Back to top][badge-top]](#readme-top)
+
+</div>
 
 ## Features
 
-| Feature | Description |
-|---|---|
-| One command per course | Give it a collection URL or a local course directory; it writes one article per episode, then consolidates them into a book and notes |
-| Works if the host can hear | Hosts with an audio modality use `read_audio` with zero credentials; text-only hosts use `read_media`. Both channels share one pagination contract |
-| Three tracks, separate folders | Articles land in `articles/`, modular books in `textbooks/`, notes in `notes/`, each usable on its own |
-| Fatal patterns blocked pre-delivery | Boilerplate padding, hollow headings, per-episode headings, inline quote fragments and episode voice fail the gate. Fence language tag is a warning, counted only with `--require-lang` |
-| Re-runs fill the gaps | Completed episodes are skipped by default; `--force` reprocesses them |
-| No third-party runtime dependencies | Python standard library only, plus system `ffmpeg` |
+- **One command per course** — Give it a collection URL or a local course directory; it writes one article per episode, then consolidates them into a book and notes
+- **Dual listening channels** — Hosts with an audio modality use `read_audio` with zero credentials; text-only hosts use `read_media`. Both channels share one pagination contract
+- **Three tracks, separate folders** — Articles land in `articles/`, modular books in `textbooks/`, notes in `notes/`, each usable on its own
+- **Pre-delivery quality check** — Boilerplate padding, hollow headings, per-episode headings, inline quote fragments and episode voice fail the check. Fence language tag is a warning, counted only with `--require-lang`
+- **Incremental re-runs** — Completed episodes are skipped by default; `--force` reprocesses them
+- **No third-party runtime dependencies** — Python standard library only, plus system `ffmpeg`
 
 <div align="right">
 
@@ -154,7 +151,7 @@ flowchart TD
 ```
 
 - Dispatch thresholds live in `src/core/budget.py`: a course under 60 minutes is handled serially by the main agent, and anything longer is dispatched to subagents, one per episode. When episodes are numerous and short, the tool suggests batching them.
-- Stage 1 and stage 2 are decoupled, split on content boundaries, so a long course can also be resumed after an interruption.
+- Stage 1 and stage 2 are decoupled on content boundaries, so a long course can also be resumed after an interruption.
 - The tool layer produces task files, dispatch payloads and gates; the agent writes the articles and notes.
 
 <div align="right">
@@ -189,7 +186,7 @@ bili-video2book cluster-articles "https://www.bilibili.com/video/BV14VqVBrEhc"
 bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc"
 ```
 
-### Quality gate and ledger reconciliation
+### Quality check and ledger reconciliation
 
 ```bash
 python scripts/note_quality_check.py --strict      # 笔记成色
@@ -205,12 +202,10 @@ bili-video2book sync                               # 以磁盘产物回填 manif
 
 ## Requirements
 
-| Item | Requirement |
-|---|---|
-| Python | 3.8 or later, from `requires-python` in `pyproject.toml` |
-| External binary | `ffmpeg`, on `PATH` |
-| Listening channel | one of `read_audio` or `read_media` |
-| Operating system | OS independent, per the classifiers in `pyproject.toml` |
+- **Python** — 3.8 or later, from `requires-python` in `pyproject.toml`
+- **External binary** — `ffmpeg`, on `PATH`
+- **Listening channel** — one of `read_audio` or `read_media`
+- **Operating system** — OS independent, per the classifiers in `pyproject.toml`
 
 <div align="right">
 
@@ -292,10 +287,8 @@ bili-video2book/
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | Finished normally |
-| `4` | Article prompt style not confirmed, that is `--article-type` is missing or invalid |
+- `0` — finished normally
+- `4` — article prompt style not confirmed, that is `--article-type` is missing or invalid
 
 <div align="right">
 
@@ -307,22 +300,16 @@ bili-video2book/
 
 ### Runtime
 
-| Technology | Purpose |
-|---|---|
-| Python 3.8+ | The only runtime; standard library only |
-| setuptools | Build backend, see `pyproject.toml` |
+- **Python 3.8 or later** — the only runtime, standard library only
+- **setuptools** — build backend, see `pyproject.toml`
 
 ### External dependencies
 
-| Technology | Purpose |
-|---|---|
-| FFmpeg | Audio extraction and slicing, 16kHz mono |
+- **FFmpeg** — audio extraction and slicing, 16kHz mono
 
 ### Optional channels
 
-| Technology | Purpose |
-|---|---|
-| MCP | Protocol of the host-native listening channel |
+- **MCP** — the protocol behind the host-native listening channel
 
 <div align="right">
 
