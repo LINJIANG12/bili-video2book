@@ -5,10 +5,11 @@
 Not a test framework: a flat sequence of assertions covering the invariants that
 matter after the architecture refactor (Agent-native kernel/plan chain, zero
 intermediate transcript, no dead modules) **plus the three-domain separation
-contract**: skill/ 与 mcp/ 各自独立仓库、产物根在两者之外、CLI 不依赖当前工作目录。
+contract**: skill/ 与承载两个 MCP 的 omni-media/ 各自独立成仓、产物根在两者之外、
+CLI 不依赖当前工作目录。
 
-MCP 自身的不变量由其独立仓库的 `mcp/selfcheck.py` 负责；本脚本只在同级存在 mcp/
-时以子进程方式调用它（可选段落，缺失即跳过，技能侧不依赖 MCP 仓库）。
+MCP 自身的不变量由 MCP 各自的 `selfcheck.py` 负责（`mcp/` 与 `mcp-ext/` 各一份）；
+本脚本在能找到它们时以子进程方式调用（可选段落，缺失即跳过，技能侧不依赖 MCP）。
 
 Run: python scripts/selfcheck.py
 """
@@ -174,9 +175,15 @@ def check_products_root_resolution():
     assert _paths.resolve_base_dir("") == PRODUCTS_ROOT, "空字符串 --base-dir 未解析到产物根"
     assert _paths.default_base_dir() == str(PRODUCTS_ROOT), "default_base_dir 与产物根不一致"
     # manifest 相对路径基准 = 容器根，因此历史 `output/<task>/...` 字面值继续有效。
-    # 这里钉的是**字面 `output/` 路径**，与产物根是否被 $BVB_OUTPUT_DIR 覆盖无关。
-    probe = HOME_ROOT / "output" / "__probe__" / "模块01_甲_精读全书.md"
-    assert _paths.__name__ and str(probe.relative_to(HOME_ROOT).as_posix()).startswith("output/")
+    # 用**真实的换算函数**验证：自己拼一个 HOME_ROOT/output 前缀、再断言该路径以它开头，是恒真式
+    # （原先那句在任何布局下都不可能失败，等于没检查）。
+    # 产物根被 $BVB_OUTPUT_DIR 覆盖到容器根之外时该换算本就无意义，故只在默认布局下验证。
+    if not _paths.describe()["products_from_env"]:
+        from src.core.workspace import TaskWorkspace
+
+        rel = TaskWorkspace.to_relative(PRODUCTS_ROOT / "__probe__" / "模块01_甲_精读全书.md")
+        assert rel.startswith("output/"), \
+            f"manifest 相对路径基准不是容器根下的 output/（实际 {rel!r}）"
 
     # 跨工作目录一致性：从临时目录跑一次 CLI，产物根必须仍是同一个
     import tempfile
@@ -229,17 +236,30 @@ def check_no_cross_repo_imports():
         assert not _re.search(r"^\s*(import|from)\s+omni_media_mcp", text, _re.M), \
             f"{path.relative_to(SKILL_ROOT)} 出现了对 MCP 包的 import"
 
-    # 反向扫描两个 MCP 服务：它们同样不得 import 技能包 `src`（正向见上面的技能侧扫描）
-    for mcp_root, pkg_dir in ((MCP_REPO, "omni_media_mcp"), (MCP_EXT_REPO, "omni_media_ext")):
-        if not (mcp_root / pkg_dir).is_dir():
+    # 反向扫描两个 MCP：① 都不得 import 技能包 `src`；② **运行代码不得互相 import**。
+    # ② 是收进同一个仓库后**新增**的隔离义务——此前两者分属不同仓库、天然隔离，
+    # 现在同仓，必须由断言守住（对外承诺见 omni-media/README.md「两个服务互不 import」）。
+    # 扫描整个 MCP 仓库目录（含 tests/ 与各自的 selfcheck.py）：conftest 之类同样会插 sys.path。
+    #
+    # 唯一豁免：`mcp-ext/tests/test_compatibility.py` **故意**同时 import 两侧——那正是它验证
+    # 「线上契约同构」的手段（带 `requires_native` skipif 守卫，对侧缺席即整组跳过）。
+    # 豁免只针对「互不 import」这一条；`src` 那条对它照查。
+    cross_exempt = "tests/test_compatibility.py"
+    for mcp_root, foreign in ((MCP_REPO, "omni_media_ext"), (MCP_EXT_REPO, "omni_media_mcp")):
+        if not mcp_root.is_dir():
             continue
         bad = []
-        for path in (mcp_root / pkg_dir).rglob("*.py"):
+        for path in mcp_root.rglob("*.py"):
             if "__pycache__" in path.parts:
                 continue
-            if "src" in _imported_modules(path):
-                bad.append(path.relative_to(mcp_root).as_posix())
-        assert not bad, f"MCP 侧不得 import 技能包 src: {bad}"
+            text = path.read_text(encoding="utf-8")
+            rel = path.relative_to(mcp_root).as_posix()
+            mods = _imported_modules(path)
+            # AST 只看 import 语句；对 `src` 再补一层文本扫描，防动态导入绕过
+            if "src" in mods or _re.search(r"^\s*(?:import|from)\s+src\b", text, _re.M) \
+                    or (foreign in mods and rel != cross_exempt):
+                bad.append(rel)
+        assert not bad, f"MCP 侧不得 import 技能包 src，运行代码也不得互引（契约测试除外）: {bad}"
 
 
 def check_kernel_extractor_contract():
@@ -406,18 +426,23 @@ def check_mcp_repo_optional():
     """
     import subprocess as _sp
 
-    entry = MCP_REPO / "selfcheck.py"
-    if not entry.is_file():
-        print(f"       (未发现 MCP 仓库自检 {entry}，跳过可选段落)")
-        return
-
-    res = run_quiet(
-        [sys.executable, str(entry)],
-        cwd=str(MCP_REPO), stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True, timeout=300,
-    )
-    tail = "\n".join((res.stdout or "").strip().splitlines()[-4:])
-    assert res.returncode == 0, f"mcp/selfcheck.py 未通过（exit {res.returncode}）:\n{tail}"
-    print(f"       (已调用 {entry})")
+    # 两个 MCP 现在同属 omni-media 仓库，**各自的断言集都要跑**：此前只跑 mcp 一侧，
+    # 等于 mcp-ext 那份 selfcheck（体量更大）从技能侧永不触发。
+    ran = []
+    for mcp_root in (MCP_REPO, MCP_EXT_REPO):
+        entry = mcp_root / "selfcheck.py"
+        if not entry.is_file():
+            print(f"       (未发现 {entry}，跳过)")
+            continue
+        res = run_quiet(
+            [sys.executable, str(entry)],
+            cwd=str(mcp_root), stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True, timeout=300,
+        )
+        tail = "\n".join((res.stdout or "").strip().splitlines()[-4:])
+        assert res.returncode == 0, f"{entry} 未通过（exit {res.returncode}）:\n{tail}"
+        ran.append(str(entry))
+    if ran:
+        print("       (已调用 " + "、".join(ran) + ")")
 
 
 def check_dead_modules_removed():
@@ -454,8 +479,9 @@ def check_host_artifacts_ignored():
     """宿主/编辑器旁路目录与产物根都不得进入任一仓库。
 
     .workbuddy、.zcode 这类目录由编辑器在会话中自动写入（含对话记忆）——三域分离后它们位于
-    容器根，不在任何仓库工作树内；产物根同理。这里同时验证「不在工作树内」这一结构事实，
-    以及两个仓库的 .gitignore 仍留有安全网条目（防止有人把产物根搬回仓库内）。
+    容器根，不在任何仓库工作树内；产物根同理。这里验证两件事：①「不在工作树内」这一结构事实
+    （对 skill/ 与 MCP 仓库都查一遍 `git ls-files`）；② `skill/.gitignore` 仍留有安全网条目
+    （防止有人把产物目录搬回仓库内）。MCP 仓库自身的安全网由各自的 `.gitignore` 负责。
     """
     import subprocess as _sp
 
@@ -1661,7 +1687,7 @@ def check_no_hardcoded_machine_paths():
         return found
 
     扫描 = []
-    # MCP 侧（mcp/ 仓库）由它自己的 selfcheck.py 扫描，本仓库只负责技能侧
+    # MCP 侧（omni-media 仓库的两个服务）由各自的 selfcheck.py 扫描，本仓库只负责技能侧
     for 子目录 in ("src", "scripts"):
         for path in (SKILL_ROOT / 子目录).rglob("*.py"):
             if path.name == "selfcheck.py":

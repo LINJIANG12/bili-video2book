@@ -849,9 +849,12 @@ def cmd_info(args):
     # 兼容迁移前的旧布局与 $OMNI_MEDIA_MCP_DIR 覆盖）
     _mcp_dir = _paths.mcp_repo()
     _mcp_ext_dir = _paths.mcp_ext_repo()
+    # 覆盖标记只挂在**真正受该变量影响的路径**上（下方「MCP 仓库」行是固定布局，不受它影响）
+    _mcp_src = "  [来自 ${}]".format(_paths.ENV_MCP_DIR) \
+        if os.environ.get(_paths.ENV_MCP_DIR, "").strip() else ""
     print("• read_audio（宿主原生听音）: " + (
-        f"已就位 {_mcp_dir}" if fsutil.is_dir(_mcp_dir)
-        else f"未发现 {_mcp_dir}（纯文本宿主请改用 read_media）"))
+        f"已就位 {_mcp_dir}{_mcp_src}" if fsutil.is_dir(_mcp_dir)
+        else f"未发现 {_mcp_dir}（纯文本宿主请改用 read_media）{_mcp_src}"))
     print("• read_media（外部模型代读）: " + (
         f"已就位 {_mcp_ext_dir}" if fsutil.is_dir(_mcp_ext_dir)
         else f"未发现 {_mcp_ext_dir}（需 config.json 里的外部模型端点与 api_key）"))
@@ -865,8 +868,7 @@ def cmd_info(args):
     print(f"• 容器根 home  : {_三域['home_root']}" + ("  [来自 ${}]".format(_paths.ENV_HOME) if _三域["home_from_env"] else ""))
     print(f"• 产物根       : {_products}  [{_products_state}]"
           + ("  [来自 ${}]".format(_paths.ENV_OUTPUT_DIR) if _三域["products_from_env"] else ""))
-    print(f"• MCP 仓库     : {_paths.home_root() / _paths.DEFAULT_MCP_REPO_DIRNAME}"
-          + ("  [mcp 由 ${} 覆盖]".format(_paths.ENV_MCP_DIR) if _三域["mcp_from_env"] else ""))
+    print(f"• MCP 仓库     : {_paths.home_root() / _paths.DEFAULT_MCP_REPO_DIRNAME}")
     print(f"  工作区清单   : {store_path().parent}")
     print(f"  覆盖方式     : export {_paths.ENV_HOME}=<容器根> / export {_paths.ENV_OUTPUT_DIR}=<产物根>，或用 --base-dir")
     print("=" * 65)

@@ -144,8 +144,8 @@ Stage 1 offers **two channels**, chosen by whether the host model has a native a
 
 | Channel | Host | Tool | Install |
 | :--- | :--- | :--- | :--- |
-| **A. Host-native listening** | Model has an audio modality (Gemini / GPT-4o Audio / Codex …) | `read_audio` | [`omni-media/mcp/`](https://github.com/LINJIANG12/omni-media) (**no API key at all**) |
-| **B. External-model delegation** | Text-only hosts | `read_media` | [`omni-media/mcp-ext/`](https://github.com/LINJIANG12/omni-media) (endpoint + api_key from `config.json`) |
+| **A. Host-native listening** | Model has an audio modality (Gemini / GPT-4o Audio / Codex …) | `read_audio` | [`omni-media/mcp/`](https://github.com/LINJIANG12/omni-media/tree/main/mcp) (**no API key at all**) |
+| **B. External-model delegation** | Text-only hosts | `read_media` | [`omni-media/mcp-ext/`](https://github.com/LINJIANG12/omni-media/tree/main/mcp-ext) (endpoint + api_key from `config.json`) |
 
 ```bash
 # both MCP servers live in one repository (the providers of this skill's Stage-1 listening channels)

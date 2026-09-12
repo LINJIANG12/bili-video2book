@@ -204,7 +204,7 @@ python src/cli.py logout                          # 撤销保存
    }
    ```
    返回的是**文本**，不是音频：`transcribe` 给逐字稿，`summarize` 给教材级总结，
-   `qa` 给带时间范围佐证的问答。外部模型端点由 `mcp-ext/config.json` 决定，可用 `endpoint` 参数按名切换。
+   `qa` 给带时间范围佐证的问答。外部模型端点由 `omni-media/mcp-ext/config.json` 决定，可用 `endpoint` 参数按名切换。
    **切片沿用任务书切好的粒度**，与通道 A 同一套规则：不要自己另填一个切片长度（填小了会把一集拆成十几次调用，
    填大了会被载荷预算收窄）；只有返回文本里 `OMNI_STATUS` 显示 `is_finished=false` 时，
    才按其中的 `next_start_time` / `next_duration_minutes` 续读下一片；
@@ -460,7 +460,7 @@ python src/cli.py logout
 > 阶段一的音频处理依赖 MCP 工具：**有原生音频模态的宿主**用 `omni-media:read_audio`（`<容器根>/omni-media/mcp/`，零凭证），
 > **没有原生音频模态的宿主**用 `omni-media-ext:read_media`（`<容器根>/omni-media/mcp-ext/`，由配置文件指定的外部模型代读）。
 > 两个服务同属仓库 [LINJIANG12/omni-media](https://github.com/LINJIANG12/omni-media)。
-> 两者都是独立仓库/目录，与技能无运行时依赖，装一次即可长期使用；**分页契约同构**（同一 `OMNI_STATUS` 注释与续读循环），
+> 两者各自独立成包、**互不 import**，与技能无运行时依赖，装一次即可长期使用；**分页契约同构**（同一 `OMNI_STATUS` 注释与续读循环），
 > 切换只需换工具名。选择规则见 §4.2，接入方式见 `references/install.md`。
 
 ### 6.1 完整参数表（速查表之外的开关都在这里）

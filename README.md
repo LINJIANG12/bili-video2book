@@ -132,8 +132,8 @@
 
 | 通道 | 适用宿主 | 工具 | 安装 |
 | :--- | :--- | :--- | :--- |
-| **A. 宿主原生听音** | 模型自身有音频模态（Gemini / GPT-4o Audio / Codex 等） | `read_audio` | [`omni-media/mcp/`](https://github.com/LINJIANG12/omni-media)（**无需任何 API Key**） |
-| **B. 外部模型代读** | 只有文本能力的宿主 | `read_media` | [`omni-media/mcp-ext/`](https://github.com/LINJIANG12/omni-media)（读取 `config.json` 里的端点与 api_key） |
+| **A. 宿主原生听音** | 模型自身有音频模态（Gemini / GPT-4o Audio / Codex 等） | `read_audio` | [`omni-media/mcp/`](https://github.com/LINJIANG12/omni-media/tree/main/mcp)（**无需任何 API Key**） |
+| **B. 外部模型代读** | 只有文本能力的宿主 | `read_media` | [`omni-media/mcp-ext/`](https://github.com/LINJIANG12/omni-media/tree/main/mcp-ext)（读取 `config.json` 里的端点与 api_key） |
 
 ```bash
 # 两个 MCP 同属一个仓库（本技能的阶段一听音通道提供方）
