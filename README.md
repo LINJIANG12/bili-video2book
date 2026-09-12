@@ -50,6 +50,7 @@
 - [项目结构](#项目结构)
 - [命令](#命令)
 - [技术栈](#技术栈)
+- [常见问题](#常见问题)
 - [安全](#安全)
 - [许可证](#许可证)
 
@@ -61,7 +62,7 @@ Bili-Video2Book 是一个面向 AI 编程助手的技能，用来把一门课写
 
 产出分三轨：单集长文、模块教材与思维导图笔记，各自落在独立目录，可以单独取用。每个产物在交付前都要过一遍质检，套话填充、空壳标题这类问题会在交付前被拦下，而不是留给你在阅读时发现。
 
-你需要准备的只有一个听音通道。宿主模型自带音频模态时直接用它，只有文本能力时换用配套仓库里的外挂服务。安装完成后，一条命令就能跑完一门课。
+你需要准备的只有一个听音通道，它由配套仓库 [omni-media][link-omni-media] 提供：宿主模型自带音频模态时用它的 `mcp/`（零凭证），只有文本能力时用它的 `mcp-ext/`（由外部模型代读）。这个通道是工作流的必需环节，缺了它阶段一取不到音频事实，流水线会停下提示你挂载。装好之后，一条命令就能跑完一门课。
 
 <div align="right">
 
@@ -95,20 +96,31 @@ ffmpeg -version    # 已加入 PATH
 
 ### 安装
 
+> [!IMPORTANT]
+> 第三步的听音通道不可跳过。两个服务都来自配套仓库 [omni-media][link-omni-media]，二选一即可；没有它，阶段一取不到音频事实，流水线会停下提示你挂载。
+
 ```bash
-# 技能本体：复制这一个目录即可
+# 1) 技能本体：复制这一个目录即可
 cp -r skills/bili-video2book ~/.claude/skills/            # Claude Code
 cp -r skills/bili-video2book ~/.codex/skills/             # Codex
 cp -r skills/bili-video2book ~/.config/opencode/skills/   # OpenCode
 
-# 可选：安装 CLI
+# 2) 可选：安装 CLI
 pip install -e .
 
-# 听音通道：两个音视频 MCP 服务同属配套仓库 omni-media
+# 3) 听音通道（必需）：两个服务同属配套仓库 omni-media
 cd .. && git clone https://github.com/LINJIANG12/omni-media.git
-cd omni-media/mcp && pip install -e .                     # 通道 A：宿主原生听音，零凭证
-python -m omni_media_mcp.cli status                       # 诊断依赖与各宿主挂载状态
-python -m omni_media_mcp.cli apply --target codex         # 写入该宿主的 MCP 配置
+
+#    通道 A：宿主有原生音频模态（工具列表里有 read_audio），零凭证
+cd omni-media/mcp && pip install -e .
+omni-media status                    # 诊断系统依赖、各宿主挂载状态与实际配置路径
+omni-media apply --target codex      # 挂到宿主；可用取值以 status 的实际输出为准
+
+#    通道 B：宿主只有文本能力（只有 read_media）时改用它
+cd ../mcp-ext && pip install -e .
+omni-media-ext config --init         # 生成 config.json，填入端点与 api_key
+omni-media-ext status
+omni-media-ext apply --target codex
 ```
 
 ### 运行
@@ -204,7 +216,7 @@ bili-video2book sync                               # 以磁盘产物回填 manif
 
 - **Python** — 3.8 及以上，取自 `pyproject.toml` 的 `requires-python`
 - **外部程序** — `ffmpeg`，需加入 `PATH`
-- **听音通道** — `read_audio` 或 `read_media`，二者其一
+- **听音通道** — `read_audio` 或 `read_media`，二者其一，由配套仓库 [omni-media][link-omni-media] 提供
 - **操作系统** — 与操作系统无关，见 `pyproject.toml` 的分类器
 
 <div align="right">
@@ -310,6 +322,30 @@ bili-video2book/
 ### 可选通道
 
 - **MCP** — 宿主原生听音所用的协议
+
+<div align="right">
+
+[![返回顶部][badge-top]](#readme-top)
+
+</div>
+
+## 常见问题
+
+### 不装 omni-media 能用吗
+
+不能。两个听音通道 `read_audio` 与 `read_media` 都由 [omni-media][link-omni-media] 提供，工作流把它列为必需项：阶段一取不到音频事实时，流水线会停下提示你挂载其一。
+
+### 该装 mcp 还是 mcp-ext
+
+看宿主的模态。工具列表里有 `read_audio`，说明宿主有原生音频模态，装 `mcp/`，延迟最低且零凭证；只有 `read_media`，说明宿主仅有文本能力，装 `mcp-ext/`，由 `config.json` 指定外部模型端点。两条通道分页契约同构，切换只需换工具名。
+
+### 怎么确认挂载成功
+
+`bili-video2book info` 会打印两条通道的就绪状态与域路径；`omni-media status` 诊断系统依赖、各宿主挂载状态与实际配置路径。
+
+### 凭证会进版本库吗
+
+不会。本仓库把 B 站 `SESSDATA` 排除在外，omni-media 也把 `mcp-ext` 的 `config.json` 排除在外，只提交模板。通道 A 本身零凭证，不需要配置任何密钥。
 
 <div align="right">
 

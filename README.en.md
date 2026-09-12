@@ -50,6 +50,7 @@ Give it a course URL or a directory, and it listens episode by episode, writes o
 - [Project Structure](#project-structure)
 - [Commands](#commands)
 - [Tech Stack](#tech-stack)
+- [FAQ](#faq)
 - [Security](#security)
 - [License](#license)
 
@@ -61,7 +62,7 @@ The hard part of a long course is that nobody can listen to all of it and rememb
 
 The output comes in three tracks: per-episode articles, modular books and mindmap notes, each in its own directory, usable on its own. Every deliverable passes a quality check before delivery, so problems such as boilerplate padding or hollow headings are stopped there rather than left for you to find while reading.
 
-The only thing you supply is a listening channel. When the host model has an audio modality, use it directly; when the host is text-only, use the external service in the companion repository. After installation, one command runs a whole course.
+The only thing you supply is a listening channel, and it comes from the companion repository [omni-media][link-omni-media]: use its `mcp/` when the host model has an audio modality (zero credentials), or its `mcp-ext/` when the host is text-only (an external model reads on your behalf). The channel is a required part of the pipeline; without it stage 1 obtains no audio facts and the run stops to ask you to mount one. After installation, one command runs a whole course.
 
 <div align="right">
 
@@ -95,20 +96,31 @@ ffmpeg -version    # 已加入 PATH
 
 ### Install
 
+> [!IMPORTANT]
+> Step 3 is not optional. Both listening servers come from the companion repository [omni-media][link-omni-media]; pick one. Without a channel, stage 1 obtains no audio facts and the run stops to ask you to mount one.
+
 ```bash
-# 技能本体：复制这一个目录即可
+# 1) 技能本体：复制这一个目录即可
 cp -r skills/bili-video2book ~/.claude/skills/            # Claude Code
 cp -r skills/bili-video2book ~/.codex/skills/             # Codex
 cp -r skills/bili-video2book ~/.config/opencode/skills/   # OpenCode
 
-# 可选：安装 CLI
+# 2) 可选：安装 CLI
 pip install -e .
 
-# 听音通道：两个音视频 MCP 服务同属配套仓库 omni-media
+# 3) 听音通道（必需）：两个服务同属配套仓库 omni-media
 cd .. && git clone https://github.com/LINJIANG12/omni-media.git
-cd omni-media/mcp && pip install -e .                     # 通道 A：宿主原生听音，零凭证
-python -m omni_media_mcp.cli status                       # 诊断依赖与各宿主挂载状态
-python -m omni_media_mcp.cli apply --target codex         # 写入该宿主的 MCP 配置
+
+#    通道 A：宿主有原生音频模态（工具列表里有 read_audio），零凭证
+cd omni-media/mcp && pip install -e .
+omni-media status                    # 诊断系统依赖、各宿主挂载状态与实际配置路径
+omni-media apply --target codex      # 挂到宿主；可用取值以 status 的实际输出为准
+
+#    通道 B：宿主只有文本能力（只有 read_media）时改用它
+cd ../mcp-ext && pip install -e .
+omni-media-ext config --init         # 生成 config.json，填入端点与 api_key
+omni-media-ext status
+omni-media-ext apply --target codex
 ```
 
 ### Run
@@ -204,7 +216,7 @@ bili-video2book sync                               # 以磁盘产物回填 manif
 
 - **Python** — 3.8 or later, from `requires-python` in `pyproject.toml`
 - **External binary** — `ffmpeg`, on `PATH`
-- **Listening channel** — one of `read_audio` or `read_media`
+- **Listening channel** — one of `read_audio` or `read_media`, supplied by the companion repository [omni-media][link-omni-media]
 - **Operating system** — OS independent, per the classifiers in `pyproject.toml`
 
 <div align="right">
@@ -310,6 +322,30 @@ bili-video2book/
 ### Optional channels
 
 - **MCP** — the protocol behind the host-native listening channel
+
+<div align="right">
+
+[![Back to top][badge-top]](#readme-top)
+
+</div>
+
+## FAQ
+
+### Can I use this without omni-media
+
+No. Both listening channels, `read_audio` and `read_media`, come from [omni-media][link-omni-media], and the pipeline lists them as required: when stage 1 obtains no audio facts, the run stops and asks you to mount one.
+
+### Should I install mcp or mcp-ext
+
+It depends on the host modality. If your tool list contains `read_audio`, the host has an audio modality: install `mcp/`, which has the lowest latency and needs no credential. If you only have `read_media`, the host is text-only: install `mcp-ext/`, whose `config.json` points at an external model endpoint. The two channels share one paging contract, so switching means changing the tool name.
+
+### How do I confirm the mount worked
+
+`bili-video2book info` prints the readiness of both channels along with the domain paths; `omni-media status` diagnoses system dependencies, the mount state of each host and the actual config path.
+
+### Will my credentials reach version control
+
+No. This repository excludes the Bilibili `SESSDATA`, and omni-media excludes `mcp-ext` `config.json`, committing only the template. Channel A needs no credential at all.
 
 <div align="right">
 
