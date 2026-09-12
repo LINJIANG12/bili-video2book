@@ -1,152 +1,183 @@
-<!-- BEAUTIFIED -->
-<h1 align="center">Bili-Video2Book</h1>
+<div align="center">
 
-<p align="center">
-  <strong>把 B 站长视频与系列网课重构为结构化教材长文、模块合辑全书与思维导图复习笔记。</strong>
+<a name="readme-top"></a>
+
+<h1>Bili-Video2Book</h1>
+
+<p>
+  <strong>把 B 站长视频与本地课程视频批量转换为结构化教材长文与复习笔记。</strong>
   <br />
-  <em>两阶段解耦流水线 · 双通道听音 · 三轨结构化交付 · 交付前质检门禁 · 零第三方运行依赖</em>
+  <em>两阶段流水线 · 双通道听音 · 三轨交付 · 交付前质检 · Python 3.8+ 纯标准库</em>
 </p>
 
-<p align="center">
-  <a href="#快速开始"><img src="https://img.shields.io/badge/快速开始-4CAF50?style=for-the-badge" alt="Quick Start" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-yellow?style=for-the-badge" alt="License" /></a>
+<p>
+  <a href="#安装"><img src="https://img.shields.io/badge/安装-4CAF50?style=for-the-badge" alt="安装" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-yellow?style=for-the-badge" alt="许可证：MIT" /></a>
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python_3-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3" />
-  <img src="https://img.shields.io/badge/MCP-111827?style=flat" alt="MCP" />
-  <img src="https://img.shields.io/badge/FFmpeg-007808?style=flat" alt="FFmpeg" />
+<p>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python_3.8%2B-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.8 或更高版本" /></a>
 </p>
 
-<p align="center">
+<p>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-111827?style=flat" alt="Model Context Protocol" /></a>
   <a href="https://docs.anthropic.com/en/docs/claude-code"><img src="https://img.shields.io/badge/Claude_Code-D97757?style=flat&logo=claude&logoColor=white" alt="Claude Code" /></a>
   <a href="https://openai.com/codex/"><img src="https://img.shields.io/badge/Codex-000000?style=flat&logo=openai&logoColor=white" alt="Codex" /></a>
-  <a href="https://opencode.ai"><img src="https://img.shields.io/badge/OpenCode-4B5563?style=flat" alt="OpenCode" /></a>
+  <a href="https://opencode.ai/"><img src="https://img.shields.io/badge/OpenCode-4B5563?style=flat" alt="OpenCode" /></a>
 </p>
 
-<p align="center">
-  中文 · <a href="README.en.md">English</a>
+<p>
+  <strong>简体中文</strong> ·
+  <a href="README.en.md">English</a>
 </p>
 
----
+</div>
+
+> [!CAUTION]
+> 持久化的 B 站凭证 `SESSDATA` 等同你的账号登录态，以明文保存在产物根。该文件已被忽略规则排除，不会进入版本库。不要复制、上传或分享它；怀疑泄露时到 B 站退出登录使其失效，再运行 `logout` 清除本地存档。
 
 ## 功能特性
 
-| 能力 | 说明 |
-| :--- | :--- |
-| **两阶段解耦流水线** | 阶段一逐集产出教材长文，阶段二按知识边界两趟收敛：先划模块，再归并成笔记。规划由 Agent 产出，缺失或越界时工具当场抢救后继续，命令始终正常退出。 |
-| **双通道听音** | 有原生音频模态的宿主用 `read_audio`，零凭证且延迟更低；只有文本能力的宿主用 `read_media`，由外部模型代读。两条通道分页契约同构，切换只需换工具名。 |
-| **三轨结构化交付** | 同时输出单集教材长文（`articles/`）、模块合辑教材（`textbooks/`）与思维导图复习笔记（`notes/`），分别对应深入自学、系统通读与考前速记。 |
-| **交付前质检门禁** | 五类致命项直接拦停：套话填充、空壳标题、分集平铺标题、行内残缺引用、分集口吻。围栏语言标识属提示项，加 `--require-lang` 才纳入门禁。 |
-| **零第三方运行依赖** | 工具链是 Python 3.8+ 纯标准库实现，不下载模型权重、不占用本地显存。唯一的外部依赖是系统 `ffmpeg`。 |
-| **产物与代码分离** | 三域布局把技能、音视频 MCP 服务与产物彼此隔开。产物不会进入任何 `git status`，删除或迁移仓库都不影响成品。 |
+- 两阶段流水线：阶段一逐集产出教材长文，阶段二按知识边界两轮收敛为模块教材与复习笔记
+- 双通道听音：宿主有音频模态时用 `read_audio`，只有文本能力时用 `read_media`，分页契约同构
+- 三轨交付：单集长文落在 `articles/`，模块合辑落在 `textbooks/`，思维导图笔记落在 `notes/`
+- 交付前质检拦停五类致命项：套话填充、空壳标题、分集平铺标题、行内残缺引用、分集口吻
+- 围栏语言标识属提示项，加 `--require-lang` 才纳入门禁
+- 零第三方运行依赖：Python 3.8 及以上、纯标准库，外部只依赖系统 `ffmpeg`
 
----
-
-## 快速开始
+## 安装
 
 ### 前置依赖
 
-- Python 3.8 或更高版本；
-- 系统 `ffmpeg` 且已加入 `PATH`，这是取音频与切片的硬前置；
-- 听音通道之一：`read_audio` 或 `read_media`，见下一步；
-- 宿主支持 Agent Skills 规范，例如 Claude Code、Codex 或 OpenCode。
+- Python 3.8 或更高版本
+- 系统 `ffmpeg` 且已加入 `PATH`
+- 听音通道之一：`read_audio` 或 `read_media`
 
-### 安装
+### 安装技能与听音通道
 
 ```bash
-# 1) 听音通道：两个音视频 MCP 服务同属配套仓库
-cd .. && git clone https://github.com/LINJIANG12/omni-media.git   # 容器布局里已存在则跳过
+# 技能本体：复制这一个目录即可，也可直接作为插件安装
+cp -r skills/bili-video2book ~/.claude/skills/            # Claude Code
+cp -r skills/bili-video2book ~/.codex/skills/             # Codex
+cp -r skills/bili-video2book ~/.config/opencode/skills/   # OpenCode
 
+# 可选：安装 CLI
+pip install -e .
+
+# 听音通道：两个音视频 MCP 服务同属配套仓库 omni-media
+cd .. && git clone https://github.com/LINJIANG12/omni-media.git
 cd omni-media/mcp && pip install -e .                     # 通道 A：宿主原生听音，零凭证
 python -m omni_media_mcp.cli status                       # 诊断依赖与各宿主挂载状态
-python -m omni_media_mcp.cli apply --target codex         # 写入该宿主的 MCP 配置（也可用 opencode/all）
+python -m omni_media_mcp.cli apply --target codex         # 写入该宿主的 MCP 配置（或用 opencode/all）
 
-# 通道 B：宿主只有文本能力时改用它（需先填 config.json）
+# 通道 B：宿主只有文本能力时改用它，需先填 config.json
 cd ../mcp-ext && pip install -e .
-python -m omni_media_ext.cli config --init                # 生成 config.json，填入端点与 api_key
-python -m omni_media_ext.cli status --probe               # 环境 + 配置 + 端点可达性 + 该挂哪一个
+python -m omni_media_ext.cli config --init
 python -m omni_media_ext.cli apply --target codex
-
-# 2) 技能本身：把 skills/bili-video2book/ 这一个目录复制或软链到本平台技能目录；
-#    也可直接作为插件安装，本仓库已备好各平台声明（见 references/install.md）
 ```
+
+### 环境变量
+
+| 变量 | 说明 | 默认 | 必需 |
+|---|---|---|---|
+| `BVB_HOME` | 容器根，`skill/`、`omni-media/`、`output/` 的共同父目录 | 由 `.bvb-home` 标记定位 | 否 |
+| `BVB_OUTPUT_DIR` | 产物根 | `<容器根>/output` | 否 |
+| `BVB_AUDIO_TOKENS_PER_SEC` | 音频 token 系数；OpenAI 口径设 `100` | `32` | 否 |
+| `BVB_CONTEXT_WINDOW_TOKENS` | 上下文窗口预算 | `1000000` | 否 |
+| `OMNI_MEDIA_MCP_DIR` | 原生听音服务目录的覆盖 | `<容器根>/omni-media/mcp` | 否 |
+| `BVB_DEBUG` | 设为 `1` 时原样抛出栈回溯 | 未设置 | 否 |
+
+环境变量需在进程启动前设置。单次执行也可用 `--base-dir <路径>` 换产物根。
 
 ### 验证
 
 ```bash
 cd skills/bili-video2book
-python src/cli.py info        # 查看 Python / ffmpeg / ffprobe / 两条听音通道 / 三域路径
-python scripts/selfcheck.py   # 全量契约自检，应全部通过
+python src/cli.py info        # 打印 Python、ffmpeg、ffprobe、两条听音通道与域路径
+python scripts/selfcheck.py   # 全量契约自检，退出码 0 表示全部通过
 ```
 
-### 运行
-
-```bash
-# --article-type 必填；不传即 exit 4
-bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all --article-type learning
-```
-
-> 命令与工作目录已解耦：`--base-dir` 缺省即产物根（绝对路径），因此在任意目录执行都能找到同一批工作区。
-
----
-
-## 使用
-
-以下为最常见的四种用法。按任务目标划分的**完整六个场景**（含 CLI 参数与收尾流程）见
-[`references/cli-cookbook.md`](skills/bili-video2book/references/cli-cookbook.md)。
+## 使用方法
 
 ### 处理整门课程
 
 ```bash
-# B 站网课合集
+# B 站合集
 bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all --article-type learning
 
-# 本地整套视频课程目录
+# 本地课程目录
 bili-video2book pipeline "D:\courses\software_engineering\" --all --article-type learning
 ```
 
-### 只处理指定分集或区间
+### 处理指定分集或区间
 
 ```bash
 bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --page 1 --article-type learning
 bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range 2-5 --article-type learning
 ```
 
-### 生成模块合辑教材与复习笔记
+### 生成模块教材与复习笔记
 
 ```bash
-# 阶段一单集长文就绪后，整编生成模块教材
 bili-video2book cluster-articles "https://www.bilibili.com/video/BV14VqVBrEhc"
-
-# 复习笔记只有一种风格，无需 --style；两趟规划都由 Agent 产出
 bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc"
 ```
 
-### 交付前质检与账本对账
+### 交付前质检与对账
 
 ```bash
-python scripts/note_quality_check.py --strict     # 笔记成色体检
-python scripts/render_compat_check.py --strict    # 渲染合规体检
-python src/cli.py sync                            # 以磁盘产物为唯一真相回填 manifest.json
+python scripts/note_quality_check.py --strict      # 笔记成色
+python scripts/render_compat_check.py --strict     # 渲染合规
+bili-video2book sync                               # 以磁盘产物回填 manifest.json
 ```
 
----
+## 命令
 
-## 架构
+| 命令 | 说明 | 示例 |
+|---|---|---|
+| `parse` | 解析视频拓扑并列分集 | `bili-video2book parse "<链接>" --limit 10` |
+| `audio` | 下载或抽取音频流 | `bili-video2book audio "<链接>" --all` |
+| `transcribe` | 导出单集长文任务书，不落中间逐字稿 | `bili-video2book transcribe "<链接>" --page 1 --article-type learning` |
+| `pipeline` | 执行完整流水线 | `bili-video2book pipeline "<链接>" --all --article-type learning` |
+| `cluster-articles` | 把单集长文整编为模块教材 | `bili-video2book cluster-articles "<链接>"` |
+| `cluster-notes` | 两轮语义聚合，导出笔记任务书 | `bili-video2book cluster-notes "<链接>"` |
+| `dedup` | 同步重复音频资产以节省 token | `bili-video2book dedup --dry-run` |
+| `cleanup` | 回收已产出的任务书，每类保留样本 | `bili-video2book cleanup --dry-run` |
+| `sync` | 以磁盘产物为准回填 manifest.json | `bili-video2book sync --dry-run` |
+| `info` | 显示环境与工具链就绪状态 | `bili-video2book info` |
+| `login` | 持久化 B 站 SESSDATA | `bili-video2book login --sessdata "<SESSDATA>"` |
+| `logout` | 清除已保存的 SESSDATA | `bili-video2book logout` |
+
+### 通用参数
+
+| 参数 | 说明 | 默认 |
+|---|---|---|
+| `--base-dir` | 产物根路径 | `BVB_OUTPUT_DIR` 或 `<容器根>/output` |
+| `--task` | 指定课程工作区目录名 | 最近活动的那个 |
+| `--sessdata` | 本次执行的 B 站凭证，优先级高于本地存档 | 已保存的存档 |
+| `--json` | 以 JSON 输出，仅 `parse` 与 `audio` | 关 |
+
+### 退出码
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 正常结束 |
+| `4` | 未确认长文提示词风格，即 `--article-type` 缺失或取值非法 |
+
+## 工作流程
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
 flowchart TD
     A[parse / pipeline 入参] --> B[音频提取<br/>FFmpeg 16kHz 单声道切片]
-    B --> C{课程总时长 ≤ 60 分钟?}
+    B --> C{课程总时长 ≤ 60 分钟}
     C -->|是| D[主 Agent 串行处理]
-    C -->|否| E[派发子智能体<br/>一集一子智能体]
+    C -->|否| E[派发子智能体<br/>一集一个]
     D --> F[阶段一听音<br/>read_audio / read_media]
     E --> F
-    F --> G[逐集教材长文落盘<br/>articles/]
-    G --> H[阶段二两趟语义聚合<br/>模块划分 ➔ 笔记归并]
-    H --> I[模块合辑教材与复习笔记落盘<br/>textbooks/ · notes/]
+    F --> G[逐集教材长文<br/>articles/]
+    G --> H[阶段二两轮语义聚合<br/>模块划分 → 笔记归并]
+    H --> I[模块教材与复习笔记<br/>textbooks/ · notes/]
 
     classDef start fill:#3B82F6,stroke:#2563EB,color:#fff,stroke-width:2px
     classDef process fill:#10B981,stroke:#059669,color:#fff,stroke-width:2px
@@ -158,105 +189,33 @@ flowchart TD
     class I data
 ```
 
-阶段一的逐集产出与阶段二的两趟规划都由 Agent 完成，工具层只负责提供任务书、派发载荷与门禁。
-派发阈值集中在 `src/core/budget.py`：课程总时长在 **60 分钟**以内时可由主 Agent 串行处理；
-超过则**派发**给子智能体，一集一个，集数多且单集短时由工具建议批量打包，避免单次上下文被音频挤爆。
-
-交付前质检与账本对账是流水线之外的独立入口，由操作者在交付前自行执行，见
-[`references/cli-cookbook.md`](skills/bili-video2book/references/cli-cookbook.md) 场景六。
-
----
-
-## 配置
-
-### 环境变量
-
-| 变量 | 说明 | 默认 |
-| :--- | :--- | :--- |
-| `BVB_HOME` | 容器根（`skill/`、`omni-media/`、`output/` 的共同父目录） | 由 `.bvb-home` 标记自动定位 |
-| `BVB_OUTPUT_DIR` | 产物根 | `<容器根>/output` |
-| `BVB_AUDIO_TOKENS_PER_SEC` | 音频 token 系数，按宿主实测口径设置 | `32` |
-| `BVB_CONTEXT_WINDOW_TOKENS` | 宿主上下文窗口预算 | `1000000` |
-| `OMNI_MEDIA_MCP_DIR` | 原生听音服务目录的显式覆盖 | `<容器根>/omni-media/mcp` |
-| `BVB_DEBUG` | 设为 `1` 时环境类错误原样抛出栈回溯，便于排查 | 未设置 |
-
-环境变量须在进程启动前设置。临时换位置也可用 `--base-dir <路径>`。
-
-### 凭证
-
-处理 B 站合集任务时可提供 `SESSDATA` 登录凭证，以降低触发 412 频控的概率；本地音视频任务不需要。
-两种配置方式、脱敏指纹查看与安全须知见 `SKILL.md` §2。
-
-### 运行期状态文件
-
-| 文件 | 位置 | 说明 |
-| :--- | :--- | :--- |
-| `.sessdata.json` | 产物根 | 持久化的 B 站凭证，已被忽略规则排除，不入库 |
-| `.wbi_keys.json` | 产物根 | WBI 签名密钥缓存 |
-| `.cli_status.json` | 产物根 | 上次 412 与熔断状态 |
-
----
-
-## 项目结构
-
-```text
-skill/                                  # 本仓库：插件 / 分发单元
-├── skills/bili-video2book/             # ★ 技能安装单元，装这一个目录即可
-│   ├── SKILL.md                        # 技能定义，唯一真源
-│   ├── references/                     # 安装对照、工具名映射、交付矩阵、CLI 场景手册
-│   ├── scripts/                        # 自检、队列追踪、质检与清理入口
-│   └── src/                            # 工具链实现：CLI、生成器、核心
-├── .codex-plugin/  .claude-plugin/     # 平台插件声明
-├── .agents/plugins/  .opencode/        # 通用 agents 与 OpenCode 声明
-├── AGENTS.md  CLAUDE.md                # 各 agent 自动加载的入口
-├── README.md  README.en.md
-└── pyproject.toml                      # 可选：pip install -e . 暴露 CLI
-
-<容器根>/                                # 三域布局，本仓库只是其中一域
-├── skill/                              # 技能仓库，即本仓库
-├── omni-media/                         # 配套仓库：两个音视频 MCP 服务
-└── output/                             # 产物根：每门课一个工作区
-```
-
----
-
-## 技术栈
-
-### 运行时
-
-| 技术 | 用途 |
-| :--- | :--- |
-| Python 3.8+ | 工具链实现，仅使用标准库 |
-| FFmpeg | 提取 16 kHz 单声道人声切片，并探测媒体规格 |
-
-### 协议与集成
-
-| 技术 | 用途 |
-| :--- | :--- |
-| MCP | 与听音服务通信（`read_audio` / `read_media`），分页契约由 `OMNI_STATUS` 注释承载 |
-| Agent Skills 规范 | 技能分发与跨宿主加载，支持 Claude Code、Codex、OpenCode 等 |
-
----
-
-## 贡献
-
-1. Fork 本仓库；
-2. 创建特性分支：`git checkout -b feature/<name>`；
-3. 提交改动：`git commit -m 'feat: ...'`；
-4. 推送分支并开启 Pull Request。
-
-提交前请在技能目录执行自检，它是本仓库唯一的门禁：
-
-```bash
-cd skills/bili-video2book && python scripts/selfcheck.py
-```
-
-改动需遵守 `CLAUDE.md` 列出的硬约束：纯标准库、Python 3.8 语法、子进程统一走
-`src/core/proc.py` 且必须带硬超时、技能正文只描述行动语义而不写死宿主私有工具名、
-平台差异只放在 `references/host-tools/`。
-
----
+派发阈值见 `src/core/budget.py`：课程总时长在 60 分钟以内时由主 Agent 串行处理，超过则派发给子智能体，一集一个；集数多且单集短时由工具建议批量打包。阶段一的逐集产出与阶段二的两轮规划都由 Agent 完成，工具层只提供任务书、派发载荷与门禁。
 
 ## 许可证
 
 [MIT](LICENSE)
+
+<div align="right">
+
+[![返回顶部][badge-top]](#readme-top)
+
+</div>
+
+<!-- LINKS & IMAGES -->
+
+[badge-top]: https://img.shields.io/badge/-返回顶部-151515?style=flat-square
+
+[badge-python]: https://img.shields.io/badge/Python_3.8%2B-3776AB?style=flat&logo=python&logoColor=white
+[badge-mcp]: https://img.shields.io/badge/MCP-111827?style=flat
+[badge-claude]: https://img.shields.io/badge/Claude_Code-D97757?style=flat&logo=claude&logoColor=white
+[badge-codex]: https://img.shields.io/badge/Codex-000000?style=flat&logo=openai&logoColor=white
+[badge-opencode]: https://img.shields.io/badge/OpenCode-4B5563?style=flat
+[badge-cta-install]: https://img.shields.io/badge/安装-4CAF50?style=for-the-badge
+[badge-cta-license]: https://img.shields.io/badge/许可证-MIT-yellow?style=for-the-badge
+[link-python]: https://www.python.org/
+[link-mcp]: https://modelcontextprotocol.io/
+[link-claude]: https://docs.anthropic.com/en/docs/claude-code
+[link-codex]: https://openai.com/codex/
+[link-opencode]: https://opencode.ai/
+[link-license]: LICENSE
+[link-omni-media]: https://github.com/LINJIANG12/omni-media
