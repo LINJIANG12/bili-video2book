@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import fsutil
 from .workspace import sanitize_filename
 
 
@@ -69,12 +70,17 @@ class KernelExtractor:
 
     @staticmethod
     def find_article(ws: Any, page: int) -> Optional[Path]:
-        """Locate the episode's single-episode article (excludes task-files)."""
+        """Locate the episode's single-episode article (excludes task-files).
+
+        体积判定走 `fsutil.file_size`：工作区里若混入不可访问的装入点，
+        `stat()` 会抛 OSError，而本方法几乎是所有链路的公共依赖，
+        不能让它成为「一门课拖垮整轮」的单点。
+        """
         candidates = [
             f for f in sorted(ws.articles_dir.glob(f"P{page:02d}_*.md"))
             if not f.name.endswith("_TASK.md")
         ]
-        if candidates and candidates[0].stat().st_size > 200:
+        if candidates and fsutil.file_size(candidates[0]) > 200:
             return candidates[0]
         return None
 

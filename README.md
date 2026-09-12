@@ -98,7 +98,7 @@
 └── output/    ← 产物根：每门课一个工作区 + .sessdata.json / .wbi_keys.json / .cli_status.json
 ```
 
-- **各仓库/目录互相独立**（`skill/`、`mcp/` 各有自己的 `.git`），可分别克隆、升级、发布；MCP 从不 import 技能代码，技能也从不 import MCP 代码（`selfcheck` 强制校验，只做 `find_spec` 探测）；
+- **各仓库/目录互相独立**（`skill/`、`mcp/` 各有自己的 `.git`），可分别克隆、升级、发布；MCP 从不 import 技能代码，技能也从不 import MCP 代码（`selfcheck` 强制校验，只做目录存在性判断与 AST/正则静态扫描，从不真实 import）；
 - **产物永远在代码之外**：不会出现在任何 `git status` 里，删除/迁移仓库都不会动到成品；
 - **命令与工作目录解耦**：`--base-dir` 缺省即产物根（绝对路径），因此在任意目录执行 CLI/脚本都能找到同一批工作区；
   需要换位置时用 `--base-dir <路径>`，或设置环境变量 `BVB_HOME`（容器根）/ `BVB_OUTPUT_DIR`（产物根）；
@@ -166,6 +166,24 @@ cd bili-video2book
 # 可选：安装为全局命令行工具
 pip install -e .
 ```
+
+### 5. 环境要求与缺失处理
+
+| 依赖 | 必需性 | 缺失时 |
+| :--- | :--- | :--- |
+| Python 3.8+ | 必需 | 工具链无法启动（无非 Python 实现，请先安装解释器） |
+| ffmpeg（在 `PATH`） | 必需 | 本地媒体在取音频阶段失败并打印三平台安装命令；B 站下载会退化为不转码保存，请以 `info` 为准 |
+| ffprobe | 可选 | 自动降级为 `ffmpeg -i` 解析时长，流程照常 |
+| `read_audio` 或 `read_media` | 必需 | 阶段一停下并要求先挂载其一，不会跳过音频保真 |
+
+```bash
+python src/cli.py info        # 一次看全：Python 版本 / ffmpeg / ffprobe / 听音通道 / 三域路径
+python scripts/selfcheck.py   # 全量契约自检（含 Python 3.8 语法与接口兼容断言）
+```
+
+`info` 会把每个缺失项连同**可照做的下一步**一起打印：ffmpeg 缺失时给出
+`winget install Gyan.FFmpeg` / `brew install ffmpeg` / `apt install ffmpeg`；Python 低于 3.8 时明确提示升级；
+两条听音通道都不可用时提示先挂载。五类缺失情形与降级口径详见 [SKILL.md §8](SKILL.md)。
 
 ---
 

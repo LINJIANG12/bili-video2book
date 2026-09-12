@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import fsutil
+
 # 类别标识
 CATEGORY_ARTICLES = "articles"
 CATEGORY_KERNELS = "kernels"
@@ -257,20 +259,16 @@ def find_workspaces(base_dir: Any = None) -> List[Any]:
 
     workspaces: List[Any] = []
     seen: set = set()
-    for child in sorted(base.iterdir()):
-        if not child.is_dir() or child.name.startswith("."):
-            continue
+    # 枚举走 fsutil.iter_child_dirs：条目不可访问（Windows「不受信任的装入点」会连
+    # `Path.is_dir()` 都抛 OSError）时只跳过它，不让一门课的坏链接把整轮扫描打断；
+    # 链接（junction / 符号链接）与重解析点同样在那里被跳过——它们指向的工作区若被跟随
+    # 会被枚举两次（实测：一个手工建的 junction 让 5 个工作区变成 6 个）。
+    for child in fsutil.iter_child_dirs(base, skip_hidden=True):
         has_parts = (child / "parts.json").exists() or (child / "manifest.json").exists()
-        has_artifacts = any((child / name).is_dir() for name in ("articles", "notes", "subtitles", "textbooks"))
+        has_artifacts = any(fsutil.is_dir(child / name) for name in ("articles", "notes", "subtitles", "textbooks"))
         if not (has_parts or has_artifacts):
             continue
         try:
-            # 链接（junction / 符号链接）跳过：它指向的工作区会被枚举两次，让 cleanup / sync /
-            # 质检脚本把同一门课算两遍（实测：一个手工建的 junction 让 5 个工作区变成 6 个）。
-            # is_junction 仅 3.12+ 提供，旧版本用能力探测降级为「只认符号链接」。
-            _is_junction = getattr(Path, "is_junction", None)
-            if child.is_symlink() or (_is_junction is not None and _is_junction(child)):
-                continue
             # 同一真实路径只收一次（大小写、短路径等写法差异也归并掉）
             key = str(child.resolve()).lower()
             if key in seen:

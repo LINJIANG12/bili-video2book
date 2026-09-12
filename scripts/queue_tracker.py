@@ -23,6 +23,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.core.console import enable_utf8_console  # noqa: E402
+
+# 控制台硬化：输出含 `•`/中文，管道捕获时若按 locale(cp936) 编码会崩。
+enable_utf8_console()
+
 
 def get_task_workspace(
     custom_path: Optional[str] = None,
@@ -41,10 +46,11 @@ def get_task_workspace(
         raise FileNotFoundError(f"Specified workspace directory does not exist: {custom_path}")
 
     sys.path.insert(0, str(PROJECT_ROOT))
+    from src.core import fsutil
     from src.core.paths import resolve_base_dir
 
     out_dir = resolve_base_dir(base_dir)
-    if not (out_dir.exists() and out_dir.is_dir()):
+    if not fsutil.is_dir(out_dir):
         raise RuntimeError(
             f"产物根不存在: {out_dir}（可用 --base-dir 指定，或设置 ${'BVB_OUTPUT_DIR'}）"
         )
@@ -53,15 +59,16 @@ def get_task_workspace(
     if (out_dir / "parts.json").exists() or (out_dir / "manifest.json").exists():
         return out_dir
 
-    # Find directories that contain parts.json or manifest.json
+    # 枚举走 fsutil：条目不可访问（Windows「不受信任的装入点」连 Path.is_dir() 都会抛
+    # OSError）时只跳过它，不让一门课里的坏链接把整个队列追踪打断。
     valid_dirs = [
-        d for d in out_dir.iterdir()
-        if d.is_dir() and (d / "parts.json").exists()
+        d for d in fsutil.iter_child_dirs(out_dir)
+        if (d / "parts.json").exists()
     ]
 
     if not valid_dirs:
         # Fallback to any directory in output
-        valid_dirs = [d for d in out_dir.iterdir() if d.is_dir()]
+        valid_dirs = list(fsutil.iter_child_dirs(out_dir))
 
     if not valid_dirs:
         raise RuntimeError(f"No task workspace found under {out_dir}")

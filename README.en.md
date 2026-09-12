@@ -104,7 +104,8 @@ servers and products each live in their own place, so upgrading or relocating on
 
 - **Independent repositories/directories** (`skill/` and `mcp/` each keep their own `.git`) that can be cloned,
   upgraded and released separately; the MCP never imports skill code and the skill never imports MCP code
-  (enforced by `selfcheck`, which only probes with `find_spec`);
+  (enforced by `selfcheck`, which only does directory-existence checks plus AST/regex static scans and
+  never actually imports the package);
 - **Products always live outside the code**: they can never show up in `git status`, and removing/relocating a repo
   never touches your deliverables;
 - **Commands are decoupled from the working directory**: `--base-dir` defaults to the products root (an absolute path),
@@ -178,6 +179,25 @@ cd bili-video2book
 # Optional: install as global command
 pip install -e .
 ```
+
+### 5. Environment Requirements & Missing Pieces
+
+| Dependency | Required? | When missing |
+| :--- | :--- | :--- |
+| Python 3.8+ | Required | The toolchain cannot start (there is no non-Python implementation — install an interpreter first) |
+| ffmpeg (on `PATH`) | Required | Local media fails at the audio stage with install commands; remote downloads silently fall back to no-transcode saves — trust `info` |
+| ffprobe | Optional | Falls back to `ffmpeg -i` for duration probing; the run continues |
+| `read_audio` or `read_media` | Required | Stage 1 stops and asks you to mount one first; audio grounding is never skipped |
+
+```bash
+python src/cli.py info        # Python version / ffmpeg / ffprobe / audio channels / domain paths at once
+python scripts/selfcheck.py   # full contract self-check (incl. Python 3.8 syntax & API compatibility)
+```
+
+`info` prints each missing piece together with **the exact next step**: a missing ffmpeg lists
+`winget install Gyan.FFmpeg` / `brew install ffmpeg` / `apt install ffmpeg`; a Python below 3.8 is flagged
+for upgrade; with neither audio channel available it asks you to mount one first. The five missing-dependency
+cases and the degradation rules are spelled out in [SKILL.md §8](SKILL.md).
 
 ---
 

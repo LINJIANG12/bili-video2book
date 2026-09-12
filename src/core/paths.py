@@ -77,6 +77,27 @@ def home_root() -> Path:
     return CODE_ROOT.parent
 
 
+def is_container_layout() -> bool:
+    """当前是否处于**容器布局**（`skill/` 与 `mcp/`、`output/` 平级的 home 目录）。
+
+    判定只看两个**显式**信号：`$BVB_HOME`，或代码根任一层祖先里的 `.bvb-home` 标记。
+
+    为什么要单独判：全新克隆（裸 clone / zip 解压）通常两者都没有，此时 `home_root()`
+    会落到「代码根的父目录」这个兜底值，产物根也随之落到别处。自检据此把「容器专属」
+    断言（容器根不得是 git 仓库、mcp/ 必须是独立仓库等）降级为提示，
+    而不是把一次正常的独立使用判成错误。
+    """
+    if _env_path(ENV_HOME) is not None:
+        return True
+    for ancestor in (CODE_ROOT, *CODE_ROOT.parents):
+        try:
+            if (ancestor / HOME_MARKER).exists():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def products_root() -> Path:
     """产物根（工作区与 .sessdata.json / .wbi_keys.json / .cli_status.json 的所在地）。"""
     env_output = _env_path(ENV_OUTPUT_DIR, base=home_root())

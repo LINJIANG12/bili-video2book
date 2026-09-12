@@ -31,11 +31,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.core.console import enable_utf8_console  # noqa: E402
+
+# 控制台硬化：输出含 `▶`/`✗`/`└`/`…` 等符号，管道捕获时若按 locale(cp936) 编码会崩。
+enable_utf8_console()
+
 from src.core.deliverable_lint import (  # noqa: E402
     fatal_render_total,
     lint_render,
     summarize_render,
 )
+from src.core import fsutil  # noqa: E402
 from src.core.task_cleanup import find_workspaces  # noqa: E402
 from src.core.workspace import TaskWorkspace  # noqa: E402
 
@@ -44,9 +50,13 @@ EXCLUDE_NAME_SUFFIXES = ("_TASK.md", "_KERNEL_TASK.md")
 
 
 def collect_markdown(ws: Any) -> List[Path]:
-    """工作区内所有 Markdown 成品（递归，含历史手工镜像目录；跳过任务书与隐藏目录）。"""
+    """工作区内所有 Markdown 成品（递归，含历史手工镜像目录；跳过任务书与隐藏目录）。
+
+    递归走 `fsutil.iter_files`：工作区里若混入 Windows 不受信任的装入点（junction 等），
+    `Path.rglob()` 会整体抛 `OSError`，让这一门课的体检连带整轮扫描一起失败。
+    """
     files: List[Path] = []
-    for path in sorted(ws.root_dir.rglob("*.md")):
+    for path in fsutil.iter_files(ws.root_dir, "*.md", skip_hidden_dirs=True):
         try:
             rel_parents = path.relative_to(ws.root_dir).parts[:-1]
         except ValueError:

@@ -16,18 +16,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import fsutil
 from .kernel_extractor import KernelExtractor
 
 MIN_ARTICLE_BYTES = 1000
 
 
 def _list_products(directory: Path, suffix: str = ".md") -> List[Path]:
-    """列出目录下的成品文件（排除 `*_TASK.md` 任务书与隐藏目录）。"""
+    """列出目录下的成品文件（排除 `*_TASK.md` 任务书与隐藏目录）。
+
+    体积判定走 `fsutil.file_size`：不可访问的条目按「空文件」跳过，不打断对账。
+    """
     if not directory.exists():
         return []
     return sorted(
         p for p in directory.glob(f"*{suffix}")
-        if not p.name.endswith("_TASK.md") and p.stat().st_size >= 200
+        if not p.name.endswith("_TASK.md") and fsutil.file_size(p) >= 200
     )
 
 
@@ -61,7 +65,7 @@ def reconcile_workspace_manifest(
     for page in sorted(details, key=lambda x: (x is None, x)):
         article = KernelExtractor.find_article(ws, page)
         entry = details[page]
-        if article is not None and article.stat().st_size >= min_article_bytes:
+        if article is not None and fsutil.file_size(article) >= min_article_bytes:
             entry["status"] = "success"
             entry["article"] = str(article)
             # 任务书已回收时不再留悬空引用

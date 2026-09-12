@@ -24,6 +24,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.core.console import enable_utf8_console  # noqa: E402
+
+# 控制台硬化：输出含 `✓`/`▶` 等符号，管道捕获时若按 locale(cp936) 编码会崩。
+enable_utf8_console()
+
 from src.core.task_cleanup import (  # noqa: E402
     CATEGORY_LABELS,
     cleanup_completed_tasks,

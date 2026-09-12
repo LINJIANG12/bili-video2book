@@ -27,6 +27,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.core.console import enable_utf8_console  # noqa: E402
+
+# 控制台硬化：输出含 `▶`/`✗`/`──` 等符号，管道捕获时若按 locale(cp936) 编码会崩。
+enable_utf8_console()
+
 from src.core.deliverable_lint import (  # noqa: E402
     FATAL_NOTE_KEYS,
     STRUCTURE_KEYS,
@@ -34,6 +39,7 @@ from src.core.deliverable_lint import (  # noqa: E402
     lint_note,
     summarize_note,
 )
+from src.core import fsutil  # noqa: E402
 from src.core.task_cleanup import find_workspaces  # noqa: E402
 from src.core.workspace import TaskWorkspace  # noqa: E402
 
@@ -42,13 +48,24 @@ DEFAULT_MAX_TRUNCATED = 4
 
 
 def collect_notes(ws: Any) -> List[Path]:
-    """工作区内的模块笔记成品（排除任务书与隐藏目录）。"""
+    """工作区内的模块笔记成品（排除任务书与隐藏目录）。
+
+    `stat()` 单独包 try：工作区里若混入不可访问的装入点，`p.stat()` 会抛 OSError
+    （`Path.exists()` 会吞掉该错误，`stat()` 不会），不能让它打断整轮体检。
+    """
     if not ws.notes_dir.exists():
         return []
-    return sorted(
-        p for p in ws.notes_dir.glob("*.md")
-        if not p.name.endswith("_TASK.md") and p.stat().st_size >= 1000
-    )
+    notes: List[Path] = []
+    for path in sorted(ws.notes_dir.glob("*.md")):
+        if path.name.endswith("_TASK.md"):
+            continue
+        try:
+            if path.stat().st_size < 1000:
+                continue
+        except OSError:
+            continue
+        notes.append(path)
+    return notes
 
 
 def check_workspace(ws: Any, max_truncated: int, args_require_structure: bool = False) -> Dict[str, Any]:
@@ -72,7 +89,7 @@ def check_workspace(ws: Any, max_truncated: int, args_require_structure: bool = 
         missing = [k for k in STRUCTURE_KEYS if not lint["structure"].get(k)]
         detail: Dict[str, Any] = {
             "file": TaskWorkspace.to_relative(path),
-            "bytes": path.stat().st_size,
+            "bytes": fsutil.file_size(path),
             "summary": summary,
             "fatal": notes_fatal,
             "structure_missing": missing,

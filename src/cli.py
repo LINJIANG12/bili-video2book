@@ -16,15 +16,11 @@ Commands:
 
 import argparse
 import json
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
-
-# Enable real-time line buffering
-try:
-    sys.stdout.reconfigure(line_buffering=True)
-except Exception:
-    pass
 
 # Add parent directory to sys.path to allow running directly from anywhere
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -32,7 +28,9 @@ PROJECT_ROOT = CURRENT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.core import fsutil
 from src.core import paths as _paths
+from src.core.console import enable_utf8_console
 from src.core.local_media import LocalMediaParser
 from src.core.fetcher import AudioFetcher
 from src.core.audio_chunker import AudioChunker
@@ -51,6 +49,10 @@ from src.core.pipeline import (
     resolve_target_info,
 )
 from src.generator.block_synthesizer import BlockSynthesizer
+
+# 控制台硬化：固定 UTF-8 并逐行刷新。输出被管道捕获（宿主 Agent / CI 的常态）时，
+# 若仍按 locale（中文 Windows = cp936）编码，`[✓]` 这类符号会让命令以 UnicodeEncodeError 崩掉。
+enable_utf8_console()
 
 
 BASE_DIR_HELP = (
@@ -816,16 +818,51 @@ def cmd_info(args):
             pass
     print("=" * 65)
     print("【系统运行环境与工具链检查】")
-    print(f"• Python 运行环境: v{sys.version.split()[0]} ({sys.executable})")
+    _py_ok = sys.version_info >= (3, 8)
+    print(f"• Python 运行环境: v{sys.version.split()[0]} ({sys.executable})"
+          + ("" if _py_ok else "  ✗ 低于最低要求 3.8，请先升级解释器"))
+    if getattr(Path, "is_junction", None) is not None:
+        print("• 链接去重能力 : 完整（Python 3.12+：junction 与符号链接都能识别）")
+    else:
+        print("• 链接去重能力 : 降级（< 3.12 无 Path.is_junction，改用文件属性位识别重解析点；"
+              "junction 与符号链接同样会被跳过，不会重复计数）")
+
+    # ffmpeg 是**硬前置**（取音频/切片），ffprobe 可选（缺失时改用 ffmpeg -i 解析时长）。
     ffmpeg_path = shutil.which("ffmpeg")
-    print(f"• FFmpeg 状态   : {'已就绪 (' + ffmpeg_path + ')' if ffmpeg_path else '未找到（建议安装以支持音频切片）'}")
+    ffprobe_path = shutil.which("ffprobe")
+    if ffmpeg_path:
+        print(f"• FFmpeg 状态   : 已就绪 ({ffmpeg_path})")
+    else:
+        print("• FFmpeg 状态   : ✗ 未找到——这是取音频/切片的硬前置，")
+        print("                  `pipeline` / `audio` 会在音频阶段失败。安装并加入 PATH：")
+        print("                    Windows : winget install Gyan.FFmpeg")
+        print("                    macOS   : brew install ffmpeg")
+        print("                    Linux   : sudo apt update && sudo apt install -y ffmpeg")
+    print("• FFprobe 状态  : " + (
+        f"已就绪 ({ffprobe_path})" if ffprobe_path
+        else "未找到（可选：缺失时改用 `ffmpeg -i` 解析时长，精度略低、速度略慢）"
+    ))
     print("• 架构模式      : 宿主 Agent 原生派发模式（零环境变量、零网络代理绑定；转录=对话模型原生唯一路径）")
+    print("=" * 65)
+    print("【阶段一听音通道（按宿主自己的工具列表选择，不要猜）】")
+    _mcp_dir = _paths.home_root() / "mcp"
+    _mcp_ext_dir = _paths.home_root() / "mcp-ext"
+    print("• read_audio（宿主原生听音）: " + (
+        f"已就位 {_mcp_dir}" if fsutil.is_dir(_mcp_dir)
+        else f"未发现 {_mcp_dir}（纯文本宿主请改用 read_media）"))
+    print("• read_media（外部模型代读）: " + (
+        f"已就位 {_mcp_ext_dir}" if fsutil.is_dir(_mcp_ext_dir)
+        else f"未发现 {_mcp_ext_dir}（需 config.json 里的外部模型端点与 api_key）"))
+    print("  两者都不可用时：阶段一必须停下并提示先挂载其一，不得跳过音频保真直接编造正文。")
     print("=" * 65)
     print("【三域路径（代码 / MCP / 产物 互相隔离）】")
     _三域 = _paths.describe()
+    _products = Path(_三域["products_root"])
+    _products_state = "已存在" if fsutil.is_dir(_products) else "尚不存在（首次运行会自动创建）"
     print(f"• 代码根       : {_三域['code_root']}")
     print(f"• 容器根 home  : {_三域['home_root']}" + ("  [来自 ${}]".format(_paths.ENV_HOME) if _三域["home_from_env"] else ""))
-    print(f"• 产物根       : {_三域['products_root']}" + ("  [来自 ${}]".format(_paths.ENV_OUTPUT_DIR) if _三域["products_from_env"] else ""))
+    print(f"• 产物根       : {_products}  [{_products_state}]"
+          + ("  [来自 ${}]".format(_paths.ENV_OUTPUT_DIR) if _三域["products_from_env"] else ""))
     print(f"  工作区清单   : {store_path().parent}")
     print(f"  覆盖方式     : export {_paths.ENV_HOME}=<容器根> / export {_paths.ENV_OUTPUT_DIR}=<产物根>，或用 --base-dir")
     print("=" * 65)
@@ -1037,7 +1074,20 @@ def main():
         "logout": cmd_logout,
         "info": cmd_info,
     }
-    dispatch[args.subcommand](args)
+    try:
+        dispatch[args.subcommand](args)
+    except PipelineGateError as gate:
+        # 流水线硬门禁自带退出码语义（cmd_pipeline 内部已转换，这里只是兜底透传，不改写码值）。
+        sys.exit(getattr(gate, "exit_code", 1))
+    except (RuntimeError, OSError, subprocess.SubprocessError) as err:
+        # 环境类错误（缺 ffmpeg、ffmpeg 异常退出、产物根不可写、网络不通……）统一给人话，
+        # 别让裸栈回溯淹没真正原因。BVB_DEBUG=1 时原样抛出，便于排查逻辑错误。
+        # 注：SubprocessError 覆盖 ffmpeg 非零退出（CalledProcessError），它不是 OSError 子类。
+        if os.environ.get("BVB_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+            raise
+        print(f"\n[!] {err}", file=sys.stderr)
+        print("    可用 `python src/cli.py info` 查看环境与工具链状态。", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

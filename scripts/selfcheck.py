@@ -15,6 +15,7 @@ Run: python scripts/selfcheck.py
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +26,11 @@ if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
 from src.core import paths as _paths  # noqa: E402
+from src.core.console import enable_utf8_console  # noqa: E402
 from src.core.proc import run_quiet  # noqa: E402  （统一抑制 Windows 控制台窗口）
+
+# 控制台硬化：自检输出含中文与 `[PASS]/[FAIL]`，管道捕获时若按 locale(cp936) 编码会崩。
+enable_utf8_console()
 
 # 容器根（skill/、mcp/、output/ 的共同父目录）与产物根
 HOME_ROOT = _paths.home_root()
@@ -33,6 +38,10 @@ PRODUCTS_ROOT = _paths.products_root()
 MCP_REPO = Path(os.environ.get("OMNI_MEDIA_MCP_DIR", "").strip() or (HOME_ROOT / "mcp"))
 
 FAILURES = []
+
+# git 可用性：有两处断言要靠 `git ls-files` 校验「产物/凭证未入库」。
+# 无 git（精简环境、zip 解压安装）时降级为提示，而不是抛 FileNotFoundError 让自检整体变红。
+_HAS_GIT = shutil.which("git") is not None
 
 
 def check(name, fn):
@@ -46,6 +55,8 @@ def check(name, fn):
 
 def check_imports():
     import src.cli  # noqa: F401
+    import src.core.console  # noqa: F401
+    import src.core.fsutil  # noqa: F401
     import src.core.paths  # noqa: F401
     import src.core.pipeline  # noqa: F401
     import src.core.kernel_extractor  # noqa: F401
@@ -67,12 +78,23 @@ def check_cli_help():
 
 
 def check_repo_separation():
-    """四域分离契约：skill/ 与 mcp/、mcp-ext/ 各自独立，产物根在它们之外，容器根不再是仓库。"""
-    assert (SKILL_ROOT / ".git").is_dir(), "skill/ 应是独立 git 仓库（缺 .git）"
-    assert (SKILL_ROOT / ".gitattributes").is_file(), "skill/ 缺少 .gitattributes（行尾契约）"
+    """四域分离契约：skill/ 与 mcp/、mcp-ext/ 各自独立，产物根在它们之外。
 
-    # 容器根不应是 git 仓库（拆分后由两个独立仓库各自管理）
-    assert not (HOME_ROOT / ".git").is_dir(), f"容器根不应再有 .git: {HOME_ROOT / '.git'}"
+    容器布局（存在 `.bvb-home` 或 `$BVB_HOME`）下这些是硬约束；**独立克隆 / zip 解压安装**
+    时容器根本就不存在，相应断言降级为提示——否则一份正常的独立使用会在自检第一步就 FAIL。
+    """
+    container = _paths.is_container_layout()
+
+    if (SKILL_ROOT / ".git").is_dir():
+        assert (SKILL_ROOT / ".gitattributes").is_file(), "skill/ 缺少 .gitattributes（行尾契约）"
+    else:
+        print("       (skill/ 不是 git 工作树——zip 下载安装，跳过仓库边界断言)")
+
+    if container:
+        # 容器根不应是 git 仓库（拆分后由两个独立仓库各自管理）
+        assert not (HOME_ROOT / ".git").is_dir(), f"容器根不应再有 .git: {HOME_ROOT / '.git'}"
+    else:
+        print(f"       (未检测到容器布局标记，跳过「容器根不得是 git 仓库」断言: home={HOME_ROOT})")
 
     # 产物根必须位于两个仓库工作树之外，避免产物被误提交
     for repo_name, repo_root in (("skill", SKILL_ROOT), ("mcp", HOME_ROOT / "mcp")):
@@ -84,23 +106,37 @@ def check_repo_separation():
             continue
         raise AssertionError(f"产物根 {PRODUCTS_ROOT} 位于 {repo_name} 仓库工作树内")
 
-    if (HOME_ROOT / "mcp").exists():
+    if container and (HOME_ROOT / "mcp").exists():
         assert (HOME_ROOT / "mcp" / ".git").is_dir(), "mcp/ 应是独立 git 仓库（缺 .git）"
         assert not (SKILL_ROOT / "omni-media-mcp").exists(), "skill/ 内不应再残留 omni-media-mcp/"
 
-    # 产物根必须存在且能枚举出工作区（否则说明锚点解析跑偏）
-    assert PRODUCTS_ROOT.is_dir(), f"产物根不存在: {PRODUCTS_ROOT}"
+    # 产物根必须可用：不存在就按工具的默认语义建出来（任何命令首次写入也会建它），
+    # 这样全新克隆下自检不必依赖「恰好已经跑过一次 pipeline」。
+    if not PRODUCTS_ROOT.is_dir():
+        try:
+            PRODUCTS_ROOT.mkdir(parents=True, exist_ok=True)
+            print(f"[*] 产物根此前不存在，已按默认语义自动创建: {PRODUCTS_ROOT}")
+        except OSError as err:
+            raise AssertionError(f"产物根不存在且无法创建: {PRODUCTS_ROOT}（{err}）")
 
 
 def check_products_root_resolution():
-    """产物根解析：与拆分前的锚点等价（<home>/output），且不随当前工作目录漂移。"""
-    expected = HOME_ROOT / "output"
-    assert PRODUCTS_ROOT == expected, f"产物根解析异常: {PRODUCTS_ROOT} != {expected}"
-    assert _paths.resolve_base_dir(None) == expected, "空 --base-dir 未解析到产物根"
-    assert _paths.resolve_base_dir("") == expected, "空字符串 --base-dir 未解析到产物根"
-    assert _paths.default_base_dir() == str(expected), "default_base_dir 与产物根不一致"
-    # manifest 相对路径基准 = 容器根，因此历史 `output/<task>/...` 字面值继续有效
-    probe = expected / "__probe__" / "模块01_甲_精读全书.md"
+    """产物根解析：与拆分前的锚点等价（<home>/output），且不随当前工作目录漂移。
+
+    `$BVB_OUTPUT_DIR` 是**受支持的显式覆盖**（SKILL.md / README 都写明），
+    此时不再要求「等价于 <home>/output」，只要求解析结果自洽。
+    """
+    if _paths.describe()["products_from_env"]:
+        print(f"       (产物根由 ${_paths.ENV_OUTPUT_DIR} 覆盖，跳过「等价于 <home>/output」断言)")
+    else:
+        expected = HOME_ROOT / "output"
+        assert PRODUCTS_ROOT == expected, f"产物根解析异常: {PRODUCTS_ROOT} != {expected}"
+    assert _paths.resolve_base_dir(None) == PRODUCTS_ROOT, "空 --base-dir 未解析到产物根"
+    assert _paths.resolve_base_dir("") == PRODUCTS_ROOT, "空字符串 --base-dir 未解析到产物根"
+    assert _paths.default_base_dir() == str(PRODUCTS_ROOT), "default_base_dir 与产物根不一致"
+    # manifest 相对路径基准 = 容器根，因此历史 `output/<task>/...` 字面值继续有效。
+    # 这里钉的是**字面 `output/` 路径**，与产物根是否被 $BVB_OUTPUT_DIR 覆盖无关。
+    probe = HOME_ROOT / "output" / "__probe__" / "模块01_甲_精读全书.md"
     assert _paths.__name__ and str(probe.relative_to(HOME_ROOT).as_posix()).startswith("output/")
 
     # 跨工作目录一致性：从临时目录跑一次 CLI，产物根必须仍是同一个
@@ -116,7 +152,8 @@ def check_products_root_resolution():
             cwd=tmp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
         )
         got = (res.stdout or "").strip().splitlines()[-1] if res.stdout else ""
-        assert got == str(expected), f"从其它工作目录解析出的产物根不一致: {got!r}"
+        # 与 PRODUCTS_ROOT 比对（而不是 <home>/output）：$BVB_OUTPUT_DIR 覆盖时前者才是权威值。
+        assert got == str(PRODUCTS_ROOT), f"从其它工作目录解析出的产物根不一致: {got!r}"
 
 
 def check_no_cross_repo_imports():
@@ -271,8 +308,6 @@ def check_zero_transcript_pipeline():
 
 
 def check_subprocess_timeouts():
-    """bili-video2book 侧所有 ffmpeg/ffprobe 调用必须有硬超时。"""
-def check_subprocess_timeouts():
     """子进程契约：所有外部程序调用都必须 (1) 走 run_quiet（抑制 Windows 控制台窗口）
     且 (2) 带硬超时；源码里不得再出现裸 subprocess.run / Popen。
 
@@ -374,15 +409,23 @@ def check_host_artifacts_ignored():
         assert name in ignore, f"{name} 未被 skill/.gitignore 覆盖（安全网缺失）"
 
     repos = [SKILL_ROOT] + ([HOME_ROOT / "mcp"] if (HOME_ROOT / "mcp" / ".git").is_dir() else [])
-    for repo in repos:
-        tracked = run_quiet(
-            ["git", "ls-files", "--", ".workbuddy", ".aide", ".zcode", "output", ".sessdata.json", ".archive"],
-            cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, timeout=60,
-        )
-        assert not tracked.stdout.strip(), \
-            f"{repo.name} 仓库纳入了宿主旁路目录/产物: {tracked.stdout.strip()}"
 
-    # 结构事实：这些目录都在容器根（两仓库工作树之外）
+    if not _HAS_GIT:
+        print("       (未找到 git 命令，跳过「旁路目录/产物未入库」的 git 校验)")
+    else:
+        for repo in repos:
+            tracked = run_quiet(
+                ["git", "ls-files", "--", ".workbuddy", ".aide", ".zcode", "output", ".sessdata.json", ".archive"],
+                cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, timeout=60,
+            )
+            assert not tracked.stdout.strip(), \
+                f"{repo.name} 仓库纳入了宿主旁路目录/产物: {tracked.stdout.strip()}"
+
+    # 「旁路目录位于容器根」只在**容器布局**下才是结构事实：独立克隆时容器根根本不存在。
+    if not _paths.is_container_layout():
+        print(f"       (未检测到容器布局标记，跳过「旁路目录位于容器根」断言: home={HOME_ROOT})")
+        return
+
     for name in (".workbuddy", ".zcode", "output"):
         assert (HOME_ROOT / name).exists() or name == ".zcode", f"容器根缺少 {name}"
         for repo in repos:
@@ -637,6 +680,9 @@ def check_sessdata_store_safety():
     assert store_path().name == DEFAULT_STORE_NAME
     assert store_path().parent == PRODUCTS_ROOT, \
         f"凭证存档不在产物根: {store_path()} (期望目录 {PRODUCTS_ROOT})"
+    if not _HAS_GIT:
+        print("       (未找到 git 命令，跳过「凭证未入库」的 git 校验)")
+        return
     for repo in (SKILL_ROOT, HOME_ROOT / "mcp"):
         if not (repo / ".git").is_dir():
             continue
@@ -662,9 +708,10 @@ def check_cache_paths_anchored():
         assert PRODUCTS_ROOT in p.parents, f"{label}路径未锚定产物根: {p}"
         assert SKILL_ROOT not in p.parents, f"{label}路径落在了代码仓库内: {p}"
 
-    # 显式传入的相对路径按容器根解析（兼容拆分前的 `output/.wbi_keys.json` 写法）
+    # 显式传入的相对路径按**容器根**解析（兼容拆分前的 `output/.wbi_keys.json` 写法）。
+    # 注意这是字面路径语义：`$BVB_OUTPUT_DIR` 覆盖产物根时，两者的落点并不相同。
     legacy = WbiSigner._解析密钥文件路径("output/.wbi_keys.json")
-    assert legacy == PRODUCTS_ROOT / ".wbi_keys.json", f"旧式相对路径解析异常: {legacy}"
+    assert legacy == HOME_ROOT / "output" / ".wbi_keys.json", f"旧式相对路径解析异常: {legacy}"
 
 
 def check_render_compat_rules():
@@ -920,6 +967,7 @@ def check_deliverable_lint_gate():
 
     这是「只在提示词里喊口号、没人验货」的补丁：提示词规则容易被改回，产物指标不会说谎。
     """
+    from src.core import fsutil
     from src.core.deliverable_lint import lint_render, summarize_render
     from src.core.task_cleanup import find_workspaces
 
@@ -930,7 +978,8 @@ def check_deliverable_lint_gate():
 
     alerts = unbalanced = 0
     for ws in workspaces:
-        for path in ws.root_dir.rglob("*.md"):
+        # 递归走 fsutil：工作区里若混入 Windows 不受信任的装入点，rglob 会整体抛 OSError。
+        for path in fsutil.iter_files(ws.root_dir, "*.md", skip_hidden_dirs=True):
             try:
                 rel_parents = path.relative_to(ws.root_dir).parts[:-1]
             except ValueError:
@@ -1173,6 +1222,96 @@ def check_manifest_paths_portable():
             f"textbooks 落盘形态异常: {payload['textbooks']}"
         assert payload["knowledge_blocks_results"][0]["note_file"] == TaskWorkspace.to_relative(raw["note_file"]), \
             f"note_file 落盘形态异常: {payload['knowledge_blocks_results'][0]['note_file']}"
+
+
+# 3.9+ 才提供的标准库接口（文本级拦截：这些调用在 3.8 上只是 AttributeError/ImportError，
+# 语法解析层看不见，必须单独点名）。
+_PY38_FORBIDDEN_APIS = (
+    "removeprefix(",
+    "removesuffix(",
+    "is_relative_to(",
+    "functools.cache",
+    "math.lcm",
+    "ast.unparse",
+    "itertools.pairwise",
+    "graphlib",
+    "zoneinfo",
+    "tomllib",
+)
+
+# 小写内置泛型下标（`list[str]` / `dict[str, int]`）需 3.9+ 才能在注解位求值。
+_PY38_LOWER_GENERIC_ROOTS = frozenset({"list", "dict", "set", "tuple", "frozenset", "type"})
+
+
+def check_python38_syntax_compat():
+    """Python 3.8+ 兼容性门禁：把 SKILL.md / README 的版本承诺变成可复算断言。
+
+    SKILL.md 抬头与 README 徽章都写着 `Python 3.8+`，但此前没有任何机器断言拦住
+    「顺手用了 3.9/3.10+ 的写法」——承诺只能靠人记住。这里分三层守：
+
+    1. **语法层**：全仓 `src/` 与 `scripts/` 用 `ast.parse(feature_version=(3, 8))` 解析，
+       `match`（3.10+）、`except*`（3.11+）这类新语法当场暴露；
+    2. **注解层**：`list[str]` 与 `int | None` 在 3.8 里**语法合法**、只在求值时炸，
+       因此单独遍历注解位（形参 / 返回值 / 变量标注）拦截；
+    3. **接口层**：文本点名 3.9+ 才有的标准库函数（`str.removeprefix` / `functools.cache`
+       / `Path.is_relative_to` 等）。
+
+    `selfcheck.py` 自身豁免第 3 层：上面那份「禁用清单」的字面量就写在它里面。
+    """
+    import ast as _ast
+
+    syntax_hits = []
+    annotation_hits = []
+    api_hits = []
+
+    targets = []
+    for 子目录 in ("src", "scripts"):
+        targets.extend(sorted((SKILL_ROOT / 子目录).rglob("*.py")))
+
+    for path in targets:
+        if "__pycache__" in path.parts:
+            continue
+        rel = path.relative_to(SKILL_ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+
+        try:
+            tree = _ast.parse(text, feature_version=(3, 8))
+        except SyntaxError as err:
+            syntax_hits.append(f"{rel}:{err.lineno}: {err.msg}")
+            continue
+
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.arg):
+                annotation = node.annotation
+            elif isinstance(node, _ast.AnnAssign):
+                annotation = node.annotation
+            elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                annotation = node.returns
+            else:
+                continue
+            if annotation is None:
+                continue
+            for sub in _ast.walk(annotation):
+                if isinstance(sub, _ast.Subscript):
+                    base = sub.value
+                    if isinstance(base, _ast.Name) and base.id in _PY38_LOWER_GENERIC_ROOTS:
+                        annotation_hits.append(
+                            f"{rel}:{sub.lineno}: 小写内置泛型 `{base.id}[...]`（需 3.9+）")
+                elif isinstance(sub, _ast.BinOp) and isinstance(sub.op, _ast.BitOr):
+                    annotation_hits.append(
+                        f"{rel}:{sub.lineno}: PEP 604 联合写法 `X | Y`（需 3.10+）")
+
+        if path.name == "selfcheck.py":
+            continue  # 禁用清单的字面量就在本文件里，跳过第 3 层文本扫描
+        for needle in _PY38_FORBIDDEN_APIS:
+            if needle in text:
+                api_hits.append(f"{rel}: 出现 `{needle}`（需 3.9+）")
+
+    assert 3 <= len(targets), f"扫描范围异常，只找到 {len(targets)} 个源文件"
+    assert not syntax_hits, "存在 Python 3.8 无法解析的语法:\n      " + "\n      ".join(syntax_hits)
+    assert not annotation_hits, "注解里使用了 3.8 不支持的写法:\n      " + "\n      ".join(annotation_hits)
+    assert not api_hits, "使用了 3.9+ 才提供的标准库接口:\n      " + "\n      ".join(api_hits)
+    assert sys.version_info >= (3, 8), f"解释器版本低于声明的 3.8: {sys.version.split()[0]}"
 
 
 def check_no_hardcoded_machine_paths():
@@ -1474,6 +1613,59 @@ def check_two_pass_planning_contract():
             "成品已落盘的笔记任务书被误删"
 
 
+def check_fsutil_contract():
+    """文件系统健壮性契约：不可访问的条目必须降级为「跳过」，绝不抛异常。
+
+    背景（实测）：产物根里一个 Windows「不受信任的装入点」会让 `Path.is_dir()` 抛
+    `OSError(WinError 448)`——`Path.exists()` 会吞掉该错误，`is_dir()` / `stat()` /
+    `rglob()` 不会。原实现因此在枚举产物根第一层时就整轮失败，cleanup / sync /
+    两个质检脚本与自检里的真实产物门禁**集体失明**。
+
+    这里把 `fsutil` 的降级语义钉死，防止有人把调用点改回裸 `Path.is_dir()` / `stat()`。
+    """
+    import tempfile
+
+    from src.core import fsutil
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        missing = base / "__definitely_missing__"
+
+        # 1) 不可访问 / 不存在的路径：一律降级，不抛
+        assert fsutil.is_dir(missing) is False, "fsutil.is_dir 对不存在的路径应返回 False"
+        assert fsutil.file_size(missing) == 0, "fsutil.file_size 对不存在的路径应返回 0"
+        assert list(fsutil.iter_child_dirs(missing)) == [], \
+            "iter_child_dirs 对不可访问目录应产出空序列而不是抛错"
+        assert list(fsutil.iter_files(missing, "*.md")) == [], \
+            "iter_files 对不可访问目录应产出空序列而不是抛错"
+        assert fsutil.is_reparse_point(missing) is True, \
+            "不可访问的路径应按「不可遍历」处理（返回 True）"
+
+        # 2) 正常目录：子目录可枚举、隐藏目录按开关过滤、文件按 pattern 命中
+        (base / "ws" / "articles").mkdir(parents=True)
+        (base / ".hidden").mkdir()
+        (base / "ws" / "articles" / "P01_x_精读文章.md").write_text("x" * 10, encoding="utf-8")
+        (base / "ws" / "articles" / "P01_x_TASK.md").write_text("x" * 10, encoding="utf-8")
+
+        assert [p.name for p in fsutil.iter_child_dirs(base, skip_hidden=True)] == ["ws"], \
+            "skip_hidden=True 时应只枚举非隐藏子目录"
+        assert sorted(p.name for p in fsutil.iter_child_dirs(base)) == [".hidden", "ws"], \
+            "默认应枚举全部子目录"
+        found = sorted(p.name for p in fsutil.iter_files(base, "*.md"))
+        assert found == ["P01_x_TASK.md", "P01_x_精读文章.md"], f"iter_files 命中异常: {found}"
+
+        # 3) 符号链接 / 重解析点（若当前环境允许创建）：必须被跳过，不得被跟随两次
+        link = base / "link_to_ws"
+        try:
+            os.symlink(base / "ws", link, target_is_directory=True)
+        except (OSError, NotImplementedError, AttributeError):
+            print("       (当前环境不允许创建符号链接，跳过「链接被跳过」的实测)")
+        else:
+            assert fsutil.is_reparse_point(link) is True, "符号链接应被识别为重解析点"
+            assert link.name not in [p.name for p in fsutil.iter_child_dirs(base)], \
+                "iter_child_dirs 必须跳过符号链接（否则同一工作区会被枚举两次）"
+
+
 def main():
     print("=" * 62)
     print("bili-video2book 技能仓库自检（四域分离：skill / mcp / mcp-ext / output）")
@@ -1511,6 +1703,8 @@ def main():
     check("质检文档口径与门禁一致", check_quality_gate_copy)
     check("清单路径可移植（无绝对路径落盘）", check_manifest_paths_portable)
     check("源码无硬编码本机路径", check_no_hardcoded_machine_paths)
+    check("Python 3.8 语法与接口兼容（无 3.9+ 构造）", check_python38_syntax_compat)
+    check("文件系统健壮性契约（坏链接只跳过不崩）", check_fsutil_contract)
     check("阶段一派发纪律已写入文档", check_dispatch_discipline_documented)
     check("派发载荷与台账契约", check_dispatch_payload_shape)
     check("本轮修复项回归", check_regression_fixes)

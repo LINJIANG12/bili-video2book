@@ -13,7 +13,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.cli import main
+from src.core.console import enable_utf8_console  # noqa: E402
+from src.cli import main  # noqa: E402
+
+# 控制台硬化：与 src/cli.py 入口保持一致（管道捕获时不再因非 ASCII 符号编码失败而崩溃）
+enable_utf8_console()
 
 if __name__ == "__main__":
     main()

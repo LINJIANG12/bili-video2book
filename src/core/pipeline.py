@@ -28,6 +28,7 @@ from src.core.fetcher import AudioFetcher
 from src.core.audio_chunker import AudioChunker
 from src.core.workspace import TaskWorkspace, sanitize_filename
 from src.core.kernel_extractor import KernelExtractor
+from src.core import fsutil
 from src.core import paths as _paths
 from src.generator.block_synthesizer import BlockSynthesizer
 from src.generator.prompt_templates import ArticlePromptTypeError
@@ -255,9 +256,11 @@ def _offline_candidate_dirs(out_base: Path, bvid: str, custom_task: Optional[str
     if custom_task:
         cands.append(out_base / TaskWorkspace.sanitize_name(custom_task))
     if out_base.exists():
-        found = [p for p in out_base.glob(f"*{bvid}*") if p.is_dir()]
+        # 这里遍历的是**产物根第一层**：`Path.is_dir()` 遇到 Windows「不受信任的装入点」
+        # 会抛 OSError，让离线自愈整体失败。走 fsutil 的安全判定，坏条目跳过即可。
+        found = [p for p in out_base.glob(f"*{bvid}*") if fsutil.is_dir(p)]
         if not found and len(bvid) > 6:
-            found = [p for p in out_base.glob(f"*{bvid[:6]}*") if p.is_dir() and _has_content(p)]
+            found = [p for p in out_base.glob(f"*{bvid[:6]}*") if fsutil.is_dir(p) and _has_content(p)]
         cands.extend(found)
     # 目录名里连 BV 号（或其前缀）都没有的工作区**无法**由 BV 号唯一确定：实测同一输出根下
     # 确有两个名字都不含 BV 号的 80 字符截断目录（NLP 课与另一门），任何按名字的猜法都会在
