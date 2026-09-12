@@ -46,9 +46,10 @@ from src.core.pipeline import (
     export_article_task,
     get_audio_stream,
     parse_range_string,
+    resolve_course_title,
+    resolve_scope_parts,
     resolve_target_info,
 )
-from src.generator.topic_planner import SemanticTopicPlanner
 from src.generator.block_synthesizer import BlockSynthesizer
 
 
@@ -203,6 +204,25 @@ def cmd_parse(args):
             print(f"  ... 剩余 {len(info['season_episodes']) - args.limit} 个稿件已省略")
 
 
+def _persist_parts_cache(ws, entries) -> None:
+    """把本命令见过的分集拓扑并进工作区 `parts.json`（局部运行**只补不缩**）。
+
+    为什么要有这个：`parts.json` 是「工作区到底有哪几集」的唯一事实，`cluster-notes` /
+    `cluster-articles` 都拿它当集号基准。只有 `pipeline` 写它的话，`audio` 单独跑出来的
+    音频就成了「磁盘有、拓扑无」的孤儿，后续命令只能回退到在线全集取基准。
+    """
+    try:
+        clean = [
+            {k: v for k, v in e.items() if not k.startswith("_") and k in ("page", "title", "cid", "duration")}
+            for e in (entries or [])
+            if isinstance(e, dict) and e.get("page") is not None
+        ]
+        if clean:
+            ws.save_parts(TaskWorkspace.merge_parts(ws.load_parts(), clean))
+    except Exception as err:
+        print(f"[!] 分集拓扑缓存写入已跳过: {err}", file=sys.stderr)
+
+
 def cmd_audio(args):
     info = resolve_target_info(args.url, sessdata=args.sessdata, custom_task=args.task, base_dir=args.base_dir)
     bvid = info["bvid"]
@@ -315,6 +335,10 @@ def cmd_audio(args):
                 manifest_items.append(f.result())
         manifest_items.sort(key=lambda x: x["page"])
 
+        # 分集拓扑落盘：不写的话，本命令下载的音频会变成「磁盘有、拓扑无」的孤儿，
+        # 后续命令只能回退到在线全集取集号基准。
+        _persist_parts_cache(ws, manifest_items)
+
         # 中文注释：保存时相对路径化
         _save_manifest_rel(ws, {
             "bvid": bvid,
@@ -376,6 +400,12 @@ def cmd_audio(args):
         )
         print(f"[✓] 音频下载完成: {saved_path}")
 
+    # 单集模式同样落分集拓扑（与既有拓扑合并，只补不缩）
+    _persist_parts_cache(
+        ws,
+        [info["parts"][target_part - 1]] if info.get("has_multi_pages") else (info.get("parts") or [])[:1],
+    )
+
     chunks_manifest = []
     if args.chunk_minutes > 0:
         print(f"[*] 正在使用 FFmpeg 进行无损音频切片（每切片 {args.chunk_minutes} 分钟）...")
@@ -400,7 +430,7 @@ def cmd_audio(args):
 
 
 def cmd_transcribe(args):
-    # 中文注释：零中间逐字稿 —— 直接导出单集精读文章任务书（已存在长文则视为完成）。
+    # 中文注释：单集直出长文 —— 直接导出单集精读文章任务书（已存在长文则视为完成）。
     target_p = Path(args.target).resolve()
     if target_p.exists() and target_p.is_file():
         ws0 = TaskWorkspace.create(title=target_p.stem, bvid="", custom_name=args.task, base_dir=args.base_dir)
@@ -419,13 +449,13 @@ def cmd_transcribe(args):
             ws0, 1, target_p.stem, target_p, title=target_p.stem,
             article_type=_confirm_article_prompt_style(args),
         )
-        print(f"[✓] 已导出单集精读文章任务书（零中间逐字稿，听音后直接撰写）: {tf} (status=need-agent-article)")
+        print(f"[✓] 已导出单集精读文章任务书（单集直出长文，听音后直接撰写）: {tf} (status=need-agent-article)")
         return
 
     # Polymorphically resolve metadata (Local directory course or Bilibili URL/BVID)
     info = resolve_target_info(args.target, sessdata=args.sessdata)
     bvid = info["bvid"]
-    ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
+    ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir, info_name=info.get("workspace_name"))
 
     target_part = 1
     target_cid = info["cid"]
@@ -473,7 +503,7 @@ def cmd_transcribe(args):
         ws, target_part, clean_p_title, audio_file, title=info["title"], cid=target_cid,
         article_type=_confirm_article_prompt_style(args),
     )
-    print(f"[✓] 已导出单集精读文章任务书（零中间逐字稿，听音后直接撰写）: {tf} (status=need-agent-article)")
+    print(f"[✓] 已导出单集精读文章任务书（单集直出长文，听音后直接撰写）: {tf} (status=need-agent-article)")
 
 
 def cmd_pipeline(args):
@@ -508,27 +538,30 @@ def cmd_cluster_notes(args):
         base_dir=getattr(args, "base_dir", None),
     )
     bvid = info["bvid"]
-    ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
+    ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir, info_name=info.get("workspace_name"))
+
+    # 集号基准以工作区为准（在线解析只用于首次建工作区），标题同理（离线也拿得到）
+    parts = resolve_scope_parts(info, ws)
+    course_title = resolve_course_title(info, ws)
 
     print("=" * 65)
-    print(f"[*] 启动知识块智能聚合重构流水线 (Knowledge-Block Aggregation)")
-    print(f"[*] 课程标题: 《{info['title']}》 (共 {len(info['parts'])} 个分集)")
+    print(f"[*] 启动两趟语义聚合流水线（模块规划 → 笔记归并）")
+    print(f"[*] 课程标题: 《{course_title}》 (共 {len(parts)} 个分集)")
     print(f"[*] 任务工作区: {ws.root_dir}")
     print("=" * 65)
 
-    # 1. Semantic Topic Planner：规划由宿主 Agent 语义产出（零本地关键词聚类）
-    print(f"\n[Phase 1/2] 收集语料摘要并校验知识块规划...")
+    # 语料摘要：仅供第一趟规划提示词参考（长文开头优先，逐字稿次之）
     summaries = {}
-    for p in info["parts"]:
-        p_num = p["page"]
+    for p in parts:
+        p_num = int(p["page"])
         art = KernelExtractor.find_article(ws, p_num)
         if art is not None:
             try:
                 summaries[p_num] = art.read_text(encoding="utf-8")[:400]
             except Exception:
                 pass
-    for p in info["parts"]:
-        p_num = p["page"]
+    for p in parts:
+        p_num = int(p["page"])
         if p_num in summaries:
             continue
         clean_t = sanitize_filename(p["title"])
@@ -543,90 +576,50 @@ def cmd_cluster_notes(args):
         print("=" * 65)
         sys.exit(2)
 
-    plan = SemanticTopicPlanner.plan(
-        info["parts"],
-        course_title=info["title"],
-        ws=ws,
-        force=args.force_plan,
+    # 过滤：--block-id / --start-block / --end-block 按**笔记序号**筛选（参数名保留兼容）
+    _filter_active = bool(args.block_id or args.start_block or args.end_block)
+
+    def _selected(note):
+        note_id = int(note.get("note_id") or 0)
+        if args.block_id:
+            return note_id == args.block_id
+        if args.start_block or args.end_block:
+            s_n = args.start_block or 1
+            e_n = args.end_block or 10**9
+            return s_n <= note_id <= e_n
+        return True
+
+    outcome = BlockSynthesizer.dispatch_notes(
+        ws,
+        parts,
+        course_title=course_title,
+        force=args.force,
+        force_plan=args.force_plan,
         transcript_summaries=summaries,
+        use_kernel_index=getattr(args, "kernel_index", False),
+        # 全量派发时才传 None：分批派发下「本轮没派到的任务书」仍是有效待办，
+        # 传个恒真函数会让下游误以为本轮就是全部，从而把待办当废纸清掉。
+        select=_selected if _filter_active else None,
     )
-    if not plan:
-        print("=" * 65)
-        print("[!] 知识块规划尚未产出：已导出规划任务书，等待宿主 Agent 完成语义规划。")
-        print(f"[*] 任务书   : {ws.root_dir / 'topic_plan_TASK.md'}")
-        print(f"[*] 目标文件 : {ws.root_dir / 'topic_plan.json'}")
-        print("[*] 完成后重跑本命令即可继续（校验通过会自动复用）。")
-        print("=" * 65)
-        sys.exit(2)
-
-    print(f"[✓] 知识块规划已就绪，共 {len(plan)} 个逻辑知识块:")
-    for b in plan:
-        eps = b["episodes"]
-        p_str = f"P{min(eps):02d}-P{max(eps):02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
-        print(f"    - 模块 {b['block_id']:02d} ({p_str}): {b['block_title']}")
-
-    # Clean old single-episode notes if replace requested (safely backed up first)
-    if args.replace:
-        # 1.7 之前遗留的旧版单集笔记（模块笔记上线前的产物），原地替换为模块大笔记
-        old_single_notes = list(ws.notes_dir.glob("P[0-9][0-9]_*_笔记.md"))
-        if old_single_notes:
-            backup_dir = ws.notes_dir / ".backup_single_notes"
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            print(f"\n[*] 正在备份并清理 {len(old_single_notes)} 篇旧版单集笔记（已备份至 {backup_dir.name}，原地替换为模块大笔记）...")
-            for f in old_single_notes:
-                try:
-                    shutil.copy2(f, backup_dir / f.name)
-                    f.unlink()
-                except OSError:
-                    pass
-
-    # Filter blocks if block_id or range specified
-    target_blocks = plan
-    if args.block_id:
-        target_blocks = [b for b in plan if b["block_id"] == args.block_id]
-    elif args.start_block or args.end_block:
-        s_b = args.start_block or 1
-        e_b = args.end_block or len(plan)
-        target_blocks = [b for b in plan if s_b <= b["block_id"] <= e_b]
-
-    # 2. 模块笔记派发：语料门禁 = 本模块各集单集精读长文齐备（知识元已降级为可选索引）
-    print(f"\n[Phase 2/2] 逐模块导出模块笔记任务书 (待处理 {len(target_blocks)} 个知识块；笔记只有一种风格)...")
-    block_results = []
-    for b in target_blocks:
-        b_id = b["block_id"]
-        eps = b["episodes"]
-        p_str = f"P{min(eps):02d}-P{max(eps):02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
-        print(f"\n▶ 正在处理模块 {b_id:02d} ({p_str}): 《{b['block_title']}》...")
-
-        block_parts = [p for p in info["parts"] if p["page"] in eps]
-        articles, missing = BlockSynthesizer.collect_block_articles(block_parts, ws)
-        if missing:
-            missing_str = ", ".join(f"P{m:02d}" for m in missing)
-            print(f"    [gate] 本模块尚有 {len(missing)} 集无单集精读长文（{missing_str}），跳过笔记派发")
-            print(f"    [gate] 请先让 Agent 补齐 articles/ 后再重跑本命令（已产出的模块会自动复用）")
-            continue
-        print(f"    [✓] 语料齐备：已锁定 {len(articles)} 篇单集精读长文")
-
-        kernel_index = None
-        if getattr(args, "kernel_index", False):
-            kernels = KernelExtractor.extract_batch_kernels(block_parts, ws=ws)
-            kernel_index = [k for k in kernels if k.get("status") == "extracted"] or None
-            if kernel_index:
-                print(f"    [i] --kernel-index 已开启：注入 {len(kernel_index)} 条知识元索引（仅供参考定位）")
-
-        res = BlockSynthesizer.synthesize_block(
-            b, articles, ws=ws, force=args.force, kernel_index=kernel_index
-        )
-        block_results.append(res)
 
     # 加载转绝对、保存转相对（TaskWorkspace 原生支持）
     manifest = ws.load_manifest(absolute=True)
-    manifest["knowledge_blocks_plan"] = plan
-    manifest["knowledge_blocks_results"] = block_results
+    if outcome["block_status"] != "placeholder":
+        # 占位切分不入账：integrator 会拿 manifest 里的规划当兜底分组依据，
+        # 把占位块写进去等于让教材也按占位边界分章。
+        manifest["knowledge_blocks_plan"] = outcome["blocks"]
+        manifest["note_plan"] = outcome["notes"]
+        manifest["knowledge_blocks_results"] = outcome["results"]
     ws.save_manifest(manifest)
 
     print("\n" + "=" * 65)
-    print(f"[✓] 知识块聚合重构执行完毕！共导出 {len(block_results)} 份模块笔记任务书")
+    _gen = sum(1 for r in outcome["results"] if r.get("status") == "generated")
+    _cached = len(outcome["results"]) - _gen
+    if outcome.get("note_status") == "deferred":
+        print(f"[✓] 本命令已正常结束（未派发笔记）：待 Agent 完成第一趟模块规划后重跑。")
+    else:
+        print(f"[✓] 两趟语义聚合执行完毕！{len(outcome['blocks'])} 个模块 → {len(outcome['notes'])} 篇笔记")
+        print(f"[✓] 已导出 {_gen} 份笔记任务书（另有 {_cached} 篇成品已存在，跳过派发）")
     print(f"[✓] 任务书目录: {ws.notes_dir}")
     print("=" * 65)
 
@@ -642,18 +635,22 @@ def cmd_cluster_articles(args):
         base_dir=getattr(args, "base_dir", None),
     )
     bvid = info["bvid"]
-    ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
+    ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir, info_name=info.get("workspace_name"))
+
+    # 集号基准与标题都以工作区为准（在线解析只用于首次建工作区，离线也拿得到）
+    parts = resolve_scope_parts(info, ws)
+    course_title = resolve_course_title(info, ws)
 
     print("=" * 65)
     print(f"[*] 启动单集精读教材整编模块全书流水线 (Modular Textbook Integration)")
-    print(f"[*] 课程标题: 《{info['title']}》 (共 {len(info['parts'])} 个分集)")
+    print(f"[*] 课程标题: 《{course_title}》 (共 {len(parts)} 个分集)")
     print(f"[*] 任务工作区: {ws.root_dir}")
     print(f"[*] 目标教材目录: {ws.root_dir / 'textbooks'}")
     print("=" * 65)
 
     integrator = ArticleIntegrator(ws.root_dir)
     force = bool(getattr(args, "force", False))
-    results = integrator.run(course_title=info["title"], force=force)
+    results = integrator.run(course_title=course_title, force=force, parts=parts)
 
     # Update manifest（textbooks 属列表型路径字段，save_manifest 会自动反向相对化）
     manifest = ws.load_manifest(absolute=True)
@@ -679,7 +676,7 @@ def cmd_dedup(args):
         base_dir=getattr(args, "base_dir", None),
     )
     bvid = info["bvid"]
-    ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir)
+    ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir, info_name=info.get("workspace_name"))
 
     print("=" * 65)
     print(f"[*] 启动音频 SHA-256 指纹去重扫描流水线 (Audio Fingerprint Deduplication)")
@@ -809,8 +806,6 @@ def cmd_logout(args):
 
 def cmd_info(args):
     """中文注释：做实 info：WBI 有效期/sessdata 有无/412 状态/断点续跑示例。"""
-    import shutil
-    import sys
     import time as _time
     if getattr(args, "refresh", False):
         try:
@@ -872,12 +867,11 @@ def cmd_info(args):
     print("=" * 65)
     print("【Agent 自主驱动工作协议】：")
     print("0. 类型判定（工作流第一步）: 依课程标题/分集标题判定长文类型，未命中已提供提示词的类型即终止任务")
-    print("   - 当前已提供提示词：learning（学习类：系统网课/公开课/讲座）")
     print("1. 物理层跑批: python src/cli.py pipeline \"<链接>\" --all --article-type learning")
     print("   - 长文提示词风格由用户确认：learning=学习（推荐）/ legacy=旧版；不确认即终止任务")
     print("2. 语料与任务书自动生成于 output/<任务名>/")
     print("   - articles/PXX_*_TASK.md: 单集精读文章提示词")
-    print("   - notes/模块XX_*_TASK.md: 知识块聚合复习笔记提示词")
+    print("   - notes/笔记XX_*_TASK.md: 知识块聚合复习笔记提示词")
     print("3. 宿主 Agent 主程序以 5 个并发通道（Task子代理或并行生成）读取任务书，直接撰写落盘！")
     print("=" * 65)
     print("【可复制的断点续跑命令示例】：")
@@ -885,9 +879,6 @@ def cmd_info(args):
     print('python src/cli.py pipeline "<链接>" --all --article-type learning')
     print('python src/cli.py pipeline "<链接>" --range 1-10 --article-type learning')
     print("=" * 65)
-
-
-cmd_agent_info = cmd_info
 
 
 def main():
@@ -953,8 +944,8 @@ def main():
              "另有 consulting/interview/review/livestream 四种形态已登记但提示词未提供，命中即终止。",
     )
 
-    # info / agent-info
-    p_info = subparsers.add_parser("info", aliases=["agent-info"], help="Show environment & toolchain readiness status")
+    # info
+    p_info = subparsers.add_parser("info", help="Show environment & toolchain readiness status")
     p_info.add_argument("--refresh", action="store_true", help="Clear cached status")
     # 中文注释：sessdata 仅显示来源与脱敏指纹
     p_info.add_argument("--sessdata", help="Optional SESSDATA cookie (only shows source & masked fingerprint)", default=None)
@@ -966,16 +957,15 @@ def main():
     subparsers.add_parser("logout", help="Remove the persisted SESSDATA")
 
     # cluster-notes
-    p_cl = subparsers.add_parser("cluster-notes", help="Cluster multi-P course into coherent knowledge block notes")
+    p_cl = subparsers.add_parser("cluster-notes", help="Two-pass semantic aggregation: plan modules, merge them into notes, dispatch note task-files")
     p_cl.add_argument("url", help="Bilibili URL or BV ID")
-    p_cl.add_argument("--block-id", type=int, default=None, help="Process specific block ID only")
-    p_cl.add_argument("--start-block", type=int, default=None, help="Start block ID")
-    p_cl.add_argument("--end-block", type=int, default=None, help="End block ID")
+    p_cl.add_argument("--block-id", type=int, default=None, help="Only process this note number (second-pass note id; legacy flag name)")
+    p_cl.add_argument("--start-block", type=int, default=None, help="Start note number")
+    p_cl.add_argument("--end-block", type=int, default=None, help="End note number")
     p_cl.add_argument("--task", default=None, help="Custom task workspace folder name")
     p_cl.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
-    p_cl.add_argument("--replace", action="store_true", default=False, help="Replace old single-episode notes in notes/ directory")
-    p_cl.add_argument("--force", action="store_true", help="Force re-exporting block task files even if they exist")
-    p_cl.add_argument("--force-plan", action="store_true", help="Force re-generating semantic topic plan")
+    p_cl.add_argument("--force", action="store_true", help="Force re-exporting note task-files even if they exist")
+    p_cl.add_argument("--force-plan", action="store_true", help="Force re-generating both semantic plans (topic_plan.json / note_plan.json)")
     p_cl.add_argument(
         "--kernel-index",
         action="store_true",
@@ -1045,7 +1035,6 @@ def main():
         "sync": cmd_sync,
         "login": cmd_login,
         "logout": cmd_logout,
-        "agent-info": cmd_agent_info,
         "info": cmd_info,
     }
     dispatch[args.subcommand](args)

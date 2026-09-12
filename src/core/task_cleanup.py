@@ -1,13 +1,13 @@
 """Task-file Reclaim: 回收已完成的派发任务书（*_TASK.md）。
 
-架构定位：任务书（`PXX_*_TASK.md` / `PXX_*_KERNEL_TASK.md` / `模块XX_*_TASK.md`）是工具层
+架构定位：任务书（`PXX_*_TASK.md` / `PXX_*_KERNEL_TASK.md` / `笔记XX_*_TASK.md`）是工具层
 写给宿主 Agent 的**临时派发物**；Agent 读完后把成品落到 `articles/` / `subtitles/kernels/` / `notes/`。旧版本只负责写、不负责收，于是任务书从第一门课
 堆到第 N 门课，目录里混着大量废纸，并且把 `queue_tracker` 的「模块笔记 N 部」计数也带偏了。
 
 本模块补齐「收」的这一半：
 - **只回收成品已落盘**的任务书；成品未产出的任务书一律保留；
 - 每个类别保留编号最小的 1 份作为**提示词范本**（供人/Agent 随时翻阅写法）；
-- `topic_plan_TASK.md` 全库唯一，永不回收。
+- `topic_plan_TASK.md` / `note_plan_TASK.md` 全库唯一，永不回收。
 """
 
 import re
@@ -22,14 +22,15 @@ CATEGORY_NOTES = "notes"
 CATEGORY_LABELS = {
     CATEGORY_ARTICLES: "单集文章任务书",
     CATEGORY_KERNELS: "知识元任务书",
-    CATEGORY_NOTES: "模块笔记任务书",
+    CATEGORY_NOTES: "笔记任务书",
 }
 
 # 成品体积门槛：与阶段一门禁一致，避免把空壳文件误判为成品
 MIN_PRODUCT_BYTES = 1000
 
 _EPISODE_RE = re.compile(r"^P(\d+)_")
-_MODULE_RE = re.compile(r"^模块(\d+)_")
+# 笔记任务书/成品统一为 `笔记XX_…`（两趟归并后的粒度）：旧命名「模块XX_…」已不再兼容
+_MODULE_RE = re.compile(r"^笔记(\d+)_")
 
 
 def _episode_no(name: str) -> Optional[int]:
@@ -52,7 +53,7 @@ def _iter_tasks(ws: Any, category: str) -> List[Path]:
             return []
         files = [f for f in kernels_dir.glob("P*_KERNEL_TASK.md") if _episode_no(f.name) is not None]
     elif category == CATEGORY_NOTES:
-        files = [f for f in ws.notes_dir.glob("模块*_TASK.md") if _module_no(f.name) is not None]
+        files = [f for f in ws.notes_dir.glob("笔记*_TASK.md") if _module_no(f.name) is not None]
     else:  # pragma: no cover - 防御式分支
         return []
 
@@ -92,12 +93,12 @@ def find_module_note(
     preferred_name: Optional[str] = None,
     min_bytes: int = MIN_PRODUCT_BYTES,
 ) -> Optional[Path]:
-    """定位某个模块**已落盘**的笔记成品（供复用判定与任务书回收共用）。
+    """定位某篇笔记**已落盘**的成品（供复用判定与任务书回收共用）。
 
     两级定位：
-    1. 先试规范文件名（工具层派发时约定的 `模块XX_<题名>_笔记.md`）；
-    2. 再按模块号前缀回退匹配 `模块XX_*.md`——历史工作区的成品可能叫别的名字
-       （如 `模块01_…_P01-P17_思维导图速查笔记.md`），只认规范名会误判为「无成品」并重复派发。
+    1. 先试规范文件名（工具层派发时约定的 `笔记XX_<题名>_笔记.md`）；
+    2. 再按编号前缀回退匹配 `笔记XX_*.md`——成品的后缀可能不是规范名，只认规范名
+       会误判为「无成品」并重复派发。
     """
     notes_dir = ws.notes_dir
     if preferred_name:
@@ -110,7 +111,7 @@ def find_module_note(
     if module_no is None:
         return None
     try:
-        candidates = sorted(notes_dir.glob(f"模块{int(module_no):02d}_*.md"))
+        candidates = sorted(notes_dir.glob(f"笔记{int(module_no):02d}_*.md"))
     except (OSError, ValueError):
         return None
     for candidate in candidates:
@@ -255,6 +256,7 @@ def find_workspaces(base_dir: Any = None) -> List[Any]:
         return []
 
     workspaces: List[Any] = []
+    seen: set = set()
     for child in sorted(base.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
             continue
@@ -263,8 +265,23 @@ def find_workspaces(base_dir: Any = None) -> List[Any]:
         if not (has_parts or has_artifacts):
             continue
         try:
+            # 链接（junction / 符号链接）跳过：它指向的工作区会被枚举两次，让 cleanup / sync /
+            # 质检脚本把同一门课算两遍（实测：一个手工建的 junction 让 5 个工作区变成 6 个）。
+            # is_junction 仅 3.12+ 提供，旧版本用能力探测降级为「只认符号链接」。
+            _is_junction = getattr(Path, "is_junction", None)
+            if child.is_symlink() or (_is_junction is not None and _is_junction(child)):
+                continue
+            # 同一真实路径只收一次（大小写、短路径等写法差异也归并掉）
+            key = str(child.resolve()).lower()
+            if key in seen:
+                continue
+            seen.add(key)
             # 直接绑定已存在目录（长目录名不会被 sanitize_name 截断）
             workspaces.append(TaskWorkspace.from_existing(child))
-        except Exception:
+        except OSError:
+            # 只吞真正的文件系统错误。**不要**用裸 except Exception：那会把「逻辑错误」
+            # 伪装成「这个目录跳过」，让整门课从枚举结果里凭空消失且毫无提示
+            # （实测：is_junction 在 3.12 以下抛 AttributeError，被吞掉后 find_workspaces
+            #  返回 0 个工作区，cleanup / sync / 质检脚本集体失明）。
             continue
     return workspaces

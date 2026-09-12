@@ -5,7 +5,8 @@
 ```text
 <home>/
 ├── skill/    本仓库：代码与文档（CLI、生成器、脚本）
-├── mcp/      独立仓库：omni-media MCP 服务（单向依赖：本仓库不 import 它）
+├── mcp/      独立仓库：omni-media（宿主原生听音版，read_audio）
+├── mcp-ext/  独立目录：omni-media-ext（外部模型代读版，read_media）
 └── output/   产物根：各任务工作区 + 运行时状态文件
 ```
 

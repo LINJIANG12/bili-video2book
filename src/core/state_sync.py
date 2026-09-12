@@ -93,7 +93,7 @@ def reconcile_workspace_manifest(
     effective_total = max(0, total - len(skipped_pages))
 
     # 整编完成证据：优先看权威规划文件；历史工作区（旧架构）没有 topic_plan.json，
-    # 但已有模块笔记与教材落盘，同样视为整编完成，不应被误判为「未完工」。
+    # 但已有笔记与教材落盘，同样视为整编完成，不应被误判为「未完工」。
     consolidation_evidence = plan is not None or total == 1 or (len(note_files) > 0 and len(textbook_files) > 0)
     completed = (
         effective_total > 0

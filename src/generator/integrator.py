@@ -72,7 +72,16 @@ class ArticleIntegrator:
             for ep in b.get("episodes", []):
                 all_eps.add(ep)
         if all_eps:
-            return [{"page": ep, "title": f"第{ep}讲"} for ep in sorted(all_eps)]
+            # 只认**磁盘上真有长文**的集号：规划可能是越界的旧版本（如工作区只有 P01–P87
+            # 而规划按 P01–P185 写的），照单全收会整出几十章「长文暂未生成」的空教材。
+            on_disk = {
+                int(re.match(r"P(\d+)_", f.name).group(1))
+                for f in self.articles_dir.glob("P*_*.md")
+                if not f.name.endswith("_TASK.md") and re.match(r"P(\d+)_", f.name)
+            }
+            usable = sorted(all_eps & on_disk) if on_disk else sorted(all_eps)
+            if usable:
+                return [{"page": ep, "title": f"第{ep}讲"} for ep in usable]
 
         return []
 
@@ -259,12 +268,14 @@ class ArticleIntegrator:
         out_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
         return out_path
 
-    def run(self, course_title: str, force: bool = False) -> List[Path]:
+    def run(self, course_title: str, force: bool = False, parts: Optional[List[dict]] = None) -> List[Path]:
         """Runs the complete module integration process.
 
         force=False（默认）时复用已存在的模块教材；force=True 时全部重新整编。
+        `parts` 显式传入时以它为准（CLI 已按「工作区 parts.json 优先」解析过集号基准），
+        免得这一层再去猜一遍工作区到底有哪几集。
         """
-        parts = self.load_parts()
+        parts = list(parts) if parts else self.load_parts()
         grouped = self.group_episodes_by_module(parts)
         results = []
         for idx, (mod_name, eps) in enumerate(grouped.items(), 1):

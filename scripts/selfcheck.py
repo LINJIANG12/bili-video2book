@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Minimal runnable self-check for the bili-video2book skill repo (三域分离后的技能侧自检).
+"""Minimal runnable self-check for the bili-video2book skill repo (四域分离后的技能侧自检).
 
 Not a test framework: a flat sequence of assertions covering the invariants that
 matter after the architecture refactor (Agent-native kernel/plan chain, zero
@@ -67,7 +67,7 @@ def check_cli_help():
 
 
 def check_repo_separation():
-    """三域分离契约：skill/ 与 mcp/ 各自独立仓库，产物根在两者之外，容器根不再是仓库。"""
+    """四域分离契约：skill/ 与 mcp/、mcp-ext/ 各自独立，产物根在它们之外，容器根不再是仓库。"""
     assert (SKILL_ROOT / ".git").is_dir(), "skill/ 应是独立 git 仓库（缺 .git）"
     assert (SKILL_ROOT / ".gitattributes").is_file(), "skill/ 缺少 .gitattributes（行尾契约）"
 
@@ -178,21 +178,73 @@ def check_kernel_extractor_contract():
 
 
 def check_topic_planner_contract():
-    """本地关键词聚类必须已移除，规划校验必须拒绝缺失/重复分集。"""
+    """本地关键词聚类必须已移除，规划校验必须拒绝缺失/重复分集。
+
+    覆盖基准是**实际集号**而不是序号：用户 `--range 9-87` 时工作区就是 P09–P87，
+    工具无权要求它重排成 1..79（旧实现如此，导致这类工作区的阶段二永久不可达）。
+    """
     from src.generator.topic_planner import SemanticTopicPlanner
 
     assert not hasattr(SemanticTopicPlanner, "fallback_heuristic_plan"), "启发式聚类应已删除"
     assert hasattr(SemanticTopicPlanner, "export_plan_task"), "export_plan_task 应已提供"
 
+    # 集号基准 = 实际集号集合（不再是「序号 1..N」）
     ok, _ = SemanticTopicPlanner.validate_plan(
-        [{"block_id": 1, "block_title": "A", "episodes": [1, 2]}], 2)
+        [{"block_id": 1, "block_title": "A", "episodes": [1, 2]}], [1, 2])
     assert ok, "完整覆盖应通过校验"
     bad, _ = SemanticTopicPlanner.validate_plan(
-        [{"block_id": 1, "block_title": "A", "episodes": [1]}], 2)
+        [{"block_id": 1, "block_title": "A", "episodes": [1]}], [1, 2])
     assert not bad, "缺失分集应被拒绝"
     dup, _ = SemanticTopicPlanner.validate_plan(
-        [{"block_id": 1, "block_title": "A", "episodes": [1, 1]}], 2)
+        [{"block_id": 1, "block_title": "A", "episodes": [1, 1]}], [1, 2])
     assert not dup, "重复分集应被拒绝"
+
+    # 新语义：非 1 起始的连续区间必须通过（这正是用户指定区间的场景）
+    pages = list(range(9, 88))  # 79 集，P09–P87
+    covered, msg = SemanticTopicPlanner.validate_plan(
+        [{"block_id": 1, "block_title": "A", "episodes": pages}], pages)
+    assert covered, f"覆盖 9..87 应通过：{msg}"
+    assert SemanticTopicPlanner.describe_pages(pages) == "P09–P87", \
+        SemanticTopicPlanner.describe_pages(pages)
+
+    # 把 9..87 重排成 1..79 必须被拒绝（缺失 P80–P87）
+    renumbered, msg = SemanticTopicPlanner.validate_plan(
+        [{"block_id": 1, "block_title": "A", "episodes": list(range(1, 80))}], pages)
+    assert not renumbered, "重排成 1..79 应被拒绝（那正是旧实现逼出来的错误做法）"
+    assert "P80–P87" in msg, msg
+
+    # parts.json 原样进法（列表 of dict）必须等价
+    as_parts = [{"page": p} for p in pages]
+    assert SemanticTopicPlanner.validate_plan(
+        [{"block_id": 1, "block_title": "A", "episodes": pages}], as_parts)[0], \
+        "parts 列表（含 page 字段）形式应被接受"
+
+    # 真洞：通过但提示缺口，不拦
+    gapped = [1, 2, 3, 4, 5, 9, 10, 11]
+    gap_ok, gap_msg = SemanticTopicPlanner.validate_plan(
+        [{"block_id": 1, "block_title": "A", "episodes": gapped}], gapped)
+    assert gap_ok and "缺 P06–P08" in gap_msg, gap_msg
+
+
+def check_docs_no_dangling_section_refs():
+    """文档不得引用**不存在的小节号**。
+
+    这条守的是一个真实踩过的坑：删掉 §7.4 之后，第 7 节的表格里仍写着「按 § 7.4 的
+    笔记规范产出」——读者与 Agent 都会去找一个不存在的小节。
+    """
+    import re as _re
+
+    for rel in ("SKILL.md", "references/delivery_matrix.md"):
+        text = (SKILL_ROOT / rel).read_text(encoding="utf-8")
+        # 该文件里真实存在的小节号（## / ### 标题里的编号）
+        existing = set(_re.findall(r"^#{2,3}\s+(\d+(?:\.\d+)*)\.?", text, _re.MULTILINE))
+        top = {num.split(".")[0] for num in existing}
+        for raw in _re.findall(r"§\s*(\d+(?:\.\d+)*)", text):
+            # `§ 5.3` 这类跨层引用：只要顶层小节存在即认（避免把「见 § 5 表格」判错）
+            head = raw.split(".")[0]
+            if raw in existing or head in top:
+                continue
+            raise AssertionError(f"{rel} 引用了不存在的小节号：§ {raw}")
 
 
 def check_integrator_no_hardcoded_course():
@@ -211,7 +263,7 @@ def check_integrator_no_hardcoded_course():
 
 
 def check_zero_transcript_pipeline():
-    """零中间逐字稿：文章任务书入口存在，旧的转录任务书入口必须已移除。"""
+    """单集直出长文：文章任务书入口存在，旧的转录任务书入口必须已移除。"""
     from src.core import pipeline
 
     assert hasattr(pipeline, "export_article_task"), "export_article_task 应已提供"
@@ -302,7 +354,7 @@ def check_dead_modules_removed():
         "MCP_TOOL_AUDIT_REPORT.md",
         "config.example.json",
         "scripts/validate_skill.py",
-        # 三域分离后，MCP 的实现不再属于本仓库（其死代码断言见 mcp/selfcheck.py）
+        # 四域分离后，MCP 的实现不再属于本仓库（其死代码断言见 mcp/selfcheck.py）
         "omni-media-mcp",
     ):
         assert not (SKILL_ROOT / rel).exists(), f"{rel} 应已删除"
@@ -311,7 +363,7 @@ def check_dead_modules_removed():
 def check_host_artifacts_ignored():
     """宿主/编辑器旁路目录与产物根都不得进入任一仓库。
 
-    .workbuddy、.zcode 这类目录由编辑器在会话中自动写入（含对话记忆）——三域分离后它们位于
+    .workbuddy、.zcode 这类目录由编辑器在会话中自动写入（含对话记忆）——四域分离后它们位于
     容器根，不在任何仓库工作树内；产物根同理。这里同时验证「不在工作树内」这一结构事实，
     以及两个仓库的 .gitignore 仍留有安全网条目（防止有人把产物根搬回仓库内）。
     """
@@ -339,6 +391,78 @@ def check_host_artifacts_ignored():
             except ValueError:
                 continue
             raise AssertionError(f"{name} 位于 {repo.name} 仓库工作树内，应移到容器根")
+
+
+def check_workspace_name_derivation():
+    """工作区名的推导与找回（历史工作区名被截断过，这几条规则踩过坑，必须守住）。
+
+    覆盖的真实故障：
+    1. 标题超长时 BV 号被一起截掉 → 后续命令再也找不到工作区（实测黑马 `…_BV1sHU`）；
+    2. `sanitize_name` strip 结尾下划线 → 推导名与磁盘名差一个字符，命令在别处建空壳；
+    3. 空壳目录被当成已有工作区 → 对着空目录报「尚无任何语料」；
+    4. 多个同源候选时乱认 → 静默读写到别门课的产物上。
+    """
+    from src.core.workspace import TaskWorkspace
+
+    import tempfile
+
+    long_title = "黑马程序员AI大模型NLP自然语言处理保姆级教程，PyTorch实现Transformer完整代码解析+预训练模型，一套搞定文本分类_翻译_情感分析等实战项目_"
+    bvid = "BV14mdfBDE4Q"
+
+    # 1) BV 号必须完整保留（它是找回工作区的唯一标识）
+    name = TaskWorkspace.new_task_name(long_title, bvid)
+    assert name.endswith(f"_{bvid}"), f"超长标题把 BV 号截掉了: {name!r}"
+    assert len(name) <= TaskWorkspace.TASK_NAME_MAX, f"工作区名超出长度上限: {len(name)}"
+
+    # 2) 名字幂等：再清洗一次不得变化（否则 __init__ 会把磁盘名改短）
+    assert TaskWorkspace.sanitize_name(name) == name, \
+        f"推导名再清洗会变形: {TaskWorkspace.sanitize_name(name)!r} != {name!r}"
+
+    # 3) 结尾下划线/空格：标题尾部与磁盘名同源时，清洗不得吃掉有效字符
+    assert TaskWorkspace.new_task_name("标题 ", "") == "标题"
+    assert TaskWorkspace.new_task_name("标题_", "") == "标题"
+
+    # 4) 同源判定：标题部分互为前缀才算同一门课
+    a_bv, b_bv = "BV1aaaaaaaaa", "BV1bbbbbbbbb"
+    assert TaskWorkspace._same_course(f"甲课程导论_{a_bv}", "甲课程导论")
+    assert TaskWorkspace._same_course(f"甲课程导论_{a_bv}", f"甲课程导论与实战_{b_bv}")
+    assert not TaskWorkspace._same_course(f"甲课程导论_{a_bv}", f"乙课程导论_{b_bv}"), "不同课被认成同源"
+    assert not TaskWorkspace._same_course(f"甲_{a_bv}", "甲课程导论"), "过短的标题不该同源"
+
+    # 5) 空壳不认、有料才认；多个同源候选时放弃（不猜）
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        real = base / TaskWorkspace.new_task_name(long_title, bvid)
+        (real / "articles").mkdir(parents=True)
+        (real / "parts.json").write_text("[]", encoding="utf-8")
+        shell = base / TaskWorkspace.new_task_name(long_title, "")
+        for sub in ("articles", "notes", "subtitles", "audio"):
+            (shell / sub).mkdir(parents=True, exist_ok=True)
+
+        assert not TaskWorkspace._populated(shell), "空壳目录被当成有料"
+        assert TaskWorkspace._populated(real), "有料目录没被认出来"
+        picked = TaskWorkspace.create(title=long_title, bvid=bvid, base_dir=base)
+        assert picked.root_dir.name == real.name, \
+            f"有料目录在盘上却另建了工作区: {picked.root_dir.name!r}"
+
+        # 目标不存在、但盘上恰有一个同源目录 → 复用（历史截断名场景）
+        # 独立目录做，避免与上面那个同源目录凑成「有歧义」把用例弄失效。
+        with tempfile.TemporaryDirectory() as tmp2:
+            base2 = Path(tmp2)
+            stem = long_title[:40]
+            legacy = base2 / f"{stem}_翻译_情感分析等实战项目_"
+            (legacy / "articles").mkdir(parents=True)
+            (legacy / "parts.json").write_text("[]", encoding="utf-8")
+            (base2 / f"别的课程_{b_bv}").mkdir()
+            (base2 / f"别的课程_{b_bv}" / "parts.json").write_text("[]", encoding="utf-8")
+            got = TaskWorkspace._find_existing_by_bvid(base2, stem)
+            assert got == legacy.name, f"同源的历史截断名没被找回: {got!r}"
+
+            # 再加一个同源候选 → 有歧义，必须放弃而不是乱挑
+            (base2 / f"{stem}续篇_{b_bv}").mkdir()
+            (base2 / f"{stem}续篇_{b_bv}" / "parts.json").write_text("[]", encoding="utf-8")
+            assert TaskWorkspace._find_existing_by_bvid(base2, stem) is None, \
+                "多个同源候选时应当放弃（不猜），却挑了一个"
 
 
 def check_skill_copies_in_sync():
@@ -450,7 +574,7 @@ def check_stage1_gate_ignores_task_files():
 
 
 def check_dedup_reuses_without_subtitles():
-    """零中间逐字稿链路不产字幕：长文复用不得被字幕前提阻断，任务书也不得充当复用源。"""
+    """单集直出长文链路不产字幕：长文复用不得被字幕前提阻断，任务书也不得充当复用源。"""
     import tempfile
 
     from src.core.workspace import TaskWorkspace
@@ -618,7 +742,19 @@ def check_module_note_contract():
     # 2c) 密度纪律：只写结论、不写推导
     assert "只写结论，不写推导" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 缺少「只写结论不写推导」纪律"
     assert "标题用技术文档的朴素写法" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 缺少朴素标题要求"
-    assert "不许硬造子标题" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 未禁止硬造子标题"
+
+    # 2d) 子标题规则必须**双向**：既要命令「节内并列成体系时用 ###」，又要下限「只剩一两条就并回」。
+    #     只用「不许硬造」的单向措辞会压掉全部 ###（实测：8 个 ## / 0 个 ###、最挤一节 53 条，
+    #     笔记在 Markmap 里那一节只是一个节点），所以这条断言守的是双向措辞而不是旧文案。
+    assert "节内并列成体系时就要用 `###` 分开" in MODULE_NOTE_PROMPT, \
+        "MODULE_NOTE_PROMPT 缺少「节内成体系要用 ###」的命令式要求"
+    assert "每个 `###` 底下至少两条条目" in MODULE_NOTE_PROMPT, \
+        "MODULE_NOTE_PROMPT 缺少「### 至少两条」的下限（防止拆碎）"
+    assert "```text" in MODULE_NOTE_PROMPT, "MODULE_NOTE_PROMPT 缺少 ### 的正向范例"
+    # 而「不要硬造/不要凑 ###」这类单向禁令不得回流到笔记提示词
+    for 单向禁令 in ("不许硬造子标题", "不要凑成 `###`"):
+        assert 单向禁令 not in MODULE_NOTE_PROMPT, \
+            f"MODULE_NOTE_PROMPT 回流了单向子标题禁令（会压掉全部 ###）：{单向禁令}"
 
     # 3) 旧版八种笔记风格必须已彻底删除（含标签与指令文案）
     for 已删除 in ("NOTE_STYLES", "minimal", "detailed", "academic", "tutorial",
@@ -664,12 +800,12 @@ def check_module_note_contract():
                             "definitions": [{"term": "t", "essence": "e"}]}, ensure_ascii=False),
                 encoding="utf-8",
             )
-        # 模块笔记：模块01 有成品（范本，保留）、模块02 有成品（回收）、模块03 无成品（保留）
-        (ws.notes_dir / "模块01_绪论_TASK.md").write_text("t" * 200, encoding="utf-8")
-        (ws.notes_dir / "模块02_关系_TASK.md").write_text("t" * 200, encoding="utf-8")
-        (ws.notes_dir / "模块03_理论_TASK.md").write_text("t" * 200, encoding="utf-8")
-        (ws.notes_dir / "模块01_绪论_笔记.md").write_text("笔记" * 600, encoding="utf-8")
-        (ws.notes_dir / "模块02_关系_笔记.md").write_text("笔记" * 600, encoding="utf-8")
+        # 笔记任务书：笔记01 有成品（范本，保留）、笔记02 有成品（回收）、笔记03 无成品（保留）
+        (ws.notes_dir / "笔记01_绪论_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.notes_dir / "笔记02_关系_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.notes_dir / "笔记03_理论_TASK.md").write_text("t" * 200, encoding="utf-8")
+        (ws.notes_dir / "笔记01_绪论_笔记.md").write_text("笔记" * 600, encoding="utf-8")
+        (ws.notes_dir / "笔记02_关系_笔记.md").write_text("笔记" * 600, encoding="utf-8")
 
         result = cleanup_completed_tasks(ws, keep_per_category=1, dry_run=False)
         remaining = sorted(p.name for p in ws.articles_dir.glob("*_TASK.md"))
@@ -677,8 +813,8 @@ def check_module_note_contract():
         kernel_remaining = sorted(p.name for p in kernels_dir.glob("*_KERNEL_TASK.md"))
         assert kernel_remaining == ["P01_绪论_KERNEL_TASK.md"], f"知识元任务书回收结果异常: {kernel_remaining}"
         note_remaining = sorted(p.name for p in ws.notes_dir.glob("*_TASK.md"))
-        assert note_remaining == ["模块01_绪论_TASK.md", "模块03_理论_TASK.md"], \
-            f"模块笔记任务书回收结果异常: {note_remaining}"
+        assert note_remaining == ["笔记01_绪论_TASK.md", "笔记03_理论_TASK.md"], \
+            f"笔记任务书回收结果异常: {note_remaining}"
         assert len(result["deleted"]) == 3, f"回收数量异常: {result['deleted']}"
         assert not (ws.root_dir / "topic_plan_TASK.md").exists() or True  # 规划任务书不参与回收
 
@@ -1122,12 +1258,12 @@ def check_regression_fixes():
             encoding="utf-8",
         )
 
-        # 3) 模块笔记复用：历史命名（无 `_笔记` 规范名）也必须被认出，不得重复派发
+        # 3) 笔记复用：成品后缀不是规范名（无 `_笔记`）也必须被认出，不得重复派发
         found = find_module_note(ws, 1)
         assert found is None, "尚无笔记成品时不应命中"
-        legacy_note = ws.notes_dir / "模块01_微机系统基础_P01-P17_思维导图速查笔记.md"
-        legacy_note.write_text("笔记" * 600, encoding="utf-8")
-        assert find_module_note(ws, 1) == legacy_note, "历史命名的笔记成品未被识别"
+        loose_note = ws.notes_dir / "笔记01_微机系统基础_P01-P17速查.md"
+        loose_note.write_text("笔记" * 600, encoding="utf-8")
+        assert find_module_note(ws, 1) == loose_note, "非规范后缀的笔记成品未被识别"
         res = BlockSynthesizer.synthesize_block(
             {"block_id": 1, "block_title": "微机系统基础", "episodes": [1], "core_theme": "x"},
             [article], ws=ws,
@@ -1172,22 +1308,191 @@ def check_regression_fixes():
             f"textbooks 落盘形态与 to_relative 不一致: {stored}"
 
 
+def check_two_pass_planning_contract():
+    """两趟语义规划契约：第一趟划模块、第二趟归并笔记，**两趟缺规划都不终止流程**。
+
+    这一条守的是本轮的核心设计：一份**部分越界**的规划（工作区只有 P01–P87、规划却按
+    P01–P185 写）曾把整个阶段二卡死，逼着用户去「补全前面的内容」才能往下走。
+    现在的规矩是：越界块裁掉、没人认领的集号补占位、缺规划用占位切分，流程照常走完，
+    而**盘上的规划文件一个字节都不改**。
+    """
+    import json
+    import tempfile
+
+    from src.core.workspace import TaskWorkspace
+    from src.generator.topic_planner import SemanticTopicPlanner as P
+
+    # 1) 提示词里不许再出现「每块 1~3 集」这类集数配额
+    for name, text in (("PLAN_PROMPT", P.PLAN_PROMPT), ("NOTE_PLAN_PROMPT", P.NOTE_PLAN_PROMPT)):
+        for banned in ("1 到 3 集", "极少数大型模块可包含 4 集", "通常包含"):
+            assert banned not in text, f"{name} 仍残留集数配额：{banned}"
+    assert "不设集数上限" in P.PLAN_PROMPT, "PLAN_PROMPT 必须写明「不设集数上限」"
+    assert "一块该有几集" in P.PLAN_PROMPT, "PLAN_PROMPT 必须显式否定「一块该有几集」的配额观念"
+    assert "宁可少而厚" in P.NOTE_PLAN_PROMPT, "NOTE_PLAN_PROMPT 必须写明归并宗旨（宁可少而厚）"
+    assert "一篇笔记可以装多个模块" in P.NOTE_PLAN_PROMPT, \
+        "NOTE_PLAN_PROMPT 必须写明一篇笔记可跨多个模块"
+    # 归并宗旨只讲方向，**不许给篇数锚点**：给了数字，Agent 就会照着凑数或照着了事，
+    # 而那正是「1~3 集」那种硬约束的翻版，只是换了个地方出现。
+    for 篇数锚点 in ("经验值", "十几篇", "二十来篇", "篇笔记通常", "通常落成"):
+        assert 篇数锚点 not in P.NOTE_PLAN_PROMPT, \
+            f"NOTE_PLAN_PROMPT 不得出现篇数锚点：{篇数锚点}"
+
+    # 2) 第一趟规划提示词的依据必须是**长文标题**，分集原名只作参考
+    parts = [
+        {"page": 9, "title": "09. 核心语法-变量"},
+        {"page": 10, "title": "10. 核心语法-数据类型"},
+    ]
+    prompt = P.build_planning_prompt(
+        parts, course_title="测试课", article_titles={9: "变量与作用域", 10: "数据类型体系"},
+    )
+    assert "变量与作用域" in prompt, "第一趟规划提示词未采用长文标题"
+    assert "分集原名：09. 核心语法-变量" in prompt, "第一趟规划提示词应保留分集原名作参考"
+    assert P.describe_pages([9, 10]) == "P09–P10", P.describe_pages([9, 10])
+
+    # 3) 长文标题读取：H1 优先，文件名次之
+    with tempfile.TemporaryDirectory() as tmp:
+        art = Path(tmp) / "P09_09. 核心语法-变量_精读文章.md"
+        art.write_text("# 变量与作用域\n\n正文…\n", encoding="utf-8")
+        assert P.read_article_title(art) == "变量与作用域", P.read_article_title(art)
+        art.write_text("没有 H1 的长文\n", encoding="utf-8")
+        assert P.read_article_title(art) == "09. 核心语法-变量", P.read_article_title(art)
+
+    # 4) 抢救：越界块裁掉、缺失集号补占位，**盘上文件不动**
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = TaskWorkspace(task_name="twopass_task", base_dir=tmp)
+        pages = list(range(1, 88))
+        parts88 = [{"page": p, "title": f"第{p}讲"} for p in pages]
+        ws.save_parts(parts88)
+        # 盘上那份按 P01–P185 写：2 集一块，共 93 块
+        wide = [
+            {"block_id": i, "block_title": f"宽块{i}", "episodes": [2 * i - 1, 2 * i], "core_theme": "x"}
+            for i in range(1, 94)
+        ]
+        plan_file = ws.root_dir / "topic_plan.json"
+        plan_file.write_text(json.dumps(wide, ensure_ascii=False), encoding="utf-8")
+        before = plan_file.read_text(encoding="utf-8")
+
+        blocks, status, _diag = P.resolve_blocks(parts88, course_title="测试课", ws=ws)
+        assert status == "salvaged", f"部分越界的规划应被抢救而不是卡住，实际: {status}"
+        ok, msg = P.validate_plan(blocks, parts88)
+        assert ok, f"抢救结果必须完全覆盖 P01–P87：{msg}"
+        assert plan_file.read_text(encoding="utf-8") == before, \
+            "抢救结果不得回写 topic_plan.json（盘上那份留给 Agent 修）"
+        assert sum(len(b["episodes"]) for b in blocks) == 87, "抢救后集号数必须仍是 87"
+
+        # 5) 完全没规划：占位切分继续，但**不写**规划文件
+        plan_file.unlink()
+        blocks2, status2, _ = P.resolve_blocks(parts88, course_title="测试课", ws=ws)
+        assert status2 == "placeholder", f"无规划应降级为占位继续，实际: {status2}"
+        assert blocks2 and P.validate_plan(blocks2, parts88)[0], "占位切分必须仍全覆盖"
+        assert all("占位" in b["block_title"] for b in blocks2), "占位块标题必须自带占位标记"
+        assert not plan_file.exists(), "占位切分不得落盘成 topic_plan.json"
+
+    # 6) 第二趟：一篇笔记可以跨多个模块，校验按「模块恰好被认领一次」判定
+    blocks = [
+        {"block_id": 1, "block_title": "A", "episodes": [1, 2]},
+        {"block_id": 2, "block_title": "B", "episodes": [3, 4]},
+        {"block_id": 3, "block_title": "C", "episodes": [5]},
+    ]
+    cross = [{"note_id": 1, "note_title": "跨模块笔记", "blocks": [1, 2, 3], "core_theme": "x"}]
+    ok, msg = P.validate_note_plan(cross, blocks, [1, 2, 3, 4, 5])
+    assert ok, f"一篇笔记跨 3 个模块应通过：{msg}"
+    assert P.note_episodes(cross[0], blocks) == [1, 2, 3, 4, 5], \
+        "跨模块笔记的集号必须由 blocks 推导齐全"
+    for bad, why in (
+        ([{"note_id": 1, "note_title": "x", "blocks": [1, 2]}], "漏掉模块 C"),
+        ([{"note_id": 1, "note_title": "x", "blocks": [1, 2, 3, 3]}], "模块 C 被认领两次"),
+        ([{"note_id": 1, "note_title": "x", "blocks": [1, 2, 99]}], "引用了不存在的模块"),
+        ([{"note_id": 1, "note_title": "x", "blocks": []}], "未认领任何模块"),
+    ):
+        assert not P.validate_note_plan(bad, blocks, [1, 2, 3, 4, 5])[0], f"应被拒绝：{why}"
+
+    # 7) 第二趟缺规划：兜底「一个模块一篇」继续，也不写 note_plan.json
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = TaskWorkspace(task_name="twopass_note_task", base_dir=tmp)
+        ws.save_parts([{"page": 1, "title": "a"}, {"page": 2, "title": "b"}])
+        parts2 = [{"page": 1, "title": "a"}, {"page": 2, "title": "b"}]
+        blk = [{"block_id": 1, "block_title": "A", "episodes": [1]},
+               {"block_id": 2, "block_title": "B", "episodes": [2]}]
+        notes, note_status, _ = P.resolve_notes(blk, parts2, course_title="课", ws=ws)
+        assert note_status == "unmerged", f"缺归并应兜底继续，实际: {note_status}"
+        assert len(notes) == 2 and [n["episodes"] for n in notes] == [[1], [2]]
+        assert (ws.root_dir / "note_plan_TASK.md").exists(), "NOTE_PLAN_TASK 未落盘"
+        assert not (ws.root_dir / "note_plan.json").exists(), "兜底归并不得落盘成 note_plan.json"
+
+        # 写了合法归并后必须被采纳，且与兜底结果不同
+        (ws.root_dir / "note_plan.json").write_text(json.dumps(
+            [{"note_id": 1, "note_title": "合并篇", "blocks": [1, 2], "core_theme": "y"}],
+            ensure_ascii=False), encoding="utf-8")
+        notes2, note_status2, _ = P.resolve_notes(blk, parts2, course_title="课", ws=ws)
+        assert note_status2 == "planned" and len(notes2) == 1, "合法归并未被采纳"
+        assert notes2[0]["episodes"] == [1, 2], "归并后的集号未推导齐全"
+
+    # 8) 笔记产物命名与任务书派发：旧命名 `模块XX` 不再兼容
+    from src.generator.block_synthesizer import BlockSynthesizer
+    meta = {"block_id": 4, "block_title": "数据容器体系", "episodes": [28, 46],
+            "core_theme": "x", "blocks": [11, 12, 13]}
+    assert BlockSynthesizer.get_task_filename(meta) == "笔记04_数据容器体系_TASK.md", \
+        BlockSynthesizer.get_task_filename(meta)
+    assert BlockSynthesizer.get_note_filename(meta) == "笔记04_数据容器体系_笔记.md"
+    with tempfile.TemporaryDirectory() as tmp:
+        from src.core.task_cleanup import find_module_note
+        ws = TaskWorkspace(task_name="note_lookup", base_dir=tmp)
+        # 旧命名 `模块XX_…` 已不再兼容：不得被当成现行笔记成品认领
+        legacy = ws.notes_dir / "模块04_字面量变量与标识符命名规范_笔记.md"
+        legacy.write_text("旧粒度成品" * 300, encoding="utf-8")
+        assert find_module_note(ws, 4) is None, "旧命名 `模块XX_*` 不应再被认领"
+
+    # 9) 集号基准以工作区 parts.json 为准（在线全集不得放大工作区范围）
+    from src.core.pipeline import resolve_course_title, resolve_scope_parts
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = TaskWorkspace(task_name="黑马课程_BV1sHU9BmEne", base_dir=tmp)
+        ws.save_parts([{"page": p, "title": f"第{p}讲"} for p in range(9, 88)])
+        ws.save_manifest({"title": "工作区标题", "bvid": "BV1sHU9BmEne"})
+        info = {"title": "在线标题", "bvid": "BV1sHU9BmEne",
+                "parts": [{"page": p, "title": f"在线第{p}讲"} for p in range(1, 186)]}
+        scoped = resolve_scope_parts(info, ws)
+        assert len(scoped) == 79 and scoped[0]["page"] == 9, \
+            f"集号基准被在线全集放大了: {len(scoped)} 集，起始 {scoped[0]['page']}"
+        assert resolve_course_title(info, ws) == "工作区标题", "课程标题未以 manifest 为准"
+
+    # 10) 粒度变了以后，旧粒度的任务书必须作废（否则主 Agent 会照旧任务书再派一批内容错位的笔记）
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = TaskWorkspace(task_name="prune_task", base_dir=tmp)
+        ws.save_parts([{"page": 1, "title": "a"}, {"page": 2, "title": "b"}])
+        for name in ("笔记01_旧主题A_TASK.md", "笔记02_旧主题B_TASK.md"):
+            (ws.notes_dir / name).write_text("旧粒度任务书", encoding="utf-8")
+        merged_notes = [{"note_id": 1, "note_title": "合并篇", "blocks": [1, 2], "episodes": [1, 2]}]
+        removed = BlockSynthesizer._prune_superseded_tasks(ws, merged_notes)
+        assert removed == 2, f"旧粒度任务书未被作废: {removed}"
+        assert not list(ws.notes_dir.glob("笔记*_TASK.md")), "作废后不应残留旧任务书"
+
+        # 成品已落盘的任务书不得被作废（那是交付记录，交给 cleanup 回收）
+        (ws.notes_dir / "笔记01_旧主题A_TASK.md").write_text("旧粒度任务书", encoding="utf-8")
+        (ws.notes_dir / "笔记01_旧主题A_笔记.md").write_text("成品" * 400, encoding="utf-8")
+        assert BlockSynthesizer._prune_superseded_tasks(ws, merged_notes) == 0, \
+            "成品已落盘的笔记任务书被误删"
+
+
 def main():
     print("=" * 62)
-    print("bili-video2book 技能仓库自检（三域分离：skill / mcp / output）")
+    print("bili-video2book 技能仓库自检（四域分离：skill / mcp / mcp-ext / output）")
     print(f"  代码根  : {SKILL_ROOT}")
     print(f"  容器根  : {HOME_ROOT}")
     print(f"  产物根  : {PRODUCTS_ROOT}")
     print("=" * 62)
     check("模块导入无 ImportError", check_imports)
     check("CLI 全部子命令 --help 可用", check_cli_help)
-    check("三域分离契约（仓库边界/产物在仓库外）", check_repo_separation)
+    check("四域分离契约（仓库边界/产物在仓库外）", check_repo_separation)
     check("产物根解析与 cwd 无关", check_products_root_resolution)
     check("跨仓库不互引（skill ⇎ mcp）", check_no_cross_repo_imports)
     check("KernelExtractor 契约（无本地伪造抽取）", check_kernel_extractor_contract)
-    check("SemanticTopicPlanner 契约（无启发式聚类）", check_topic_planner_contract)
+    check("SemanticTopicPlanner 契约（无启发式聚类 + 按实际集号校验）", check_topic_planner_contract)
+    check("两趟语义规划契约（模块→笔记 / 无集数配额 / 缺规划不终止 / 基准取工作区）",
+          check_two_pass_planning_contract)
+    check("文档无悬空小节引用", check_docs_no_dangling_section_refs)
     check("ArticleIntegrator 无硬编码课程数据", check_integrator_no_hardcoded_course)
-    check("零中间逐字稿入口切换", check_zero_transcript_pipeline)
+    check("单集直出长文入口切换", check_zero_transcript_pipeline)
     check("子进程硬超时就位", check_subprocess_timeouts)
     check("MCP 仓库自检（可选段落）", check_mcp_repo_optional)
     check("任务书导出门禁端到端", check_task_file_export_end_to_end)
@@ -1210,6 +1515,7 @@ def main():
     check("派发载荷与台账契约", check_dispatch_payload_shape)
     check("本轮修复项回归", check_regression_fixes)
     check("死代码与验证产物已移除", check_dead_modules_removed)
+    check("工作区名推导与找回（BV 号保留/幂等/空壳/歧义）", check_workspace_name_derivation)
     check("两份 SKILL 同步", check_skill_copies_in_sync)
     print("=" * 62)
     if FAILURES:

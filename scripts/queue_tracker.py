@@ -407,7 +407,7 @@ def main():
     print(f"[*] 总分集数: {status['total']} | 已完工: {status['completed_count']} | 待处理: {status['pending_count']}")
     pct = (status['completed_count'] / status['total']) * 100 if status['total'] else 0
     print(f"[*] 阶段一单集进度: {pct:.1f}% [{status['completed_count']}/{status['total']}]")
-    print(f"[*] 阶段二模块资产: 模块全书 {status['textbooks_count']} 部 | 模块笔记 {status['notes_count']} 部")
+    print(f"[*] 阶段二模块资产: 模块全书 {status['textbooks_count']} 部 | 复习笔记 {status['notes_count']} 篇")
     status_label = "【已竣工 - 可放行进入阶段二模块整编】" if status["is_stage1_complete"] else "【阶段一动态滑动流水线进行中】"
     print(f"[*] 当前阶段状态: {status_label}")
     budget = _budget_summary(status)

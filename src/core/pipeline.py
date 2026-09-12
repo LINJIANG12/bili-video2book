@@ -16,6 +16,7 @@
 """
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -28,7 +29,6 @@ from src.core.audio_chunker import AudioChunker
 from src.core.workspace import TaskWorkspace, sanitize_filename
 from src.core.kernel_extractor import KernelExtractor
 from src.core import paths as _paths
-from src.generator.topic_planner import SemanticTopicPlanner
 from src.generator.block_synthesizer import BlockSynthesizer
 from src.generator.prompt_templates import ArticlePromptTypeError
 
@@ -133,7 +133,7 @@ def export_article_task(
     chunk_minutes: int = 60,
     article_type: str = "",
 ) -> Path:
-    """导出单集精读文章任务书（零中间逐字稿：听音后直接撰写 articles/）。
+    """导出单集精读文章任务书（单集直出长文：听音后直接撰写 articles/）。
 
     长文写作提示词按 article_type 从提示词风格矩阵取用：风格未指定、拼写有误，
     或该类型尚无提示词时，一律抛 ArticlePromptTypeError（工具层不猜、不降级）。
@@ -202,7 +202,8 @@ def export_article_task(
 
     content = (
         f"# P{page_num:02d} {clean_title} 单集精读文章任务书（ARTICLE_TASK）\n\n"
-        f"> 状态：need-agent-article | 零中间逐字稿：听音后直接撰写精读长文\n"
+        f"> 状态：need-agent-article | 单集直出长文：取到本集真实讲解内容后直接撰写精读长文\n"
+        f"> 　　　　（通道 A 无中间产物，边听边写；通道 B 的逐字稿只是语料，不落盘成交付物）\n"
         f"> 长文风格：{resolved['label']}（{resolved['key']}）\n"
         f"> 执行者要求：由**子智能体**承担（一集一个；课程总时长 ≤ 60 分钟时主 Agent 可串行亲做）；\n"
         f"> 　　　　　　完成后只回报一行 `P{page_num:02d} | 文件路径 | 字节数 | 执行者`，**不回传正文**\n"
@@ -216,11 +217,19 @@ def export_article_task(
         f"### 待听音切片清单（共 {len(slices) if slices else 1} 个切片）：\n\n"
         f"{slices_section}\n\n"
         f"---\n\n"
-        f"## 2. 宿主 Agent 执行指引（零中间逐字稿）\n\n"
-        f"1. **取切片**：对清单中的切片调用 MCP 工具 `omni-media:read_audio`（`output_mode=\"file\"`）取得本地切片绝对路径；\n"
-        f"2. **原生听音**：调用宿主原生 `view_file` 工具读取该切片路径，直接聆听讲师原声、例题与板书讲解；\n"
-        f"3. **撰写长文**：依据聆听所得的真实讲解内容，按下方【文章撰写提示词】撰写深入技术长文；\n"
-        f"4. **落盘**：调用 `write_to_file` 将长文写入上方目标长文落盘路径（严格保留，模块整编时不得删除）。\n\n"
+        f"## 2. 宿主 Agent 执行指引（单集直出长文）\n\n"
+        f"1. **取音频并处理**：先看自己的工具列表，按原生音频能力二选一（两条通道的分页契约同构，续读循环可复用）：\n"
+        f"   - **通道 A（工具列表里有 `read_audio`，优先）**：\n"
+        f"     a. 对清单中的切片调用 `omni-media:read_audio`（`output_mode=\"file\"`）取得本地切片绝对路径；\n"
+        f"     b. 调用宿主原生 `view_file` 工具读取该切片路径，直接聆听讲师原声、例题与板书讲解；\n"
+        f"   - **通道 B（只有 `read_media`，宿主无原生音频）**：\n"
+        f"     a. 对清单中的切片调用 `omni-media-ext:read_media`"
+        f"（`mode=\"transcribe\"`，需要总结/问答时换 `mode`），直接取回文本；\n"
+        f"     b. 返回文本首行的 `OMNI_STATUS` 注释若 `is_finished=false`，用 `start_time=next_start_time` 继续读下一卷；\n"
+        f"     c. 注意 `mode` 在状态注释里指切片模式（`oneshot`/`chunked`），本次任务预设看 `task` 字段；\n"
+        f"   - **共同要求**：不得跳过取音频这一步直接编造；正文须含讲师亲口讲的内容。\n"
+        f"2. **撰写长文**：依据所得的真实讲解内容，按下方【文章撰写提示词】撰写深入技术长文；\n"
+        f"3. **落盘**：调用 `write_to_file` 将长文写入上方目标长文落盘路径（严格保留，模块整编时不得删除）。\n\n"
         f"---\n\n"
         f"## 3. 文章撰写提示词\n\n"
         f"{article_prompt}\n"
@@ -229,13 +238,78 @@ def export_article_task(
     return task_file
 
 
+def _offline_candidate_dirs(out_base: Path, bvid: str, custom_task: Optional[str] = None) -> List[Path]:
+    """接口受阻时按 BV 号找回本地工作区目录（离线自愈的定位入口）。
+
+    两级定位，越靠前越可信：
+
+    1. `--task` 显式指定的目录；
+    2. 目录名含完整 BV 号 / BV 号前缀——工作区名可能被 80 字符上限截断（如 `…_BV1P7b5z`）。
+
+    只保留**确实有料**的目录（有 `parts.json` 或 `articles/` 下有长文）。
+    """
+    def _has_content(path: Path) -> bool:
+        return (path / "parts.json").exists() or bool(_parts_from_articles(path))
+
+    cands: List[Path] = []
+    if custom_task:
+        cands.append(out_base / TaskWorkspace.sanitize_name(custom_task))
+    if out_base.exists():
+        found = [p for p in out_base.glob(f"*{bvid}*") if p.is_dir()]
+        if not found and len(bvid) > 6:
+            found = [p for p in out_base.glob(f"*{bvid[:6]}*") if p.is_dir() and _has_content(p)]
+        cands.extend(found)
+    # 目录名里连 BV 号（或其前缀）都没有的工作区**无法**由 BV 号唯一确定：实测同一输出根下
+    # 确有两个名字都不含 BV 号的 80 字符截断目录（NLP 课与另一门），任何按名字的猜法都会在
+    # 它们之间摇摆。这类工作区请显式用 `--task "<工作区目录名>"` 指定——那条路是确定的。
+    # 这里刻意不猜：猜错会静默读写到别的课的产物上，比自愈失败更糟。
+    return cands
+
+
+def _workspace_title(dir_path: Path, manifest: Optional[Dict[str, Any]] = None) -> str:
+    """离线自愈时的课程标题：**目录名优先**，manifest 的 title 只作兜底。
+
+    这里的标题会交给 `TaskWorkspace.create` 再推导一次工作区目录，所以它必须能还原出
+    同一个目录——目录名是唯一满足这一点的事实。若改用 manifest 里可能被用户改短的 title，
+    推导出的工作区就会指向别处（轻则空跑，重则 exit 2），而真正的成品就在旁边。
+    """
+    derived = dir_path.name.split("_")[0].strip()
+    if derived:
+        return derived
+    return str((manifest or {}).get("title") or "").strip() or dir_path.name
+
+
+def _parts_from_articles(dir_path: Path) -> List[Dict[str, Any]]:
+    """拓扑缓存不可用时，从 `articles/` 已有长文的文件名反推集号（离线兜底）。
+
+    为什么需要：`parts.json` 可能缺失或被写坏，而长文是 Agent 落盘的真实产物。
+    没有集号就无法规划、也无法派发，一条本该跑完的命令会直接 traceback 退出。
+    """
+    parts: Dict[int, Dict[str, Any]] = {}
+    articles_dir = dir_path / "articles"
+    if not articles_dir.exists():
+        return []
+    for entry in sorted(articles_dir.glob("P*_*.md")):
+        if entry.name.endswith("_TASK.md"):
+            continue
+        matched = re.match(r"^P(\d+)_(.*?)\.md$", entry.name)
+        if not matched:
+            continue
+        title = matched.group(2)
+        for suffix in ("_精读文章", "_精读", "_文章"):
+            if title.endswith(suffix):
+                title = title[: -len(suffix)]
+        parts.setdefault(int(matched.group(1)), {"page": int(matched.group(1)), "title": title.strip()})
+    return [parts[k] for k in sorted(parts)]
+
+
 def resolve_target_info(
     target: str,
     sessdata: Optional[str] = None,
     custom_task: Optional[str] = None,
     base_dir: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """多态解析本地媒体或 B 站元数据；网络失败且存在本地 parts.json 缓存时自动离线自愈。"""
+    """多态解析本地媒体或 B 站元数据；网络失败时用本地缓存（`parts.json` 或 `articles/`）离线自愈。"""
     if LocalMediaParser.is_local_media(target):
         return LocalMediaParser.parse(target)
     try:
@@ -245,44 +319,96 @@ def resolve_target_info(
         bvid = BilibiliParser.extract_bvid(target)
         if bvid:
             out_base = _paths.resolve_base_dir(base_dir)
-            cand_dirs = []
-            if custom_task:
-                cand_dirs.append(out_base / TaskWorkspace.sanitize_name(custom_task))
-            if out_base.exists():
-                cand_dirs.extend([p for p in out_base.glob(f"*{bvid}*") if p.is_dir()])
-            for cd in cand_dirs:
+            for cd in _offline_candidate_dirs(out_base, bvid, custom_task):
+                cached_parts: List[Any] = []
+                manifest_f = cd / "manifest.json"
+                m_data: Dict[str, Any] = {}
+                if manifest_f.exists():
+                    try:
+                        m_data = json.loads(manifest_f.read_text(encoding="utf-8"))
+                    except Exception:
+                        m_data = {}
                 parts_file = cd / "parts.json"
+                loaded_from_parts = False
                 if parts_file.exists() and parts_file.stat().st_size > 20:
                     try:
-                        cached_parts = json.loads(parts_file.read_text(encoding="utf-8"))
-                        if cached_parts and isinstance(cached_parts, list):
-                            print(f"\n[!] B站元数据接口受阻（{err}），已自动从本地缓存加载分集拓扑离线运行: {parts_file.name}")
-                            title = cd.name.split("_")[0]
-                            manifest_f = cd / "manifest.json"
-                            if manifest_f.exists():
-                                try:
-                                    m_data = json.loads(manifest_f.read_text(encoding="utf-8"))
-                                    title = m_data.get("title", title)
-                                except Exception:
-                                    pass
-                            return {
-                                "video_type": "multi_page" if len(cached_parts) > 1 else "single",
-                                "title": title,
-                                "bvid": bvid,
-                                "owner": "",
-                                "owner_mid": 0,
-                                "desc": "",
-                                "duration": sum(p.get("duration", 0) for p in cached_parts),
-                                "pic": "",
-                                "has_multi_pages": len(cached_parts) > 1,
-                                "parts": cached_parts,
-                                "cid": cached_parts[0]["cid"] if cached_parts else 0,
-                                "url_page": BilibiliParser.extract_page_index(target),
-                                "is_cached_offline": True,
-                            }
+                        loaded = json.loads(parts_file.read_text(encoding="utf-8"))
+                        if isinstance(loaded, list):
+                            cached_parts = [p for p in loaded if isinstance(p, dict) and p.get("page") is not None]
+                            loaded_from_parts = bool(cached_parts)
                     except Exception:
-                        pass
+                        cached_parts = []
+                if not cached_parts:
+                    # 拓扑缓存缺失或损坏：退到磁盘上已有的长文反推集号
+                    cached_parts = _parts_from_articles(cd)
+                    if cached_parts:
+                        print(f"\n[!] B站元数据接口受阻（{err}），本地 parts.json 不可用，"
+                              f"已按 articles/ 中 {len(cached_parts)} 篇长文反推集号离线运行: {cd.name}")
+                if not cached_parts:
+                    continue
+                if loaded_from_parts:
+                    print(f"\n[!] B站元数据接口受阻（{err}），已自动从本地缓存加载分集拓扑离线运行: {parts_file.name}")
+                return {
+                    "video_type": "multi_page" if len(cached_parts) > 1 else "single",
+                    "title": _workspace_title(cd, m_data),
+                    # 定位到的**确切目录名**：下游建工作区时必须原样用它，不能再由标题反推
+                    # （历史工作区名是「标题截断 + BV 号可能也被截」的产物，反推不出来）。
+                    "workspace_name": cd.name,
+                    "bvid": bvid,
+                    "owner": "",
+                    "owner_mid": 0,
+                    "desc": "",
+                    "duration": sum(p.get("duration", 0) for p in cached_parts),
+                    "pic": "",
+                    "has_multi_pages": len(cached_parts) > 1,
+                    "parts": cached_parts,
+                    "cid": cached_parts[0].get("cid", 0),
+                    "url_page": BilibiliParser.extract_page_index(target),
+                    "is_cached_offline": True,
+                }
         raise RuntimeError(enrich_network_error(err)) from err
+
+
+def resolve_scope_parts(info: Dict[str, Any], ws: Any) -> List[Dict[str, Any]]:
+    """集号基准：**工作区 `parts.json` 优先**，缺失才用在线解析结果。
+
+    为什么不能直接用 `info["parts"]`：在线解析永远返回课程**全集**。用户 `--range 9-87`
+    建的工作区里只有 P09–P87，拿 185 集当基准会让规划任务书列错集号、让规划校验把
+    用户自己的区间判成非法，甚至把整个阶段二卡死——集号是工作区的事实，工具无权放大它。
+
+    在线解析只用于**首次建工作区**（`pipeline`），此后一律以工作区为准。
+    """
+    local = [
+        p for p in (ws.load_parts() or [])
+        if isinstance(p, dict) and p.get("page") is not None
+    ]
+    online = [p for p in (info.get("parts") or []) if isinstance(p, dict)]
+    if not local:
+        return online
+    if online and {int(p["page"]) for p in online} != {int(p["page"]) for p in local}:
+        print(
+            f"[i] 集号基准取工作区 parts.json（{len(local)} 集，"
+            f"P{min(int(p['page']) for p in local):02d}–P{max(int(p['page']) for p in local):02d}）；"
+            f"在线全集为 {len(online)} 集——以工作区为准"
+        )
+    return sorted(local, key=lambda p: int(p["page"]))
+
+
+def resolve_course_title(info: Dict[str, Any], ws: Any) -> str:
+    """课程标题：manifest → parts.json 所属工作区名 → 在线解析（离线也拿得到）。
+
+    标题会写进规划提示词与任务书抬头，取错了会让 Agent 对着别的课名做规划。
+    """
+    try:
+        manifest_title = str((ws.load_manifest() or {}).get("title") or "").strip()
+        if manifest_title:
+            return manifest_title
+    except Exception:
+        pass
+    online_title = str(info.get("title") or "").strip()
+    if online_title:
+        return online_title
+    return ws.root_dir.name
 
 
 def parse_range_string(range_str: str, max_val: int) -> List[int]:
@@ -356,12 +482,13 @@ class PipelineCoordinator:
             bvid=bvid,
             custom_name=task,
             base_dir=base_dir,
+            info_name=info.get("workspace_name"),
         )
         print("=" * 65)
         print(f"[*] 全流程处理流水线启动 (Task Workspace: {ws.root_dir.name})")
         print("=" * 65)
 
-        print("[*] 阶段一策略: 零中间逐字稿（听音后直接撰写 articles/；长文已存在即视为完成）")
+        print("[*] 阶段一策略: 单集直出长文（听音后直接撰写 articles/；长文已存在即视为完成）")
 
         if process_all or range_str:
             all_parts = info["parts"]
@@ -501,11 +628,11 @@ class PipelineCoordinator:
                     _cats[f_ep.get("category", "其他下载异常")] = _cats.get(f_ep.get("category", "其他下载异常"), 0) + 1
                 for _c, _n in _cats.items():
                     print(f"    - {_c} × {_n}", file=sys.stderr)
-                print("三选项：①删集重跑（缩小 --range 剔除失败集后重跑）②补--sessdata（浏览器复制 SESSDATA 后重跑）③人工语料外挂：将人工整理文本放至 subtitles/PXX_*_clean.txt 后重跑", file=sys.stderr)
+                print("三选项：①删集重跑（缩小 --range 剔除失败集后重跑）②补--sessdata（浏览器复制 SESSDATA 后重跑）③人工语料外挂：把人工整理的本集文本放至 <task>/subtitles/PXX_<标题>_clean.txt 后重跑（该目录是逐字稿与人工语料的正式存放位置）", file=sys.stderr)
                 print("=" * 65, file=sys.stderr)
                 raise PipelineGateError(2)
 
-        # ===== 阶段二「单集精读文章任务书派发」：零中间逐字稿，直接产出 articles/ =====
+        # ===== 阶段二「单集精读文章任务书派发」：单集直出长文，直接产出 articles/ =====
         _skip_pages = {d.get("page") for d in skipped_entries}
         effective_parts = [p for p in selected_parts if p.get("page") not in _skip_pages]
         # 阶段二入口校验音频 100% 就绪，否则拒绝并指去向
@@ -524,7 +651,7 @@ class PipelineCoordinator:
             print("=" * 65, file=sys.stderr)
             raise PipelineGateError(2)
         print("=" * 65)
-        print(f"[*] 阶段二：派发单集精读文章任务书（共 {len(effective_parts)} 集，零中间逐字稿）")
+        print(f"[*] 阶段二：派发单集精读文章任务书（共 {len(effective_parts)} 集，单集直出长文）")
         print(f"[*] 长文提示词风格：{article_type or '未指定（将在派发时终止并给出风格菜单）'}")
         print("=" * 65)
 
@@ -580,22 +707,24 @@ class PipelineCoordinator:
                 "status": "need-agent-article",
             })
 
-        # ===== 阶段三「知识块聚合」：规划与知识元均由宿主 Agent 产出后才合成笔记 =====
+        # ===== 阶段三「两趟语义聚合」：模块规划与笔记归并均由宿主 Agent 产出后才派发 =====
         plan = None
+        note_plan: List[Dict[str, Any]] = []
         block_results: List[Dict[str, Any]] = []
         if process_all:
-            # 语料摘要：优先取 Agent 已撰写的单集长文，兼容历史工作区的 _clean.txt
+            scope_parts = resolve_scope_parts(info, ws)
+            # 语料摘要：优先取 Agent 已撰写的单集长文，其次 subtitles/ 下的逐字稿或人工语料
             summaries = {}
-            for p in info["parts"]:
-                p_num = p["page"]
+            for p in scope_parts:
+                p_num = int(p["page"])
                 art = KernelExtractor.find_article(ws, p_num)
                 if art is not None:
                     try:
                         summaries[p_num] = art.read_text(encoding="utf-8")[:400]
                     except Exception:
                         pass
-            for p in info["parts"]:
-                p_num = p["page"]
+            for p in scope_parts:
+                p_num = int(p["page"])
                 if p_num in summaries:
                     continue
                 clean_t = sanitize_filename(p["title"])
@@ -611,40 +740,25 @@ class PipelineCoordinator:
                 print("=" * 65)
             else:
                 print("\n" + "=" * 65)
-                print("[*] 阶段三：课程知识块聚合（规划与知识元均由宿主 Agent 产出）")
+                print("[*] 阶段三：两趟语义聚合（模块规划 → 笔记归并，均由宿主 Agent 产出）")
                 print("=" * 65)
 
-                plan = SemanticTopicPlanner.plan(
-                    info["parts"],
-                    course_title=info["title"],
-                    ws=ws,
+                # 两趟规划 + 笔记派发的唯一实现；缺规划时用兜底继续，绝不终止
+                outcome = BlockSynthesizer.dispatch_notes(
+                    ws,
+                    scope_parts,
+                    course_title=resolve_course_title(info, ws),
+                    force_plan=False,
                     transcript_summaries=summaries,
                 )
-                if not plan:
-                    print("[*] 阶段三后置：已导出知识块规划任务书，待宿主 Agent 产出 topic_plan.json 后重跑。")
+                note_plan = outcome["notes"]
+                block_results = outcome["results"]
+                if outcome["block_status"] in ("placeholder", "unmerged"):
+                    print("[*] 阶段三后置：已导出规划任务书，待宿主 Agent 产出 topic_plan.json（及 note_plan.json）后重跑。")
                     print(f"[*] 任务书: {ws.root_dir / 'topic_plan_TASK.md'}")
                 else:
-                    print(f"[✓] 知识块规划已就绪，共 {len(plan)} 个逻辑知识块:")
-                    for b in plan:
-                        eps = b["episodes"]
-                        p_str = f"P{min(eps):02d}-P{max(eps):02d}" if len(eps) > 1 else f"P{eps[0]:02d}"
-                        print(f"    - 模块 {b['block_id']:02d} ({p_str}): {b['block_title']}")
-
-                    for b in plan:
-                        eps = b["episodes"]
-                        block_parts = [p for p in info["parts"] if p["page"] in eps]
-                        if not block_parts:
-                            continue
-                        # 门禁：本模块各集单集精读长文齐备才导出笔记任务书（知识元降级为可选索引）
-                        articles, missing = BlockSynthesizer.collect_block_articles(block_parts, ws)
-                        if missing:
-                            _missing_str = ", ".join(f"P{m:02d}" for m in missing)
-                            print(f"    [gate] 模块 {b['block_id']:02d}: {len(missing)} 集尚无单集精读长文"
-                                  f"（{_missing_str}），跳过本模块笔记派发")
-                            continue
-                        # 笔记只有一种风格（文章直供 + 只写结论），无需再指定风格
-                        res = BlockSynthesizer.synthesize_block(b, articles, ws=ws)
-                        block_results.append(res)
+                    # planned / salvaged 都算「Agent 已给出模块边界」，可以收尾
+                    plan = outcome["blocks"]
         elif info["has_multi_pages"]:
             print("[*] 分区间运行：聚合后置，待 --all 全量语料齐后统一规划")
 
@@ -672,13 +786,14 @@ class PipelineCoordinator:
         if process_all and plan is not None:
             _existing["knowledge_blocks_plan"] = plan
             _existing["knowledge_blocks_results"] = block_results
+            _existing["note_plan"] = note_plan
         ws.save_manifest(_existing)
         print("\n" + "=" * 65)
         print(f"[✓] 工具层流水线执行完毕！语料与任务书已归档至: {ws.root_dir}")
         print("【★ 宿主 Agent 接管指南】：")
         print(f"  1. 单集精读文章任务书: {ws.articles_dir}/*_TASK.md")
         if process_all:
-            print(f"  2. 知识块聚合笔记任务书: {ws.notes_dir}/*_TASK.md")
+            print(f"  2. 笔记任务书: {ws.notes_dir}/*_TASK.md")
         print("  3. 请主程序以 5 个并发通道（Task 子代理或并行会话）直接领跑任务书，执行真正的认知写作！")
         print("=" * 65)
 

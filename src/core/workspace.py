@@ -38,7 +38,16 @@ class TaskWorkspace:
 
     def __init__(self, task_name: str, base_dir: Union[str, Path, None] = None):
         """初始化工作区并确保子目录存在（base_dir 为空即产物根）。"""
-        self.task_name = self.sanitize_name(task_name)
+        self._bind(self.sanitize_name(task_name), base_dir)
+
+    def _bind(self, task_name: str, base_dir: Union[str, Path, None] = None) -> None:
+        """按**原样**目录名绑定工作区（不再清洗），并确保子目录存在。
+
+        为什么内部通道必须绕过清洗：`sanitize_name` 会 strip 掉结尾的 `_`，而磁盘上的工作区名
+        可能就以 `_` 收尾（如 NLP 课的 `…实战项目_`）。`create()` 已经按规则算好了确切的名字，
+        再清洗一次就会把它改短一个字符，于是命令又在旁边建一个空目录（实测 exit 2）。
+        """
+        self.task_name = task_name
         self.base_dir = _paths.resolve_base_dir(base_dir)
         self.root_dir = self.base_dir / self.task_name
         self.audio_dir = self.root_dir / "audio"
@@ -76,6 +85,35 @@ class TaskWorkspace:
         for 目录 in [self.root_dir, self.audio_dir, self.notes_dir, self.articles_dir, self.subtitles_dir]:
             目录.mkdir(parents=True, exist_ok=True)
 
+    # 工作区名长度上限（防 Windows MAX_PATH 溢出）
+    TASK_NAME_MAX = 80
+    # 工作区**完整路径**的安全上限。Windows 默认 MAX_PATH=260，留出
+    # `\articles\P001_xxx_精读文章.md` 这类子路径余量后取 200：产物根本身很深时，
+    # 光靠「名字 ≤80」不够（实测根 33 字符没问题，根再深到 ~150 字符就会撑破上限）。
+    TASK_PATH_MAX = 200
+
+    @classmethod
+    def new_task_name(cls, title: str, bvid: str = "", base_dir: Union[str, Path, None] = None) -> str:
+        """推导「标题 + BV 号」的工作区名，**结果再做任何清洗都不会变**。
+
+        为什么不能直接 `sanitize_name(f"{sanitize_name(title)}_{bvid}")`：`sanitize_name`
+        会 strip 掉结尾的 `_`、空格与点，于是「标题以空格/下划线收尾」的课程（实测 NLP 课）
+        推出来的名字与磁盘上的名字差一个尾字符，`__init__` 再清洗一次还会继续吃掉字符——
+        最终命令在别处建一个空目录、对着它报「尚无任何语料」。这里把结尾清理做在**拼接
+        之前**，拼完只保证不超长，名字就是它本身。
+
+        `base_dir` 给定时再按 `TASK_PATH_MAX` 收紧一次，保证完整路径不撑破系统上限。
+        """
+        标题 = cls.非法字符正则.sub("_", str(title or ""))
+        标题 = re.sub(r"\s+", " ", 标题).strip(" ._")
+        后缀 = f"_{bvid}" if bvid else ""
+        上限 = cls.TASK_NAME_MAX
+        if base_dir is not None:
+            上限 = min(上限, max(len(后缀) + 1, cls.TASK_PATH_MAX - len(str(Path(base_dir))) - 1))
+        可用 = max(1, 上限 - len(后缀))
+        名字 = f"{标题[:可用].strip(' ._')}{后缀}"
+        return 名字 if 名字.strip(" ._") else "task_unnamed"
+
     @classmethod
     def create(
         cls,
@@ -83,15 +121,113 @@ class TaskWorkspace:
         bvid: str = "",
         custom_name: Optional[str] = None,
         base_dir: Union[str, Path, None] = None,
+        info_name: str = "",
     ) -> "TaskWorkspace":
-        """工厂方法：按标题与稿件号搭建任务工作区。"""
-        if custom_name:
-            task_name = custom_name
-        else:
-            安全标题 = cls.sanitize_name(title)
-            task_name = f"{安全标题}_{bvid}" if bvid else 安全标题
+        """工厂方法：按标题与稿件号搭建任务工作区。
 
-        return cls(task_name=task_name, base_dir=base_dir)
+        命名规则只有一条：**工作区名 = 清洗后的标题 + `_<bvid>`**，标题超长时先给 BV 号留位
+        再截标题（BV 号是唯一标识，被截掉就再也找不回来了）。
+
+        名字定下来之后，按**磁盘上的事实**决定用哪个目录，顺序如下：
+
+        1. `custom_name` / `info_name`（上游已定位到的目录名）——显式指定，原样使用；
+        2. 推导名本身在盘上且有料；
+        3. 盘上有**唯一一个**同源目录（`_same_course`）——历史工作区名被截断过，反推不出来。
+
+        以上都落空就按推导名新建——**不猜**：有歧义或证据不足时另建工作区，
+        猜错会静默读写到别门课的产物上。
+        """
+        resolved_base = _paths.resolve_base_dir(base_dir)
+        base_name = cls.new_task_name(title, bvid, base_dir=resolved_base) if bvid else cls.sanitize_name(title)
+
+        explicit = str(custom_name or info_name or "").strip()
+        if explicit:
+            # 显式指定：盘上同名且有料就原样用（`sanitize_name` 会吃掉尾下划线，
+            # 把已有目录名改短就会跑到旁边建新的——实测 `--task` 传 80 字符名即踩中）。
+            if cls._populated(resolved_base / explicit):
+                return cls._make(explicit, resolved_base)
+            return cls._make(cls.sanitize_name(explicit) if custom_name else base_name, resolved_base)
+
+        if cls._populated(resolved_base / base_name):
+            return cls._make(base_name, resolved_base)
+
+        existing = cls._find_existing_by_bvid(resolved_base, title or base_name)
+        return cls._make(existing or base_name, resolved_base)
+
+    # 同源判定所需的最短公共前缀（字符）。**只用来挡退化输入**（单字、空名），真正的
+    # 误认防线是 `_find_existing_by_bvid` 的「唯一性」——多个候选一律放弃。实测把门槛提到
+    # 8~24 都救不了「短标题」场景，反而让「甲课程导论」这种 5 字标题认不出自己的目录。
+    NAME_PREFIX_MIN = 4
+
+    @staticmethod
+    def _name_title_part(name: str) -> str:
+        """名字里的**标题部分**：去掉 `_BV…` 后缀（含被截断的 BV 前缀）与所有空白。
+
+        不能用「只匹配完整 12 位 BV 号」的正则：磁盘上的名字可能把 BV 号截断了
+        （实测吉林大学 `…_BV1P7b5z`），那样尾巴会留在标题部分里，同一门课两边永远比不齐。
+        """
+        return "".join(str(name).rsplit("_BV", 1)[0].split()).rstrip("_")
+
+    @classmethod
+    def _same_course(cls, name_a: str, name_b: str) -> bool:
+        """两个名字是否属于同一门课：**标题部分互为前缀**（任一侧够长）。
+
+        依据：工作区名与课程标题同源，历史截断只会砍掉尾巴，所以同源的两份名字必然共享
+        一段很长的标题前缀。实测：同一门课的标题部分或全等、或一方是另一方前缀
+        （NLP 67、黑马 80、浙大 36、吉林大学 22），不同课则连 8 个字符都对不齐。
+        """
+        a, b = cls._name_title_part(name_a), cls._name_title_part(name_b)
+        if not a or not b:
+            return False
+        short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+        return len(short) >= cls.NAME_PREFIX_MIN and long_.startswith(short)
+
+    @classmethod
+    def _find_existing_by_bvid(cls, base_dir: Path, title: str = "") -> Optional[str]:
+        """按标题找回**已存在**的同源工作区目录名；无候选或有歧义时返回 None。
+
+        只有一条规则：`_same_course`。**歧义即放弃**——两个候选都同源说明证据不足，
+        宁可另建工作区，也不要在两门同抬头的课之间乱认。
+        """
+        if not title or not base_dir.is_dir():
+            return None
+        stem = cls._name_title_part(title)
+        if len(stem) < cls.NAME_PREFIX_MIN:
+            return None
+        try:
+            children = [p for p in sorted(base_dir.iterdir()) if p.is_dir() and cls._populated(p)]
+        except OSError:
+            return None
+        hits = [p.name for p in children if cls._same_course(p.name, title)]
+        return hits[0] if len(hits) == 1 else None
+
+    @classmethod
+    def _make(cls, task_name: str, base_dir: Path) -> "TaskWorkspace":
+        """按**已定稿**的名字造工作区：绑定阶段不再清洗。
+
+        必要性：`sanitize_name` 会 strip 掉结尾的 `_`，而磁盘上的工作区名可能就以 `_` 收尾
+        （如 NLP 课的 `…实战项目_`）。名字来自磁盘时再清洗一次就会短一个字符，于是命令跑到
+        旁边另建一个空目录、对着它报「尚无任何语料」（实测 exit 2）。
+        """
+        ws = cls.__new__(cls)
+        ws._bind(task_name, base_dir)
+        return ws
+
+    @classmethod
+    def _populated(cls, path: Path) -> bool:
+        """该目录是否已有实质语料（长文、逐字稿或拓扑缓存），而不是刚建出来的空壳。"""
+        try:
+            if (path / "parts.json").exists():
+                return True
+            for sub, pattern in (("articles", "P*_*.md"), ("subtitles", "P*_clean.txt")):
+                folder = path / sub
+                if not folder.is_dir():
+                    continue
+                if any(f for f in folder.glob(pattern) if not f.name.endswith("_TASK.md")):
+                    return True
+        except OSError:
+            return False
+        return False
 
     @classmethod
     def from_existing(cls, path: Union[str, Path]) -> "TaskWorkspace":
@@ -332,8 +468,10 @@ class TaskWorkspace:
     def sync_duplicate_assets(self, dry_run: bool = False) -> List[Dict[str, Any]]:
         """检测并自动复用重复音频的字幕与长文产物，实现 0 Token 零成本去重同步。
 
-        零中间逐字稿链路的最终产物是 articles/ 长文，subtitles/ 字幕属历史遗留，
-        因此字幕是有则顺带同步的可选产物，不再充当复用前提。
+        链路的最终产物是 `articles/` 长文；`subtitles/` 是**逐字稿与人工语料的正式存放位置**
+        （通道 B 代读回来的转录、以及课程音频抓不到时人工粘贴的文本都放这里）。
+        但平台本身不强制产出逐字稿，因此字幕只作「有则顺带同步」的可选产物，
+        **不充当长文复用的前提**。
         """
         import shutil
         fingerprints = self.scan_audio_fingerprints()
