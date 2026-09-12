@@ -702,6 +702,7 @@ def check_no_private_tool_names():
         "references/delivery_matrix.md",
         "references/install.md",
         "references/host-tools/README.md",
+        "references/cli-cookbook.md",
     )
     hits = []
     for rel in targets:

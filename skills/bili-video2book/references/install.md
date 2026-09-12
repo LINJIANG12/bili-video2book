@@ -7,7 +7,7 @@
 ```
 skills/bili-video2book/        ← 装这一个目录即可（核心 skill + 它依赖的工具链）
 ├── SKILL.md
-├── references/                （含本文件与 host-tools/）
+├── references/                （含本文件、host-tools/ 与 cli-cookbook.md 场景手册）
 ├── scripts/                   （入口脚本）
 └── src/                       （工具链实现）
 ```

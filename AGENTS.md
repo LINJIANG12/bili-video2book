@@ -10,5 +10,6 @@
 - 工具链（技能的依赖，必须一起安装）：`skills/bili-video2book/src/` 与 `skills/bili-video2book/scripts/`
 - **安装单元 = `skills/bili-video2book/` 整个目录**（其余 README/平台声明/LICENSE 无需安装）
 - 各平台安装对照：`skills/bili-video2book/references/install.md`
+- CLI 场景手册（六个场景）：`skills/bili-video2book/references/cli-cookbook.md`
 - 运行前置：Python 3.8+、系统 `ffmpeg`、以及配套仓库 [`omni-media`](https://github.com/LINJIANG12/omni-media) 提供的 `read_audio` 或 `read_media` 听音通道之一
 - 自检：`cd skills/bili-video2book && python scripts/selfcheck.py`

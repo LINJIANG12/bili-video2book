@@ -9,7 +9,7 @@
 | 内容 | 路径 | 说明 |
 | :--- | :--- | :--- |
 | 技能定义 | `skills/bili-video2book/SKILL.md` | **唯一真源** |
-| 参考文档 | `skills/bili-video2book/references/` | 含各平台安装对照与工具映射 |
+| 参考文档 | `skills/bili-video2book/references/` | 含各平台安装对照、工具映射、交付矩阵与 CLI 场景手册（`cli-cookbook.md`） |
 | 工具链（技能的依赖） | `skills/bili-video2book/src/`、`skills/bili-video2book/scripts/` | 必须与 SKILL.md 一起安装 |
 
 ## 安装：只装技能目录
