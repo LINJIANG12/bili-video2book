@@ -1,393 +1,355 @@
 <div align="center">
 
-<a name="readme-top"></a>
+# bili-video2book
 
-<h1>Bili-Video2Book</h1>
+Cross-Platform Long-Video/Online Course Refactoring Engine & Agent Skill
+<br />
+Zero Intermediate ASR · 16kHz Audio Direct-to-Textbook · Clustered Textbooks & Mind Maps · Native & External Audio Channels
 
 <p>
-  <strong>Batch-transform Bilibili, YouTube, Douyin videos and local course media into structured textbooks and review notes.</strong>
-  <br />
-  <em>Two-stage pipeline · Dual listening channels · Three deliverable tracks · Pre-delivery quality gate · Python 3.10+ multi-platform media ingestion engine</em>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/ffmpeg-Required-orange.svg" alt="ffmpeg Required">
+  <img src="https://img.shields.io/badge/Platform-Claude_Code_|_Codex_|_OpenCode-success.svg" alt="Platform Support">
 </p>
 
 <p>
-  <a href="#quick-start"><img src="https://img.shields.io/badge/Install-4CAF50?style=for-the-badge" alt="Install" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License: MIT" /></a>
-</p>
-
-<p>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python_3.10%2B-3776AB?style=flat&logo=python&logoColor=white" alt="Runtime: Python 3.10 or later" /></a>
-</p>
-
-<p>
-  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-3178C6?style=flat" alt="Listening channel: Model Context Protocol" /></a>
-  <a href="https://docs.anthropic.com/en/docs/claude-code"><img src="https://img.shields.io/badge/Claude_Code-D97757?style=flat&logo=claude&logoColor=white" alt="Host: Claude Code" /></a>
-  <a href="https://openai.com/codex/"><img src="https://img.shields.io/badge/Codex-000000?style=flat&logo=openai&logoColor=white" alt="Host: Codex" /></a>
-  <a href="https://opencode.ai/"><img src="https://img.shields.io/badge/OpenCode-3178C6?style=flat" alt="Host: OpenCode" /></a>
-</p>
-
-<p>
-  <a href="README.md">简体中文</a> ·
-  <strong>English</strong>
+  <a href="README.md">简体中文</a> •
+  <a href="README.en.md"><b>English</b></a>
 </p>
 
 </div>
 
-Give it a course URL or a directory, and it listens episode by episode, writes one article per episode, then consolidates them into books and review notes.
-
-> [!CAUTION]
-> This tool batch-fetches Bilibili video metadata and audio streams, and can store your login credential. Use it only on content you are entitled to access, and comply with Bilibili's terms of service and applicable law. `SESSDATA` grants access to your account: do not copy, upload or share it.
+---
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Features](#features)
+- [Three Delivery Tracks](#three-delivery-tracks)
+- [Key Features](#key-features)
+- [Architecture & How It Works](#architecture--how-it-works)
 - [Quick Start](#quick-start)
-- [How It Works](#how-it-works)
-- [Usage](#usage)
-- [Requirements](#requirements)
-- [Configuration](#configuration)
+- [Platform Installation Guide](#platform-installation-guide)
+- [Common Scenarios](#common-scenarios)
+- [CLI Command Reference](#cli-command-reference)
+- [Requirements & Dependencies](#requirements--dependencies)
+- [Environment Variables & Configuration](#environment-variables--configuration)
 - [Project Structure](#project-structure)
-- [Commands](#commands)
-- [Tech Stack](#tech-stack)
-- [FAQ](#faq)
-- [Security](#security)
+- [Quality Assurance & Validation](#quality-assurance--validation)
+- [Troubleshooting & FAQ](#troubleshooting--faq)
+- [Security & Usage Boundaries](#security--usage-boundaries)
 - [License](#license)
+
+---
 
 ## Overview
 
-Bili-Video2Book is a skill for AI coding assistants that turns a course into a textbook. It accepts a Bilibili collection or a local course directory, writes one article per episode, and consolidates those articles into a modular book and review notes.
+Most video summarization tools generate shallow bullet points, flat transcripts, or bloated paragraphs, stripping away blackboard step-by-step derivations, authentic tone, technical context, and pedagogical transitions.
 
-The hard part of a long course is that nobody can listen to all of it and remember it. The usual approach transcribes first, which leaves the reader to turn spoken language into revisable text, and the longer the transcript, the more likely it overflows the agent context. This skill slices the course into audio segments, and a host model with an audio modality listens to each segment and writes the article directly, with no intermediate transcript.
+`bili-video2book` is a cross-platform AI Agent Skill and media ingestion engine:
+- **Multi-Source Ingestion**: Natively ingests Bilibili, YouTube, Douyin, and local video folders without tedious configuration.
+- **Zero Intermediate Transcription**: Completely bypasses raw ASR text, routing audio directly through Model Context Protocol (MCP) audio listening channels (`read_audio` for native multimodal LLMs, or `read_media` for external model delegate reading).
+- **Three Structured Deliverables**: Converts speech and video into **deep-dive single-episode textbook articles**, **clustered module textbooks**, and **mind-map review notes**.
 
-The output comes in three tracks: per-episode articles, modular books and mindmap notes, each in its own directory, usable on its own. Every deliverable passes a quality check before delivery, so problems such as boilerplate padding or hollow headings are stopped there rather than left for you to find while reading.
+---
 
-The only thing you supply is a listening channel, and it comes from the companion repository [omni-media][link-omni-media]: use its `mcp/` when the host model has an audio modality (zero credentials), or its `mcp-ext/` when the host is text-only (an external model reads on your behalf). The channel is a required part of the pipeline; without it stage 1 obtains no audio facts and the run stops to ask you to mount one. After installation, one command runs a whole course.
+## Three Delivery Tracks
 
-<div align="right">
+All deliverables are generated inside the output root (default `<workspace_root>/output/<task>/`), completely decoupled from the skill source code.
 
-[![Back to top][badge-top]](#readme-top)
+| Deliverable Track | Storage Path | Primary Use Case | Core Standards & Typography |
+| :--- | :--- | :--- | :--- |
+| **Single-Episode Textbook Articles** | `output/<task>/articles/` | Targeted study, micro-level mathematical derivation, self-guided learning | Preserves complete formulas, derivations, and blackboard notes. Supports `learning` (modern study guide, recommended) and `legacy` (objective academic lecture). Zero filler paragraphs. |
+| **Clustered Module Textbooks** | `output/<task>/textbooks/` | Systemic reading, cross-chapter continuity, offline printing | Synthesizes multiple episodes into chapters with introductions, section transitions, unified terminology, and technical summaries. |
+| **Mind-Map Review Notes** | `output/<task>/notes/` | Exam preparation, knowledge indexing, Markmap / XMind import | Two-pass clustering providing high-density structured notes, ASCII knowledge topology trees, and concept comparison matrices. |
 
-</div>
+---
 
-## Features
+## Key Features
 
-- **One command per course** — Give it a collection URL or a local course directory; it writes one article per episode, then consolidates them into a book and notes
-- **Dual listening channels** — Hosts with an audio modality use `read_audio` with zero credentials; text-only hosts use `read_media`. Both channels share one pagination contract
-- **Three tracks, separate folders** — Articles land in `articles/`, modular books in `textbooks/`, notes in `notes/`, each usable on its own
-- **Pre-delivery quality check** — Boilerplate padding, hollow headings, per-episode headings, inline quote fragments and episode voice fail the check. Fence language tag is a warning, counted only with `--require-lang`
-- **Incremental re-runs** — Completed episodes are skipped by default; `--force` reprocesses them
-- **No third-party runtime dependencies** — Python standard library only, plus system `ffmpeg`
+- **Unified Ingestion Engine**: Automatically handles Bilibili (episodes, series, favorites), YouTube, Douyin, and local directories, standardizing streams into 16kHz mono AAC audio.
+- **Dual Audio Channel Protocol**: Integrates with companion [`omni-media`](https://github.com/LINJIANG12/omni-media) MCP services:
+  - `read_audio`: For LLMs with native audio understanding;
+  - `read_media`: For host environments delegating listening to dedicated external models.
+- **Two-Phase Pipeline Orchestration**:
+  - Phase 1 (Micro): Concurrent audio extraction, task manifest creation, and single-episode article generation;
+  - Phase 2 (Macro): Semantic chapter clustering, full textbook compilation, and note synthesis.
+- **Three-Tier Quality Gate**: Automated verification via `note_quality_check` (information density), `render_compat_check` (Typora Markdown compliance), and `cleanup` / `sync` (artifact verification).
+- **Native Agent Standard**: Strictly adheres to the Agent Skills specification. Code, media, and artifacts are strictly isolated across three distinct directories.
 
-<div align="right">
+---
 
-[![Back to top][badge-top]](#readme-top)
+## Architecture & How It Works
 
-</div>
+The architecture enforces strict **three-domain isolation**:
+- **Code Domain (`skill/`)**: Agent skill definitions, CLI utilities, and quality scripts.
+- **Media Domain (`omni-media/`)**: MCP listening server channels (`read_audio` / `read_media`).
+- **Artifact Domain (`output/`)**: Audio segments, manifests, articles, textbooks, and notes.
+
+```mermaid
+flowchart TD
+    subgraph Ingestion["Media Ingestion Layer"]
+        A[Bilibili / YouTube / Douyin / Local Videos] --> B[src/cli.py parse / audio / pipeline]
+        B --> C[ffmpeg: Resample & convert to 16kHz mono AAC]
+    end
+
+    subgraph AudioEngine["Decoupled Audio Channels (omni-media)"]
+        C --> D{Host Channel}
+        D -->|Native Audio Multimodal| E[MCP read_audio]
+        D -->|External Delegate LLM| F[MCP read_media]
+    end
+
+    subgraph PhaseOne["Phase 1: Single-Episode Generation"]
+        E --> G[Generate Textbook Articles articles/]
+        F --> G
+        G --> H[Record to artifacts/manifest.json]
+    end
+
+    subgraph PhaseTwo["Phase 2: Macro Clustering & Synthesis"]
+        H --> I[cluster-articles -> Module Textbooks textbooks/]
+        H --> J[cluster-notes -> Mind-Map Notes notes/]
+    end
+
+    subgraph Gate["Automated Quality Gate"]
+        I --> K[note_quality_check & render_compat_check]
+        J --> K
+        K --> L[cleanup temporary cache & sync manifest status]
+    end
+```
+
+---
 
 ## Quick Start
 
-### Prerequisites
+### 1. Verify Environment
+
+Run diagnostic check inside the skill folder to verify Python, ffmpeg, and MCP channels:
 
 ```bash
-python --version   # 3.8 及以上
-ffmpeg -version    # 已加入 PATH
+python skills/bili-video2book/src/cli.py info
 ```
 
-### Install
+Ensure Python 3.10+, ffmpeg, and at least one audio listening channel are available.
 
-> [!IMPORTANT]
-> Step 3 is not optional. Both listening servers come from the companion repository [omni-media][link-omni-media]; pick one. Without a channel, stage 1 obtains no audio facts and the run stops to ask you to mount one.
+### 2. Step-by-Step Workflow
+
+Process a video or course episode step-by-step:
 
 ```bash
-# 1) 技能本体：复制这一个目录即可
-cp -r skills/bili-video2book ~/.claude/skills/            # Claude Code
-cp -r skills/bili-video2book ~/.codex/skills/             # Codex
-cp -r skills/bili-video2book ~/.config/opencode/skills/   # OpenCode
+# Step 1: Parse metadata
+python skills/bili-video2book/src/cli.py parse "https://www.bilibili.com/video/BV1xx411c7mD" --base-dir ./output
 
-# 2) 可选：安装 CLI
-pip install -e .
+# Step 2: Extract & convert 16kHz audio
+python skills/bili-video2book/src/cli.py audio BV1xx411c7mD --base-dir ./output
 
-# 3) 听音通道（必需）：两个服务同属配套仓库 omni-media
-cd .. && git clone https://github.com/LINJIANG12/omni-media.git
-
-#    通道 A：宿主有原生音频模态（工具列表里有 read_audio），零凭证
-cd omni-media/mcp && pip install -e .
-omni-media status                    # 诊断系统依赖、各宿主挂载状态与实际配置路径
-omni-media apply --target codex      # 挂到宿主；可用取值以 status 的实际输出为准
-
-#    通道 B：宿主只有文本能力（只有 read_media）时改用它
-cd ../mcp-ext && pip install -e .
-omni-media-ext config --init         # 生成 config.json，填入端点与 api_key
-omni-media-ext status
-omni-media-ext apply --target codex
+# Step 3: Create transcription task manifest (explicit --article-type learning required)
+python skills/bili-video2book/src/cli.py transcribe BV1xx411c7mD --article-type learning --base-dir ./output
 ```
 
-### Run
+> **Note**: After creating `ARTICLE_TASK.md`, the host Agent will read the task manifest and invoke the MCP audio tool to write the article.
+
+### 3. One-Click Pipeline (Batch Processing)
+
+Automate Phase 1 preparation in a single command:
 
 ```bash
-bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all --article-type learning
+python skills/bili-video2book/src/cli.py pipeline "https://www.bilibili.com/video/BV1xx411c7mD" --article-type learning --base-dir ./output
 ```
 
-Products land under `<products root>/<course workspace>/`: articles in `articles/`, modular books in `textbooks/`, notes in `notes/`.
+---
 
-<div align="right">
+## Platform Installation Guide
 
-[![Back to top][badge-top]](#readme-top)
+> ⚠️ **Installation Boundary**: The **installable unit is strictly the `skills/bili-video2book/` directory**. Other repository files (`README.md`, `LICENSE`, `pyproject.toml`, etc.) are repository metadata and should NOT be installed. Do NOT copy `SKILL.md` alone, as its toolchain lives in the same folder.
 
-</div>
+### Platform Matrix
 
-## How It Works
+| Platform | User-Level Directory | Project-Level Directory | Installation Method |
+| :--- | :--- | :--- | :--- |
+| **Claude Code** | `~/.claude/skills/bili-video2book/` | `<project>/.claude/skills/bili-video2book/` | Symlink or copy `skills/bili-video2book/`. Automatically detected as a plugin. |
+| **Codex** | `~/.codex/skills/bili-video2book/` | `<project>/.codex/skills/bili-video2book/` | Plugin manifest ready at `.codex-plugin/plugin.json`; or symlink directly. |
+| **OpenCode** | `~/.config/opencode/skills/bili-video2book/` | `<project>/.opencode/skills/bili-video2book/` | Symlink or copy `skills/bili-video2book/` into OpenCode skill folder. |
+| **Generic Agents**| `~/.agents/skills/bili-video2book/` | `<project>/.agents/skills/bili-video2book/` | Compatible with Agent Skills specification; declared in `.agents/plugins/marketplace.json`. |
 
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
-flowchart TD
-    A[Parse and audio extraction<br/>FFmpeg 16kHz mono slices] --> B{Course under 60 minutes}
-    B -->|Yes| C[Main agent handles it serially]
-    B -->|No| D[Dispatch subagents<br/>one per episode]
-    C --> E[Stage 1 listening<br/>read_audio / read_media]
-    D --> E
-    E --> F[Per-episode articles<br/>articles/]
-    F --> G[Stage 2 two-pass aggregation<br/>modules → notes]
-    G --> H[Modular books and review notes<br/>textbooks/ · notes/]
+### Manual Installation (Unlisted Platforms)
 
-    classDef start fill:#3B82F6,stroke:#2563EB,color:#fff,stroke-width:2px
-    classDef process fill:#10B981,stroke:#059669,color:#fff,stroke-width:2px
-    classDef decision fill:#F59E0B,stroke:#D97706,color:#fff,stroke-width:2px
-    classDef data fill:#8B5CF6,stroke:#7C3AED,color:#fff,stroke-width:2px
+1. **Native Plugin Registration**: Provide repository URL if the host supports Git plugin installations.
+2. **Directory Symlink / Junction (Recommended)**:
+   - **Linux / macOS**: `ln -s <repo>/skills/bili-video2book <host_skill_dir>/bili-video2book`
+   - **Windows**: `mklink /J "<host_skill_dir>\bili-video2book" "<repo>\skills\bili-video2book"`
+3. **Full Directory Copy**: Copy `skills/bili-video2book/` directly into the platform skill directory.
 
-    class A start
-    class C,D,E,F,G process
-    class B decision
-    class H data
-```
+---
 
-- Dispatch thresholds live in `src/core/budget.py`: a course under 60 minutes is handled serially by the main agent, and anything longer is dispatched to subagents, one per episode. When episodes are numerous and short, the tool suggests batching them.
-- Stage 1 and stage 2 are decoupled on content boundaries, so a long course can also be resumed after an interruption.
-- The tool layer produces task files, dispatch payloads and gates; the agent writes the articles and notes.
+## Common Scenarios
 
-<div align="right">
+### Scenario 1: University Courses & Technical Lectures
 
-[![Back to top][badge-top]](#readme-top)
-
-</div>
-
-## Usage
-
-### Process a whole course
-
+Ideal for multi-part academic series, computer science lectures, and technical tutorials:
 ```bash
-# B 站合集
-bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all --article-type learning
-
-# 本地课程目录
-bili-video2book pipeline "D:\courses\software_engineering\" --all --article-type learning
+python skills/bili-video2book/src/cli.py pipeline "https://www.bilibili.com/video/BV1xx411c7mD" --article-type learning --base-dir ./output
 ```
 
-### Process selected episodes or a range
+### Scenario 2: Local Video Folders & Screen Recordings
 
+Process offline meetings, enterprise training videos, and recorded workshops:
 ```bash
-bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --page 1 --article-type learning
-bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range 2-5 --article-type learning
+# Parse local directory
+python skills/bili-video2book/src/cli.py parse "D:/courses/cs61a" --base-dir ./output
+
+# Extract audio & prepare task manifests
+python skills/bili-video2book/src/cli.py audio cs61a --base-dir ./output
+python skills/bili-video2book/src/cli.py transcribe cs61a --article-type learning --base-dir ./output
 ```
 
-### Build modular books and review notes
+### Scenario 3: Synthesizing Full Clustered Textbooks
 
+After generating single-episode articles, execute Phase 2 textbook synthesis:
 ```bash
-bili-video2book cluster-articles "https://www.bilibili.com/video/BV14VqVBrEhc"
-bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc"
+python skills/bili-video2book/src/cli.py cluster-articles <task_id> --base-dir ./output
 ```
+Synthesizes episodes into chapters while preserving all original files in `articles/`.
 
-### Quality check and ledger reconciliation
+### Scenario 4: Generating Mind-Map Review Notes
 
+Extract knowledge topology and generate review notes with ASCII trees:
 ```bash
-python scripts/note_quality_check.py --strict      # 笔记成色
-python scripts/render_compat_check.py --strict     # 渲染合规
-bili-video2book sync                               # 以磁盘产物回填 manifest.json
+python skills/bili-video2book/src/cli.py cluster-notes <task_id> --base-dir ./output
 ```
 
-<div align="right">
+### Scenario 5: Bilibili Authentication Persistence
 
-[![Back to top][badge-top]](#readme-top)
+Acquire premium or high-bitrate audio streams:
+```bash
+python skills/bili-video2book/src/cli.py login
+```
+Prompts for SESSDATA and stores it obfuscated locally. If omitted, downloads automatically fall back to 480P audio tracks.
 
-</div>
+---
 
-## Requirements
+## CLI Command Reference
 
-- **Python** — 3.8 or later, from `requires-python` in `pyproject.toml`
-- **External binary** — `ffmpeg`, on `PATH`
-- **Listening channel** — one of `read_audio` or `read_media`, supplied by the companion repository [omni-media][link-omni-media]
-- **Operating system** — OS independent, per the classifiers in `pyproject.toml`
+All commands run via `python skills/bili-video2book/src/cli.py <subcommand>`:
 
-<div align="right">
+| Subcommand | Syntax & Arguments | Description | Primary Output / Exit Code |
+| :--- | :--- | :--- | :--- |
+| `parse` | `parse <source> [--base-dir DIR]` | Parses video metadata or local directory | `manifest.json` |
+| `audio` | `audio <task_id> [--p N] [--base-dir DIR]` | Extracts & converts 16kHz AAC audio | `audio/*.m4a`, `audio_index.json` |
+| `transcribe` | `transcribe <task_id> --article-type <type> [--p N]` | Validates prompt type & creates task | `ARTICLE_TASK.md`; invalid type exits with code `4` |
+| `pipeline` | `pipeline <source> --article-type <type> [--base-dir DIR]` | Chains Phase 1 preparation steps | Executes `parse` + `audio` + `transcribe` |
+| `cluster-notes` | `cluster-notes <task_id> [--base-dir DIR]` | Clusters concepts into review notes | Output in `notes/` with ASCII tree |
+| `cluster-articles`| `cluster-articles <task_id> [--base-dir DIR]` | Compiles episodes into textbooks | Output in `textbooks/` |
+| `dedup` | `dedup <task_id> [--base-dir DIR]` | Cleans up duplicate draft copies | Eliminates redundant intermediate files |
+| `cleanup` | `cleanup <task_id> [--all] [--base-dir DIR]` | Cleans large audio files & caches | Removes media cache, retains documents |
+| `sync` | `sync <task_id> [--base-dir DIR]` | Audits artifacts & updates manifest | Updates `manifest.json` status |
+| `login` | `login` | Validates & persists Bilibili credentials | Obfuscated local storage |
+| `logout` | `logout` | Clears stored credentials | Removes local session cache |
+| `info` | `info` | Prints environment and channel diagnostics | System status summary; exits with `0` |
 
-[![Back to top][badge-top]](#readme-top)
+---
 
-</div>
+## Requirements & Dependencies
 
-## Configuration
+### 1. System Prerequisites
+- **Python 3.10+**
+- **ffmpeg & ffprobe**: Must be available in system `PATH` for audio resampling and segmentation.
 
-### Environment variables
+### 2. Python Packages
+```bash
+pip install yt-dlp requests
+```
 
-| Variable | Description | Default | Required |
-|---|---|---|---|
-| `BVB_HOME` | Container root, the common parent of `skill/`, `omni-media/` and `output/` | located via the `.bvb-home` marker | no |
-| `BVB_OUTPUT_DIR` | Products root | `<container root>/output` | no |
-| `BVB_AUDIO_TOKENS_PER_SEC` | Audio token coefficient; set `100` for OpenAI pricing | `32` | no |
-| `BVB_CONTEXT_WINDOW_TOKENS` | Context window budget | `1000000` | no |
-| `OMNI_MEDIA_MCP_DIR` | Override for the host-native listening server directory | `<container root>/omni-media/mcp` | no |
-| `BVB_DEBUG` | Set to `1` to re-raise errors with a stack trace | unset | no |
+### 3. Audio Channels
+Requires companion repository [`LINJIANG12/omni-media`](https://github.com/LINJIANG12/omni-media):
+- Native Multimodal MCP: `<workspace_root>/omni-media/mcp/` (provides `read_audio`);
+- External Delegate MCP: `<workspace_root>/omni-media/mcp-ext/` (provides `read_media`).
 
-Set environment variables before the process starts. A single run can relocate the products root with `--base-dir <path>`; command-line flags take precedence over environment variables.
+---
 
-<div align="right">
+## Environment Variables & Configuration
 
-[![Back to top][badge-top]](#readme-top)
+| Variable | Description | Default Value |
+| :--- | :--- | :--- |
+| `BVB_OUTPUT_DIR` | Absolute output directory for artifacts | `<workspace_root>/output/` |
+| `BVB_HOME` | Working home directory of the skill | Auto-detected from script path |
+| `BVB_SESSDATA` / `SESSDATA` | Bilibili session credential for premium audio | Empty (falls back to 480P audio) |
 
-</div>
+> **Note**: The `--base-dir <path>` argument can be passed to any CLI command and takes precedence over `BVB_OUTPUT_DIR`.
+
+---
 
 ## Project Structure
 
 ```
-bili-video2book/
-├── skills/bili-video2book/     # 技能本体，安装时只需这一个目录
-│   ├── SKILL.md                # 技能契约，Agent 的唯一事实源
-│   ├── src/                    # 工具链
-│   │   ├── cli.py              # 入口：12 个子命令
-│   │   ├── core/               # 路径、音频预算、流水线、抓取、交付物质检
-│   │   └── generator/          # 任务书、提示词模板与语义聚合
-│   ├── scripts/                # 质检、清理、队列跟踪与全量自检
-│   └── references/             # 安装说明、交付矩阵、命令速查、工具映射
-├── agents/                     # 通用 agents 侧的技能元数据
-├── .claude-plugin/             # Claude Code 插件清单
-├── .codex-plugin/              # Codex 插件清单
-├── .opencode/                  # OpenCode 安装说明
-└── pyproject.toml              # 包元数据与 CLI 入口
+skill/
+├── AGENTS.md                          # Cross-platform Agent entrypoint
+├── CLAUDE.md                          # Claude development guidelines
+├── LICENSE                            # MIT License
+├── pyproject.toml                     # Project packaging & dependencies
+├── README.md                          # Chinese documentation
+├── README.en.md                       # English documentation (this file)
+└── skills/
+    └── bili-video2book/               # [Core Installable Unit] Skill root
+        ├── SKILL.md                   # Single source of truth for Agent skill
+        ├── references/                # Technical guides & references
+        │   ├── cli-cookbook.md        # CLI cookbook for 6 practical scenarios
+        │   ├── delivery_matrix.md     # Standards for deliverables & typography
+        │   ├── install.md             # Detailed platform installation paths
+        │   └── host-tools/            # Host Agent tool mapping tables
+        ├── scripts/                   # Verification and maintenance scripts
+        │   ├── selfcheck.py           # Single-gate selfcheck script
+        │   ├── note_quality_check.py  # Note quality and density check
+        │   ├── render_compat_check.py # Typora rendering compatibility check
+        │   └── cleanup_tasks.py       # Task cleanup maintenance
+        └── src/                       # Media ingestion & pipeline toolchain
+            ├── cli.py                 # Unified CLI entrypoint
+            └── core/                  # Engine orchestration & downloaders
 ```
 
-<div align="right">
+---
 
-[![Back to top][badge-top]](#readme-top)
+## Quality Assurance & Validation
 
-</div>
+Run quality checks before finalizing any deliverable:
 
-## Commands
+```bash
+# 1. Check note quality & information density
+python skills/bili-video2book/scripts/note_quality_check.py output/<task_id>/notes/
 
-| Command | Description | Example |
-|---|---|---|
-| `parse` | Parse video topology and list episodes | `bili-video2book parse "<url>" --limit 10` |
-| `audio` | Download or extract the audio stream | `bili-video2book audio "<url>" --all` |
-| `transcribe` | Export a per-episode article task file, with no intermediate transcript | `bili-video2book transcribe "<url>" --page 1 --article-type learning` |
-| `pipeline` | Run the complete pipeline | `bili-video2book pipeline "<url>" --all --article-type learning` |
-| `cluster-articles` | Consolidate per-episode articles into modular books | `bili-video2book cluster-articles "<url>"` |
-| `cluster-notes` | Two-pass semantic aggregation, exports note task files | `bili-video2book cluster-notes "<url>"` |
-| `dedup` | Synchronize duplicate audio assets to save tokens | `bili-video2book dedup --dry-run` |
-| `cleanup` | Reclaim completed task files, keeping samples per category | `bili-video2book cleanup --dry-run` |
-| `sync` | Reconcile `manifest.json` against on-disk products | `bili-video2book sync --dry-run` |
-| `info` | Show environment and toolchain readiness | `bili-video2book info` |
-| `login` | Persist a Bilibili SESSDATA cookie | `bili-video2book login --sessdata "<SESSDATA>"` |
-| `logout` | Remove the persisted SESSDATA cookie | `bili-video2book logout` |
+# 2. Check Typora Markdown rendering compatibility
+python skills/bili-video2book/scripts/render_compat_check.py output/<task_id>/
 
-### Global flags
+# 3. Complete environment and skill selfcheck
+python skills/bili-video2book/scripts/selfcheck.py
+```
 
-| Flag | Description | Default |
-|---|---|---|
-| `--base-dir` | Products root path | `BVB_OUTPUT_DIR` or `<container root>/output` |
-| `--task` | Name of the course workspace directory | the most recently active one |
-| `--sessdata` | Credential for this run, taking precedence over the saved copy | the saved copy |
-| `--json` | Emit JSON, `parse` and `audio` only | off |
+### Typora Rendering Recommendation
+Deliverables are optimized for **Typora**:
+- Inline Math: In Typora, navigate to **Preferences** → **Markdown** → enable **Inline Math** (`$...$`) to ensure mathematical formulas render properly.
 
-### Exit codes
+---
 
-- `0` — finished normally
-- `4` — article prompt style not confirmed, that is `--article-type` is missing or invalid
+## Troubleshooting & FAQ
 
-<div align="right">
+### Q1: Garbled characters or UnicodeEncodeError on Windows?
+All CLI entrypoints invoke `enable_utf8_console()` to enforce UTF-8 streams. Ensure your terminal (Windows Terminal, PowerShell) uses a font supporting CJK characters.
 
-[![Back to top][badge-top]](#readme-top)
+### Q2: `transcribe` or `pipeline` fails with exit code 4?
+Article writing requires strict stylistic grounding. The engine provides mature prompts for `learning` (modern study guide, recommended) and `legacy` (academic textbook). Passing an invalid or experimental type (such as `interview` or `consulting`) aborts execution with code `4`. Explicitly pass `--article-type learning`.
 
-</div>
+### Q3: Bilibili audio download returns 403 Forbidden?
+Certain videos require user authentication. Run `python skills/bili-video2book/src/cli.py login` to store your SESSDATA. Without credentials, the system automatically falls back to 480P audio streams.
 
-## Tech Stack
+---
 
-### Runtime
+## Security & Usage Boundaries
 
-- **Python 3.8 or later** — the only runtime, standard library only
-- **setuptools** — build backend, see `pyproject.toml`
+1. **Credential Privacy**: SESSDATA is stored in an obfuscated local file and is never uploaded to external servers.
+2. **Copyright Disclaimer**: This tool is designed strictly for personal study, technical synthesis, and academic review. Respect original copyright holders. Do not use generated content for unauthorized commercial redistribution.
+3. **Tool Invariance**: Skill instructions use generic behavioral semantics ("read file", "write file") rather than hardcoded host tool names. Host tool mappings are isolated in `references/host-tools/`.
 
-### External dependencies
-
-- **FFmpeg** — audio extraction and slicing, 16kHz mono
-
-### Optional channels
-
-- **MCP** — the protocol behind the host-native listening channel
-
-<div align="right">
-
-[![Back to top][badge-top]](#readme-top)
-
-</div>
-
-## FAQ
-
-### Can I use this without omni-media
-
-No. Both listening channels, `read_audio` and `read_media`, come from [omni-media][link-omni-media], and the pipeline lists them as required: when stage 1 obtains no audio facts, the run stops and asks you to mount one.
-
-### Should I install mcp or mcp-ext
-
-It depends on the host modality. If your tool list contains `read_audio`, the host has an audio modality: install `mcp/`, which has the lowest latency and needs no credential. If you only have `read_media`, the host is text-only: install `mcp-ext/`, whose `config.json` points at an external model endpoint. The two channels share one paging contract, so switching means changing the tool name.
-
-### How do I confirm the mount worked
-
-`bili-video2book info` prints the readiness of both channels along with the domain paths; `omni-media status` diagnoses system dependencies, the mount state of each host and the actual config path.
-
-### Will my credentials reach version control
-
-No. This repository excludes the Bilibili `SESSDATA`, and omni-media excludes `mcp-ext` `config.json`, committing only the template. Channel A needs no credential at all.
-
-<div align="right">
-
-[![Back to top][badge-top]](#readme-top)
-
-</div>
-
-## Security
-
-- Credential storage: `login` writes the Bilibili `SESSDATA` cookie as plain text under the products root. Ignore rules exclude the file, so it never enters version control.
-- Invalidation: if you suspect a leak, sign out of Bilibili to invalidate the credential, then run `logout` to clear the local copy.
-- Access scope: the tool reads public Bilibili video metadata and audio streams, plus the local media files you point it at.
-- Reporting: this repository has no `SECURITY.md` yet. Open an issue for security concerns.
-
-<div align="right">
-
-[![Back to top][badge-top]](#readme-top)
-
-</div>
+---
 
 ## License
 
-[MIT](LICENSE)
-
-<div align="right">
-
-[![Back to top][badge-top]](#readme-top)
-
-</div>
-
-<!-- LINKS & IMAGES -->
-
-[badge-top]: https://img.shields.io/badge/-BACK_TO_TOP-151515?style=flat-square
-[badge-python]: https://img.shields.io/badge/Python_3.8%2B-3776AB?style=flat&logo=python&logoColor=white
-[badge-mcp]: https://img.shields.io/badge/MCP-3178C6?style=flat
-[badge-claude]: https://img.shields.io/badge/Claude_Code-D97757?style=flat&logo=claude&logoColor=white
-[badge-codex]: https://img.shields.io/badge/Codex-000000?style=flat&logo=openai&logoColor=white
-[badge-opencode]: https://img.shields.io/badge/OpenCode-3178C6?style=flat
-[link-python]: https://www.python.org/
-[link-mcp]: https://modelcontextprotocol.io/
-[link-claude]: https://docs.anthropic.com/en/docs/claude-code
-[link-codex]: https://openai.com/codex/
-[link-opencode]: https://opencode.ai/
-[link-license]: LICENSE
-[link-omni-media]: https://github.com/LINJIANG12/omni-media
+This project is licensed under the [MIT License](LICENSE).

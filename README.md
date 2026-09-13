@@ -1,393 +1,358 @@
 <div align="center">
 
-<a name="readme-top"></a>
+# bili-video2book
 
-<h1>Bili-Video2Book</h1>
+跨平台网课/长视频/音视频重构引擎与 Agent 技能
+<br />
+零中间纯文本转录 · 16kHz 音频直达教材长文 · 模块全书与脑图笔记 · 原生与外部听音双通道
 
 <p>
-  <strong>把 B 站、YouTube、抖音长视频与本地课程视频批量转换为结构化教材长文与复习笔记。</strong>
-  <br />
-  <em>两阶段流水线 · 双通道听音 · 三轨交付 · 交付前质检 · Python 3.10+ · 现代多平台媒体内核</em>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/ffmpeg-Required-orange.svg" alt="ffmpeg Required">
+  <img src="https://img.shields.io/badge/Platform-Claude_Code_|_Codex_|_OpenCode-success.svg" alt="Platform Support">
 </p>
 
 <p>
-  <a href="#快速开始"><img src="https://img.shields.io/badge/快速开始-4CAF50?style=for-the-badge" alt="快速开始" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-yellow?style=for-the-badge" alt="许可证：MIT" /></a>
-</p>
-
-<p>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python_3.10%2B-3776AB?style=flat&logo=python&logoColor=white" alt="运行环境：Python 3.10 及以上" /></a>
-</p>
-
-<p>
-  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-3178C6?style=flat" alt="听音通道：Model Context Protocol" /></a>
-  <a href="https://docs.anthropic.com/en/docs/claude-code"><img src="https://img.shields.io/badge/Claude_Code-D97757?style=flat&logo=claude&logoColor=white" alt="宿主：Claude Code" /></a>
-  <a href="https://openai.com/codex/"><img src="https://img.shields.io/badge/Codex-000000?style=flat&logo=openai&logoColor=white" alt="宿主：Codex" /></a>
-  <a href="https://opencode.ai/"><img src="https://img.shields.io/badge/OpenCode-3178C6?style=flat" alt="宿主：OpenCode" /></a>
-</p>
-
-<p>
-  <strong>简体中文</strong> ·
+  <a href="README.md"><b>简体中文</b></a> •
   <a href="README.en.md">English</a>
 </p>
 
 </div>
 
-给出一门课的链接或目录，它逐集听音、逐集成文，再把多集长文整编为教材与复习笔记。
-
-> [!CAUTION]
-> 本工具会批量抓取 B 站视频的元数据与音频流，并可保存你的登录凭证。仅用于你自己有权访问的内容，遵守 B 站的服务条款与相关法律规定。`SESSDATA` 等同账号登录态，不要复制、上传或分享。
+---
 
 ## 目录
 
-- [概览](#概览)
-- [功能特性](#功能特性)
-- [快速开始](#快速开始)
-- [基本工作流程](#基本工作流程)
-- [使用方法](#使用方法)
-- [运行环境与依赖](#运行环境与依赖)
-- [配置](#配置)
+- [项目概述](#项目概述)
+- [三大交付轨道](#三大交付轨道)
+- [核心特性](#核心特性)
+- [工作原理与架构流程](#工作原理与架构流程)
+- [快速上手](#快速上手)
+- [各平台安装指南](#各平台安装指南)
+- [典型使用场景](#典型使用场景)
+- [CLI 命令完整速查](#cli-命令完整速查)
+- [前置要求与依赖](#前置要求与依赖)
+- [环境变量与配置](#环境变量与配置)
 - [项目结构](#项目结构)
-- [命令](#命令)
-- [技术栈](#技术栈)
-- [常见问题](#常见问题)
-- [安全](#安全)
-- [许可证](#许可证)
+- [质检体系与准出规范](#质检体系与准出规范)
+- [常见问题与故障排查](#常见问题与故障排查)
+- [安全与使用边界](#安全与使用边界)
+- [开源许可证](#开源许可证)
 
-## 概览
+---
 
-Bili-Video2Book 是一个面向 AI 编程助手的技能，用来把一门课写成教材。它接受 B 站视频、YouTube 频道/视频、抖音合集/视频或本地课程目录，逐集产出长文，再把多集长文整编为模块教材与复习笔记。
+## 项目概述
 
-长课程的直接难点是听不完也记不住。常见做法先把课程转录成逐字稿，读者仍要自己把口语整理成可复习的文本，而逐字稿越长，Agent 的上下文越容易溢出。这个技能把课程切成音频片段，由一个能听音的宿主模型逐段听懂并直接写成文章，中间不落逐字稿。
+市面上大部分长视频总结工具通常生成扁平的纯文本速记、浅层摘要或注水段落，丢失了板书推导、推演细节、口吻语感与体系化的前后过渡。
 
-产出分三轨：单集长文、模块教材与思维导图笔记，各自落在独立目录，可以单独取用。每个产物在交付前都要过一遍质检，套话填充、空壳标题这类问题会在交付前被拦下，而不是留给你在阅读时发现。
+`bili-video2book` 是一套跨 AI Agent 平台的专业技能（Agent Skill）与统一媒体摄取引擎：
+- **多源摄取**：原生支持 Bilibili、YouTube、抖音及本地多媒体音视频，零配置统一提取转封装；
+- **零中间纯文本转录**：跳过低精度的 ASR 文本中转，直接调度模型听音通道（`read_audio` 原生音频多模态或 `read_media` 外部模型代读）；
+- **三轨专业交付**：将碎片化口语讲义重构为**单集精读教材长文**、**模块合辑全书**与**思维导图复习笔记**。
 
-你需要准备的只有一个听音通道，它由配套仓库 [omni-media][link-omni-media] 提供：宿主模型自带音频模态时用它的 `mcp/`（零凭证），只有文本能力时用它的 `mcp-ext/`（由外部模型代读）。这个通道是工作流的必需环节，缺了它阶段一取不到音频事实，流水线会停下提示你挂载。装好之后，一条命令就能跑完一门课。
+---
 
-<div align="right">
+## 三大交付轨道
 
-[![返回顶部][badge-top]](#readme-top)
+所有产物默认生成在产物根目录（默认 `<容器根>/output/<task>/`），严格与代码域保持三域隔离。
 
-</div>
+| 交付产物 | 存储路径 | 适用场景 | 核心特征与排版标准 |
+| :--- | :--- | :--- | :--- |
+| **单集精读教材长文** | `output/<task>/articles/` | 单集定向研读、微粒度推导理解、自学跟学 | 完整还原推导演算与真实板书；支持 `learning` 现代学习指南（推荐）与 `legacy` 经典逐字讲义两种风格，杜绝注水段落 |
+| **模块合辑全书** | `output/<task>/textbooks/` | 体系化通读、跨章节演进串联、打印装订 | 跨分集章节聚类整编，补充导读与小节过渡，消除单集割裂感，统一全书术语与模块技术总结 |
+| **思维导图复习笔记** | `output/<task>/notes/` | 考前复习、知识盘点、Markmap/XMind 导入 | 两趟规划（模块划分与笔记归并），提供高信息密度条目、ASCII 知识拓扑树与概念图谱 |
 
-## 功能特性
+---
 
-- **一门课一条命令** — 给出合集链接或本地课程目录，逐集产出长文，再整编为模块教材与复习笔记
-- **双通道听音** — 宿主具备音频模态时走 `read_audio`，零凭证；只有文本能力时走 `read_media`，两个通道分页契约同构
-- **三轨产物分目录** — 长文落在 `articles/`，模块教材落在 `textbooks/`，笔记落在 `notes/`，可单独取用
-- **交付前质检** — 套话填充、空壳标题、分集平铺标题、行内残缺引用、分集口吻命中即判失败；围栏语言标识属提示项，加 `--require-lang` 才纳入门禁
-- **增量重跑** — 已产出的分集默认跳过，加 `--force` 才会重新处理
-- **零第三方运行依赖** — 只用 Python 标准库，外部仅依赖系统的 `ffmpeg`
+## 核心特性
 
-<div align="right">
+- **多平台统一摄取引擎**：统一抽象 B 站（分 P/列表/收藏夹）、YouTube、抖音及本地视频目录，自动提取并转封装为 16kHz 单声道 AAC 标准音频。
+- **双听音通道原生适配**：由配套项目 `omni-media` 提供 MCP 听音服务，自适应宿主环境：
+  - `read_audio`：适用于具备原生音频模态理解能力的大模型；
+  - `read_media`：适用于通过专用外部大模型代读并返回技术讲义的宿主。
+- **两阶段工业级流水编排**：
+  - 阶段一（微观）：并发完成音视频提取、任务单构建与分集精读长文生成；
+  - 阶段二（宏观）：跨分集语义聚类，整编模块教材并归纳思维导图笔记。
+- **三阶自动化准出质检**：内置 `note_quality_check` 内容体检、`render_compat_check` Typora 兼容性检查，以及 `cleanup` / `sync` 实据校验，严禁交付空泛内容。
+- **规范化 Agent 生态支持**：完全遵循 Agent Skills 开放标准，代码域、媒体域、产物域平级解耦，无侵入适配各大主流 Agent 终端。
 
-[![返回顶部][badge-top]](#readme-top)
+---
 
-</div>
+## 工作原理与架构流程
 
-## 快速开始
-
-### 前置条件
-
-```bash
-python --version   # 3.8 及以上
-ffmpeg -version    # 已加入 PATH
-```
-
-### 安装
-
-> [!IMPORTANT]
-> 第三步的听音通道不可跳过。两个服务都来自配套仓库 [omni-media][link-omni-media]，二选一即可；没有它，阶段一取不到音频事实，流水线会停下提示你挂载。
-
-```bash
-# 1) 技能本体：复制这一个目录即可
-cp -r skills/bili-video2book ~/.claude/skills/            # Claude Code
-cp -r skills/bili-video2book ~/.codex/skills/             # Codex
-cp -r skills/bili-video2book ~/.config/opencode/skills/   # OpenCode
-
-# 2) 可选：安装 CLI
-pip install -e .
-
-# 3) 听音通道（必需）：两个服务同属配套仓库 omni-media
-cd .. && git clone https://github.com/LINJIANG12/omni-media.git
-
-#    通道 A：宿主有原生音频模态（工具列表里有 read_audio），零凭证
-cd omni-media/mcp && pip install -e .
-omni-media status                    # 诊断系统依赖、各宿主挂载状态与实际配置路径
-omni-media apply --target codex      # 挂到宿主；可用取值以 status 的实际输出为准
-
-#    通道 B：宿主只有文本能力（只有 read_media）时改用它
-cd ../mcp-ext && pip install -e .
-omni-media-ext config --init         # 生成 config.json，填入端点与 api_key
-omni-media-ext status
-omni-media-ext apply --target codex
-```
-
-### 运行
-
-```bash
-bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all --article-type learning
-```
-
-产物落在 `<产物根>/<课程工作区>/`：长文在 `articles/`，模块教材在 `textbooks/`，笔记在 `notes/`。
-
-<div align="right">
-
-[![返回顶部][badge-top]](#readme-top)
-
-</div>
-
-## 基本工作流程
+系统采用**三域分离**架构设计：
+- **代码域 (`skill/`)**：Agent 技能定义、CLI 工具链与质检脚本；
+- **媒体域 (`omni-media/`)**：MCP 听音通道服务（原生多模态与外部模型代读）；
+- **产物域 (`output/`)**：任务工单、分块音频、教材长文、全书与笔记，永不污染代码库。
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px'}}}%%
 flowchart TD
-    A[解析与音频提取<br/>FFmpeg 16kHz 单声道切片] --> B{课程总时长 ≤ 60 分钟}
-    B -->|是| C[主 Agent 串行处理]
-    B -->|否| D[派发子智能体<br/>一集一个]
-    C --> E[阶段一听音<br/>read_audio / read_media]
-    D --> E
-    E --> F[逐集教材长文<br/>articles/]
-    F --> G[阶段二两轮语义聚合<br/>模块划分 → 笔记归并]
-    G --> H[模块教材与复习笔记<br/>textbooks/ · notes/]
+    subgraph Ingestion["媒体摄取层 (Ingestion Engine)"]
+        A[Bilibili / YouTube / 抖音 / 本地视频] --> B[src/cli.py parse / audio / pipeline]
+        B --> C[ffmpeg 预处理: 16kHz 单声道 AAC 转封装]
+    end
 
-    classDef start fill:#3B82F6,stroke:#2563EB,color:#fff,stroke-width:2px
-    classDef process fill:#10B981,stroke:#059669,color:#fff,stroke-width:2px
-    classDef decision fill:#F59E0B,stroke:#D97706,color:#fff,stroke-width:2px
-    classDef data fill:#8B5CF6,stroke:#7C3AED,color:#fff,stroke-width:2px
+    subgraph AudioEngine["听音解耦通道 (omni-media)"]
+        C --> D{宿主通道适配}
+        D -->|原生音频多模态| E[MCP read_audio]
+        D -->|外部模型代读| F[MCP read_media]
+    end
 
-    class A start
-    class C,D,E,F,G process
-    class B decision
-    class H data
+    subgraph PhaseOne["阶段一：分集长文生成 (Phase 1)"]
+        E --> G[生成单集精读教材长文 articles/]
+        F --> G
+        G --> H[落盘 artifacts/manifest.json]
+    end
+
+    subgraph PhaseTwo["阶段二：全局整编归并 (Phase 2)"]
+        H --> I[cluster-articles 模块合辑全书 textbooks/]
+        H --> J[cluster-notes 思维导图复习笔记 notes/]
+    end
+
+    subgraph Gate["自动化质量门禁 (Quality Gate)"]
+        I --> K[note_quality_check & render_compat_check]
+        J --> K
+        K --> L[cleanup 清理缓存 & sync 同步归档]
+    end
 ```
 
-- 派发阈值写在 `src/core/budget.py`：课程总时长在 60 分钟以内时由主 Agent 串行处理，超过则派发给子智能体，一集一个；集数多且单集短时由工具建议批量打包。
-- 阶段一与阶段二按内容边界解耦，较长课程也能在断点后续跑。
-- 工具层只产出任务书、派发载荷与门禁，长文与笔记的撰写由 Agent 完成。
+---
 
-<div align="right">
+## 快速上手
 
-[![返回顶部][badge-top]](#readme-top)
+### 1. 验证运行环境
 
-</div>
-
-## 使用方法
-
-### 处理整门课程
+在技能目录下执行自检，检查 Python、ffmpeg 及听音服务状态：
 
 ```bash
-# B 站合集
-bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all --article-type learning
-
-# 本地课程目录
-bili-video2book pipeline "D:\courses\software_engineering\" --all --article-type learning
+python skills/bili-video2book/src/cli.py info
 ```
 
-### 处理指定分集或区间
+若输出显示 Python 3.10+、ffmpeg 可用且至少一条听音通道已就绪，即可开始运行。
+
+### 2. 单步体验工作流
+
+以 B 站单集或公开课为例，体验分步执行：
 
 ```bash
-bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --page 1 --article-type learning
-bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --range 2-5 --article-type learning
+# 步骤 1：解析视频元数据
+python skills/bili-video2book/src/cli.py parse "https://www.bilibili.com/video/BV1xx411c7mD" --base-dir ./output
+
+# 步骤 2：下载并转封装 16kHz 音频
+python skills/bili-video2book/src/cli.py audio BV1xx411c7mD --base-dir ./output
+
+# 步骤 3：生成长文写作任务单（必须显式指定 --article-type learning）
+python skills/bili-video2book/src/cli.py transcribe BV1xx411c7mD --article-type learning --base-dir ./output
 ```
 
-### 生成模块教材与复习笔记
+> **说明**：任务单生成后，宿主 Agent 将读取生成的 `ARTICLE_TASK.md`，调用听音工具完成长文落盘。
+
+### 3. 一键流水线（批量公开课）
+
+直接执行流水线命令，自动串联阶段一的所有准备环节：
 
 ```bash
-bili-video2book cluster-articles "https://www.bilibili.com/video/BV14VqVBrEhc"
-bili-video2book cluster-notes "https://www.bilibili.com/video/BV14VqVBrEhc"
+python skills/bili-video2book/src/cli.py pipeline "https://www.bilibili.com/video/BV1xx411c7mD" --article-type learning --base-dir ./output
 ```
 
-### 交付前质检与对账
+---
 
+## 各平台安装指南
+
+> ⚠️ **重要安装约束**：本技能的**安装单元仅为 `skills/bili-video2book/` 单一目录**。其余根目录文件（`README.md`、`LICENSE`、`pyproject.toml` 等）属于仓库级材料，无需安装。请勿仅复制 `SKILL.md`，工具链与其位于同级目录。
+
+### 平台安装对照
+
+| 目标平台 | 用户级安装位 | 项目级安装位 | 安装说明 |
+| :--- | :--- | :--- | :--- |
+| **Claude Code** | `~/.claude/skills/bili-video2book/` | `<项目>/.claude/skills/bili-video2book/` | 复制或软链 `skills/bili-video2book/` 目录；作为插件加载时自动识别 |
+| **Codex** | `~/.codex/skills/bili-video2book/` | `<项目>/.codex/skills/bili-video2book/` | 仓库 `.codex-plugin/plugin.json` 已声明插件入口；亦可直接软链 |
+| **OpenCode** | `~/.config/opencode/skills/bili-video2book/` | `<项目>/.opencode/skills/bili-video2book/` | 复制或软链 `skills/bili-video2book/` 到 OpenCode 技能目录 |
+| **通用 Agents** | `~/.agents/skills/bili-video2book/` | `<项目>/.agents/skills/bili-video2book/` | 支持标准 Agent Skills 规范；`.agents/plugins/marketplace.json` 已声明 |
+
+### 手动安装三法
+
+当所用平台不在上表时，按可靠性推荐：
+1. **原生插件加载**：若平台支持从 Git 仓库安装，直接填入仓库地址即可；
+2. **符号链接/目录联接（推荐，免重复维护）**：
+   - **Linux / macOS**：`ln -s <仓库>/skills/bili-video2book <平台技能目录>/bili-video2book`
+   - **Windows**：`mklink /J "<平台技能目录>\bili-video2book" "<仓库>\skills\bili-video2book"`
+3. **整目录复制**：将 `skills/bili-video2book/` 完整复制至对应技能目录。
+
+---
+
+## 典型使用场景
+
+### 场景 1：系统性网课与公开课精读
+
+适用于大学公开课、技术讲座、成体系课程。
 ```bash
-python scripts/note_quality_check.py --strict      # 笔记成色
-python scripts/render_compat_check.py --strict     # 渲染合规
-bili-video2book sync                               # 以磁盘产物回填 manifest.json
+python skills/bili-video2book/src/cli.py pipeline "https://www.bilibili.com/video/BV1xx411c7mD" --article-type learning --base-dir ./output
+```
+按课程大纲还原知识点讲解、推导演算、黑板代码，保留讲师授课生动口吻。
+
+### 场景 2：本地录音与培训视频整理
+
+适用于企业内部培训录屏、会议录像、线下课堂录音文件。
+```bash
+# 解析本地目录（自动提取并重命名）
+python skills/bili-video2book/src/cli.py parse "D:/courses/cs61a" --base-dir ./output
+
+# 提取音频并生成学习指南任务单
+python skills/bili-video2book/src/cli.py audio cs61a --base-dir ./output
+python skills/bili-video2book/src/cli.py transcribe cs61a --article-type learning --base-dir ./output
 ```
 
-<div align="right">
+### 场景 3：整编聚类为模块合辑全书
 
-[![返回顶部][badge-top]](#readme-top)
+当单集文章全部生成后，启动阶段二全书整编：
+```bash
+python skills/bili-video2book/src/cli.py cluster-articles <task_id> --base-dir ./output
+```
+自动分析各集逻辑联系，聚类合并为带导读、过渡、小结的完整教材，同时原有 `articles/` 单集内容保持完好。
 
-</div>
+### 场景 4：生成思维导图复习笔记
 
-## 运行环境与依赖
+提取全课程知识结构，生成高密度复习笔记与拓扑树：
+```bash
+python skills/bili-video2book/src/cli.py cluster-notes <task_id> --base-dir ./output
+```
 
-- **Python** — 3.8 及以上，取自 `pyproject.toml` 的 `requires-python`
-- **外部程序** — `ffmpeg`，需加入 `PATH`
-- **听音通道** — `read_audio` 或 `read_media`，二者其一，由配套仓库 [omni-media][link-omni-media] 提供
-- **操作系统** — 与操作系统无关，见 `pyproject.toml` 的分类器
+### 场景 5：B 站凭据持久化（获取高画质/高码率音频）
 
-<div align="right">
+针对大会员专属课程或高码率音频：
+```bash
+python skills/bili-video2book/src/cli.py login
+```
+系统将引导校验 SESSDATA 并持久化至混淆存储区。若未配置凭据，系统将自动降级提取 480P 音轨，不阻断执行流程。
 
-[![返回顶部][badge-top]](#readme-top)
+---
 
-</div>
+## CLI 命令完整速查
 
-## 配置
+CLI 命令统一通过 `python skills/bili-video2book/src/cli.py <subcommand>` 运行，支持以下 12 项指令：
 
-### 环境变量
+| 子命令 | 命令语法与主要参数 | 功能说明 | 核心输出产物 / 退出状态码 |
+| :--- | :--- | :--- | :--- |
+| `parse` | `parse <source> [--base-dir DIR]` | 解析视频或本地目录元数据 | `manifest.json` |
+| `audio` | `audio <task_id> [--p N] [--base-dir DIR]` | 下载/提取并转封装 16kHz 音频 | `audio/*.m4a`、`audio_index.json` |
+| `transcribe` | `transcribe <task_id> --article-type <type> [--p N]` | 校验提示词类型并生成任务单 | `ARTICLE_TASK.md`；类型错误返回码 `4` |
+| `pipeline` | `pipeline <source> --article-type <type> [--base-dir DIR]` | 自动串联阶段一准备环节 | 连续执行 `parse` + `audio` + `transcribe` |
+| `cluster-notes` | `cluster-notes <task_id> [--base-dir DIR]` | 跨集聚类生成结构化复习笔记 | `notes/` 目录下的复习笔记与拓扑树 |
+| `cluster-articles` | `cluster-articles <task_id> [--base-dir DIR]` | 跨集章节整编生成模块合辑教材 | `textbooks/` 模块教材全书 |
+| `dedup` | `dedup <task_id> [--base-dir DIR]` | 清理重复或废弃的中间草稿 | 校验并消除冲突副本 |
+| `cleanup` | `cleanup <task_id> [--all] [--base-dir DIR]` | 安全清理大体积音频与中间缓存 | 删除临时媒体切片，保留长文与笔记 |
+| `sync` | `sync <task_id> [--base-dir DIR]` | 检查并同步产物实据到清单 | 更新 `manifest.json` 交付状态 |
+| `login` | `login` | 校验并持久化 B 站登录凭据 | 混淆写入本地凭据库 |
+| `logout` | `logout` | 清理已保存的登录凭据 | 移除本地认证态缓存 |
+| `info` | `info` | 打印 Python、ffmpeg 与听音通道就绪状态 | 环境诊断信息，成功返回码 `0` |
 
-| 变量 | 说明 | 默认 | 必需 |
-|---|---|---|---|
-| `BVB_HOME` | 容器根，`skill/`、`omni-media/`、`output/` 的共同父目录 | 由 `.bvb-home` 标记定位 | 否 |
-| `BVB_OUTPUT_DIR` | 产物根 | `<容器根>/output` | 否 |
-| `BVB_AUDIO_TOKENS_PER_SEC` | 音频 token 系数；OpenAI 口径设 `100` | `32` | 否 |
-| `BVB_CONTEXT_WINDOW_TOKENS` | 上下文窗口预算 | `1000000` | 否 |
-| `OMNI_MEDIA_MCP_DIR` | 原生听音服务目录的覆盖 | `<容器根>/omni-media/mcp` | 否 |
-| `BVB_DEBUG` | 设为 `1` 时原样抛出栈回溯 | 未设置 | 否 |
+---
 
-环境变量需在进程启动前设置。单次执行也可用 `--base-dir <路径>` 换产物根，命令行参数优先于环境变量。
+## 前置要求与依赖
 
-<div align="right">
+### 1. 系统依赖
+- **Python 3.10+**
+- **ffmpeg / ffprobe**：必须配置于系统的 `PATH` 环境变量中，用于音频重采样与切片转封装。
 
-[![返回顶部][badge-top]](#readme-top)
+### 2. Python 依赖库
+系统自带轻量封装，仅需依赖：
+```bash
+pip install yt-dlp requests
+```
 
-</div>
+### 3. 配套听音服务
+必须配合同级配套仓库 [`LINJIANG12/omni-media`](https://github.com/LINJIANG12/omni-media) 运行：
+- 原生听音服务：`<容器根>/omni-media/mcp/`（提供 `read_audio`）；
+- 外部模型代读：`<容器根>/omni-media/mcp-ext/`（提供 `read_media`）。
+
+---
+
+## 环境变量与配置
+
+| 变量名 | 作用说明 | 默认值 / 备选项 |
+| :--- | :--- | :--- |
+| `BVB_OUTPUT_DIR` | 产物输出的绝对根目录 | `<项目根>/output/` |
+| `BVB_HOME` | 技能运行主目录 | 自动解析至技能所在目录 |
+| `BVB_SESSDATA` / `SESSDATA` | B 站身份凭据（大会员/高码率音频下载） | 空（免登录降级运行） |
+
+> **提示**：所有命令均支持显式传入 `--base-dir <路径>`，优先级高于环境变量 `BVB_OUTPUT_DIR`。
+
+---
 
 ## 项目结构
 
 ```
-bili-video2book/
-├── skills/bili-video2book/     # 技能本体，安装时只需这一个目录
-│   ├── SKILL.md                # 技能契约，Agent 的唯一事实源
-│   ├── src/                    # 工具链
-│   │   ├── cli.py              # 入口：12 个子命令
-│   │   ├── core/               # 路径、音频预算、流水线、抓取、交付物质检
-│   │   └── generator/          # 任务书、提示词模板与语义聚合
-│   ├── scripts/                # 质检、清理、队列跟踪与全量自检
-│   └── references/             # 安装说明、交付矩阵、命令速查、工具映射
-├── agents/                     # 通用 agents 侧的技能元数据
-├── .claude-plugin/             # Claude Code 插件清单
-├── .codex-plugin/              # Codex 插件清单
-├── .opencode/                  # OpenCode 安装说明
-└── pyproject.toml              # 包元数据与 CLI 入口
+skill/
+├── AGENTS.md                          # 跨平台通用 Agent 入口指引
+├── CLAUDE.md                          # Claude 规范约束与开发准则
+├── LICENSE                            # MIT 开源许可证
+├── pyproject.toml                     # 项目元数据与依赖定义
+├── README.md                          # 中文官方文档（本文件）
+├── README.en.md                       # 英文镜像文档
+└── skills/
+    └── bili-video2book/               # [核心安装单元] 技能包根目录
+        ├── SKILL.md                   # 技能定义唯一真源
+        ├── references/                # 技术规格与参考文档
+        │   ├── cli-cookbook.md        # CLI 六大场景实战手册
+        │   ├── delivery_matrix.md     # 交付物排版与质量规范
+        │   ├── install.md             # 各平台安装路径详述
+        │   └── host-tools/            # 各 Agent 宿主工具语义映射表
+        ├── scripts/                   # 自动化运维与质检脚本
+        │   ├── selfcheck.py           # 唯一门禁自检脚本
+        │   ├── note_quality_check.py  # 笔记质量与信息密度体检
+        │   ├── render_compat_check.py # Typora 渲染兼容性合规检查
+        │   └── cleanup_tasks.py       # 历史任务清理与维护
+        └── src/                       # 核心媒体摄取与任务工具链实现
+            ├── cli.py                 # CLI 统一入口
+            └── core/                  # 流程编排、下载器与协议实现
 ```
 
-<div align="right">
+---
 
-[![返回顶部][badge-top]](#readme-top)
+## 质检体系与准出规范
 
-</div>
+为保证生成产物的严谨性，交付前需运行质检脚本：
 
-## 命令
+```bash
+# 1. 笔记内容与信息密度体检
+python skills/bili-video2book/scripts/note_quality_check.py output/<task_id>/notes/
 
-| 命令 | 说明 | 示例 |
-|---|---|---|
-| `parse` | 解析视频拓扑并列分集 | `bili-video2book parse "<链接>" --limit 10` |
-| `audio` | 下载或抽取音频流 | `bili-video2book audio "<链接>" --all` |
-| `transcribe` | 导出单集长文任务书，不落中间逐字稿 | `bili-video2book transcribe "<链接>" --page 1 --article-type learning` |
-| `pipeline` | 执行完整流水线 | `bili-video2book pipeline "<链接>" --all --article-type learning` |
-| `cluster-articles` | 把单集长文整编为模块教材 | `bili-video2book cluster-articles "<链接>"` |
-| `cluster-notes` | 两轮语义聚合，导出笔记任务书 | `bili-video2book cluster-notes "<链接>"` |
-| `dedup` | 同步重复音频资产以节省 token | `bili-video2book dedup --dry-run` |
-| `cleanup` | 回收已产出的任务书，每类保留样本 | `bili-video2book cleanup --dry-run` |
-| `sync` | 以磁盘产物为准回填 manifest.json | `bili-video2book sync --dry-run` |
-| `info` | 显示环境与工具链就绪状态 | `bili-video2book info` |
-| `login` | 持久化 B 站 SESSDATA | `bili-video2book login --sessdata "<SESSDATA>"` |
-| `logout` | 清除已保存的 SESSDATA | `bili-video2book logout` |
+# 2. Markdown 渲染兼容性检查（以 Typora 为基准）
+python skills/bili-video2book/scripts/render_compat_check.py output/<task_id>/
 
-### 通用参数
+# 3. 技能整体生态健康自检
+python skills/bili-video2book/scripts/selfcheck.py
+```
 
-| 参数 | 说明 | 默认 |
-|---|---|---|
-| `--base-dir` | 产物根路径 | `BVB_OUTPUT_DIR` 或 `<容器根>/output` |
-| `--task` | 指定课程工作区目录名 | 最近活动的那个 |
-| `--sessdata` | 本次执行的凭证，优先于本地存档 | 已保存的存档 |
-| `--json` | 以 JSON 输出，仅 `parse` 与 `audio` | 关 |
+### Typora 阅读器建议
+交付物默认面向 **Typora** 场景优化：
+- 行内公式：请在 Typora 中依次点击「偏好设置」→「Markdown」→ 勾选「内联公式」（Inline Math），避免公式回退显示为 `$…$` 源码。
 
-### 退出码
+---
 
-- `0` — 正常结束
-- `4` — 未确认长文提示词风格，即 `--article-type` 缺失或取值非法
+## 常见问题与故障排查
 
-<div align="right">
+### Q1: 控制台在 Windows 环境下出现乱码或 UnicodeEncodeError？
+系统在各入口均已硬化注入 `enable_utf8_console()`，强制终端流采用 UTF-8 编码。请确保终端自身字体（如 Windows Terminal、PowerShell）支持中文字符显示。
 
-[![返回顶部][badge-top]](#readme-top)
+### Q2: 运行 `transcribe` 或 `pipeline` 提示退出码 4？
+长文写作要求严格的文风控制，系统已内置 `learning`（学习指南，推荐）和 `legacy`（客观讲义）两种成熟提示词。若未传 `--article-type`、拼写错误或传入了尚未就绪的实验类型（如 `interview`、`consulting`），系统将拒绝落盘任务并打印菜单返回状态码 `4`。请显式传入 `--article-type learning`。
 
-</div>
+### Q3: B 站下载音轨返回 403 Forbidden？
+B 站部分视频需身份鉴权。可通过 `python skills/bili-video2book/src/cli.py login` 重新录入 SESSDATA。无凭据情况下系统将自动降级拉取 480P 音轨。
 
-## 技术栈
+---
 
-### 运行时
+## 安全与使用边界
 
-- **Python 3.8 及以上** — 唯一运行时，只用标准库
-- **setuptools** — 构建后端，见 `pyproject.toml`
+1. **凭据安全**：用户输入的 `SESSDATA` 仅存储在本地加盐混淆区，不上传任何云端，严防凭据泄露。
+2. **版权声明**：工具仅用于个人学习研读、笔记整理与学术推导。请尊重原创作者版权，未经原作者授权不得用于商业转售或公开发行。
+3. **工具规范**：Agent 技能提示词内均采用抽象行动语义（如“读取文件”、“写入磁盘”），禁止在核心逻辑硬编码平台专有指令，宿主工具适配统一维护在 `references/host-tools/`。
 
-### 外部依赖
+---
 
-- **FFmpeg** — 音频抽取与切片，16kHz 单声道
+## 开源许可证
 
-### 可选通道
-
-- **MCP** — 宿主原生听音所用的协议
-
-<div align="right">
-
-[![返回顶部][badge-top]](#readme-top)
-
-</div>
-
-## 常见问题
-
-### 不装 omni-media 能用吗
-
-不能。两个听音通道 `read_audio` 与 `read_media` 都由 [omni-media][link-omni-media] 提供，工作流把它列为必需项：阶段一取不到音频事实时，流水线会停下提示你挂载其一。
-
-### 该装 mcp 还是 mcp-ext
-
-看宿主的模态。工具列表里有 `read_audio`，说明宿主有原生音频模态，装 `mcp/`，延迟最低且零凭证；只有 `read_media`，说明宿主仅有文本能力，装 `mcp-ext/`，由 `config.json` 指定外部模型端点。两条通道分页契约同构，切换只需换工具名。
-
-### 怎么确认挂载成功
-
-`bili-video2book info` 会打印两条通道的就绪状态与域路径；`omni-media status` 诊断系统依赖、各宿主挂载状态与实际配置路径。
-
-### 凭证会进版本库吗
-
-不会。本仓库把 B 站 `SESSDATA` 排除在外，omni-media 也把 `mcp-ext` 的 `config.json` 排除在外，只提交模板。通道 A 本身零凭证，不需要配置任何密钥。
-
-<div align="right">
-
-[![返回顶部][badge-top]](#readme-top)
-
-</div>
-
-## 安全
-
-- 凭证存放：`login` 把 B 站 `SESSDATA` 以明文写入产物根，该文件已被忽略规则排除，不会进入版本库。
-- 失效方式：怀疑泄露时到 B 站退出登录使该凭证失效，再运行 `logout` 清除本地存档。
-- 访问范围：工具只读取 B 站的公开视频元数据与音频流，以及你指定的本地媒体文件。
-- 上报渠道：本仓库暂无 `SECURITY.md`，安全问题请在仓库提交 issue。
-
-<div align="right">
-
-[![返回顶部][badge-top]](#readme-top)
-
-</div>
-
-## 许可证
-
-[MIT](LICENSE)
-
-<div align="right">
-
-[![返回顶部][badge-top]](#readme-top)
-
-</div>
-
-<!-- LINKS & IMAGES -->
-
-[badge-top]: https://img.shields.io/badge/-返回顶部-151515?style=flat-square
-[badge-python]: https://img.shields.io/badge/Python_3.8%2B-3776AB?style=flat&logo=python&logoColor=white
-[badge-mcp]: https://img.shields.io/badge/MCP-3178C6?style=flat
-[badge-claude]: https://img.shields.io/badge/Claude_Code-D97757?style=flat&logo=claude&logoColor=white
-[badge-codex]: https://img.shields.io/badge/Codex-000000?style=flat&logo=openai&logoColor=white
-[badge-opencode]: https://img.shields.io/badge/OpenCode-3178C6?style=flat
-[link-python]: https://www.python.org/
-[link-mcp]: https://modelcontextprotocol.io/
-[link-claude]: https://docs.anthropic.com/en/docs/claude-code
-[link-codex]: https://openai.com/codex/
-[link-opencode]: https://opencode.ai/
-[link-license]: LICENSE
-[link-omni-media]: https://github.com/LINJIANG12/omni-media
+本项目基于 [MIT License](LICENSE) 许可协议开源。
