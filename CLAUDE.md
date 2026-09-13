@@ -1,8 +1,8 @@
 # bili-video2book
 
 本仓库 = **一个跨 agent 的 Agent Skill**（外加供各平台识别的插件声明）。
-把 B 站长视频/系列网课或本地音视频重构为**精读教材长文、模块合辑全书与思维导图笔记**，
-并自带一套**纯标准库**的 Python 工具链。
+把 B 站、YouTube、抖音长视频/系列网课或本地音视频重构为**精读教材长文、模块合辑全书与思维导图笔记**，
+并自带一套现代多平台统一摄取媒体内核（支持 B 站、本地、YouTube、抖音）。
 
 ## 技能在哪
 
@@ -32,7 +32,7 @@
 
 ## 运行前置
 
-- **Python 3.8+**（工具链是纯 Python 实现，无第三方依赖）
+- **Python 3.10+**（依赖：`yt-dlp`、`requests`）
 - **系统 ffmpeg**（在 `PATH`；取音频/切片的硬前置）
 - 宿主需具备听音通道之一：MCP 工具 `read_audio`（宿主有原生音频模态）或 `read_media`（外部模型代读）
 - 两个听音服务由配套仓库提供：[`LINJIANG12/omni-media`](https://github.com/LINJIANG12/omni-media)
@@ -43,7 +43,6 @@
 ## 改本仓库时
 
 - 自检（唯一门禁）：`cd skills/bili-video2book && python scripts/selfcheck.py`
-- 硬约束：纯标准库；Python 3.8 语法（不得用 `list[str]` / `X | Y` / `removeprefix` 等 3.9+ 构造）；
-  子进程统一走 `src/core/proc.py::run_quiet` 且必须带 `timeout=`；脚本入口调用 `src/core/console.py::enable_utf8_console()`
+- 硬约束：Python 3.10+；子进程统一走 `src/core/proc.py::run_quiet` 且必须带 `timeout=`；脚本入口调用 `src/core/console.py::enable_utf8_console()`
 - 技能正文只描述**行动语义**（"读文件""写盘""让宿主的子智能体去做"），
   **不得写死某个平台的私有工具名**；平台差异统一放在 `references/host-tools/` 下

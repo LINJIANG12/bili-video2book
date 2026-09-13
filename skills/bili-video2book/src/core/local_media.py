@@ -41,7 +41,16 @@ class LocalMediaParser:
         try:
             p = Path(path_str).resolve()
             if not p.exists():
-                return False
+                from src.core import paths as _paths
+                cand = _paths.home_root() / path_str
+                if cand.exists():
+                    p = cand
+                else:
+                    cand_prod = _paths.products_root() / path_str
+                    if cand_prod.exists():
+                        p = cand_prod
+                    else:
+                        return False
             if p.is_file():
                 return p.suffix.lower() in SUPPORTED_MEDIA_EXTS
             if p.is_dir():
@@ -149,6 +158,15 @@ class LocalMediaParser:
     def parse(cls, path_str: Union[str, Path]) -> Dict[str, Any]:
         """Parse local video file or course directory into standard metadata schema."""
         target = Path(path_str).resolve()
+        if not target.exists():
+            from src.core import paths as _paths
+            cand = _paths.home_root() / path_str
+            if cand.exists():
+                target = cand
+            else:
+                cand_prod = _paths.products_root() / path_str
+                if cand_prod.exists():
+                    target = cand_prod
         if not target.exists():
             raise FileNotFoundError(f"Local media path does not exist: {path_str}")
 

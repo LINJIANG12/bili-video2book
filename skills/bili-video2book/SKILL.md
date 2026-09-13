@@ -1,17 +1,17 @@
 ---
 name: bili-video2book
-description: 把 B 站长视频/系列网课或本地音视频重构为精读教材长文、模块合辑全书与思维导图复习笔记的完整技能，自带纯标准库的音频提取、两趟语义聚合、双通道听音与多阶段门禁工具链。当用户提出「把网课/视频做成教材」「整理成复习笔记或思维导图」「这门课帮我精读一遍」「B 站这个合集重构成文档」，或给出本地课程目录要求系统化整理时，使用本技能。
+description: 把 B 站、YouTube、抖音长视频/系列网课或本地音视频重构为精读教材长文、模块合辑全书与思维导图复习笔记的完整技能，自带多平台统一媒体内核、音频提取、两趟语义聚合、双通道听音与多阶段门禁工具链。当用户提出「把网课/视频做成教材」「整理成复习笔记或思维导图」「这门课帮我精读一遍」「B 站/油管/抖音这个合集重构成文档」，或给出本地课程目录要求系统化整理时，使用本技能。
 license: MIT
 metadata:
   author: LINJIANG12
-  version: 2.2.0
+  version: 2.3.0
   category: learning-and-education
-  compatibility: Python 3.8+（junction 去重需 3.12+，旧版本自动降级为仅识别符号链接）；系统 ffmpeg 在 PATH；宿主需具备 read_audio 或 read_media 听音通道之一。
+  compatibility: Python 3.10+；系统 ffmpeg 在 PATH；宿主需具备 read_audio 或 read_media 听音通道之一。
 ---
 
 # Bili-Video2Book: 视频网课重构教材与复习笔记 Skill
 
-本 Skill 面向**任意支持 Agent Skills 规范的宿主**（Claude Code、Codex、OpenCode 等）与系统终端，用于将 B 站长视频/系列网课或本地音视频转换为结构化技术教材、模块合辑全书与思维导图复习笔记。平台差异（安装位置、工具名）见 `references/install.md` 与 `references/host-tools/`。
+本 Skill 面向**任意支持 Agent Skills 规范的宿主**（Claude Code、Codex、OpenCode 等）与系统终端，用于将 B 站、YouTube、抖音长视频/系列网课或本地音视频转换为结构化技术教材、模块合辑全书与思维导图复习笔记。平台差异（安装位置、工具名）见 `references/install.md` 与 `references/host-tools/`。
 
 ---
 

@@ -22,7 +22,7 @@ skills/bili-video2book/        ← 装这一个目录即可（核心 skill + 它
 
 | 依赖 | 必需性 | 说明 |
 | :--- | :--- | :--- |
-| Python 3.8+ | 必需 | 工具链是纯标准库实现，无第三方包 |
+| Python 3.10+ | 必需 | 运行环境（依赖 yt-dlp, requests） |
 | 系统 `ffmpeg`（在 `PATH`） | 必需 | 取音频/切片的硬前置 |
 | 听音通道之一 | 必需 | MCP 工具 `read_audio`（宿主有原生音频模态）或 `read_media`（外部模型代读）；两者由配套仓库 [LINJIANG12/omni-media](https://github.com/LINJIANG12/omni-media) 提供，装在 `<容器根>/omni-media/` 下 |
 

@@ -311,65 +311,21 @@ def resolve_target_info(
     sessdata: Optional[str] = None,
     custom_task: Optional[str] = None,
     base_dir: Optional[Any] = None,
+    limit: Optional[int] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
-    """多态解析本地媒体或 B 站元数据；网络失败时用本地缓存（`parts.json` 或 `articles/`）离线自愈。"""
-    if LocalMediaParser.is_local_media(target):
-        return LocalMediaParser.parse(target)
-    try:
-        return BilibiliParser.parse_video(target, sessdata=sessdata)
-    except Exception as err:
-        # 离线自愈：接口被风控或网络中断时，优先加载本地保存的分集拓扑离线运行
-        bvid = BilibiliParser.extract_bvid(target)
-        if bvid:
-            out_base = _paths.resolve_base_dir(base_dir)
-            for cd in _offline_candidate_dirs(out_base, bvid, custom_task):
-                cached_parts: List[Any] = []
-                manifest_f = cd / "manifest.json"
-                m_data: Dict[str, Any] = {}
-                if manifest_f.exists():
-                    try:
-                        m_data = json.loads(manifest_f.read_text(encoding="utf-8"))
-                    except Exception:
-                        m_data = {}
-                parts_file = cd / "parts.json"
-                loaded_from_parts = False
-                if parts_file.exists() and parts_file.stat().st_size > 20:
-                    try:
-                        loaded = json.loads(parts_file.read_text(encoding="utf-8"))
-                        if isinstance(loaded, list):
-                            cached_parts = [p for p in loaded if isinstance(p, dict) and p.get("page") is not None]
-                            loaded_from_parts = bool(cached_parts)
-                    except Exception:
-                        cached_parts = []
-                if not cached_parts:
-                    # 拓扑缓存缺失或损坏：退到磁盘上已有的长文反推集号
-                    cached_parts = _parts_from_articles(cd)
-                    if cached_parts:
-                        print(f"\n[!] B站元数据接口受阻（{err}），本地 parts.json 不可用，"
-                              f"已按 articles/ 中 {len(cached_parts)} 篇长文反推集号离线运行: {cd.name}")
-                if not cached_parts:
-                    continue
-                if loaded_from_parts:
-                    print(f"\n[!] B站元数据接口受阻（{err}），已自动从本地缓存加载分集拓扑离线运行: {parts_file.name}")
-                return {
-                    "video_type": "multi_page" if len(cached_parts) > 1 else "single",
-                    "title": _workspace_title(cd, m_data),
-                    # 定位到的**确切目录名**：下游建工作区时必须原样用它，不能再由标题反推
-                    # （历史工作区名是「标题截断 + BV 号可能也被截」的产物，反推不出来）。
-                    "workspace_name": cd.name,
-                    "bvid": bvid,
-                    "owner": "",
-                    "owner_mid": 0,
-                    "desc": "",
-                    "duration": sum(p.get("duration", 0) for p in cached_parts),
-                    "pic": "",
-                    "has_multi_pages": len(cached_parts) > 1,
-                    "parts": cached_parts,
-                    "cid": cached_parts[0].get("cid", 0),
-                    "url_page": BilibiliParser.extract_page_index(target),
-                    "is_cached_offline": True,
-                }
-        raise RuntimeError(enrich_network_error(err)) from err
+    """多态解析本地媒体、B站、YouTube 或抖音元数据；网络失败时用本地缓存离线自愈。"""
+    from src.core.ingestion import get_coordinator
+
+    coordinator = get_coordinator()
+    return coordinator.resolve_target_info(
+        target,
+        sessdata=sessdata,
+        custom_task=custom_task,
+        base_dir=base_dir,
+        limit=limit,
+        **kwargs,
+    )
 
 
 def resolve_scope_parts(info: Dict[str, Any], ws: Any) -> List[Dict[str, Any]]:
@@ -550,16 +506,20 @@ class PipelineCoordinator:
             audio_file, _ = _audio_paths(p)
             if audio_file.exists() and audio_file.stat().st_size >= 10240 and not force:
                 return audio_file
-            if info.get("is_local"):
-                print(f"    [prefetch] P{p['page']:02d} 本地提取音频...")
-                LocalMediaParser.extract_audio(p.get("filepath", info.get("source_path")), audio_file)
-            else:
-                print(f"    [prefetch] P{p['page']:02d} 下载轻量音频...")
-                # 元数据 API 保持现有令牌桶，不动 fetcher；此处统一走 412 富化入口
-                stream_info = get_audio_stream(
-                    bvid, p["cid"], sessdata=sessdata, prefer_quality=quality,
-                )
-                AudioFetcher.download_audio(stream_info["best_stream_url"], str(audio_file), repackage_m4a=True)
+
+            source_type = info.get("source_type") or ("local" if info.get("is_local") else "bilibili")
+            print(f"    [prefetch] P{p['page']:02d} 获取音频 ({source_type})...")
+
+            from src.core.ingestion import get_coordinator
+            coordinator = get_coordinator()
+            coordinator.fetch_episode_audio(
+                info,
+                p,
+                audio_file,
+                force=force,
+                sessdata=sessdata,
+                quality=quality,
+            )
             print(f"    [prefetch] P{p['page']:02d} 音频就绪: {audio_file.name}")
             return audio_file
 

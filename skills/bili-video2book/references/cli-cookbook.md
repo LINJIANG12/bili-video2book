@@ -19,6 +19,14 @@ bili-video2book pipeline "https://www.bilibili.com/video/BV14VqVBrEhc" --all --a
 
 # 处理本地整套视频课程目录
 bili-video2book pipeline "D:\courses\software_engineering\" --all --article-type learning
+
+# 处理 YouTube 单视频或播放列表/频道课程
+bili-video2book pipeline "https://www.youtube.com/watch?v=kqtD5dpn9C8" --article-type learning
+bili-video2book pipeline "https://www.youtube.com/@freecodecamp" --all --article-type learning
+
+# 处理抖音单视频或博主主页合集
+bili-video2book pipeline "https://v.douyin.com/xxxx/" --article-type learning
+bili-video2book pipeline "https://www.douyin.com/user/MS4wLjAB..." --all --article-type learning
 ```
 
 ## 场景二：处理指定分集或区间

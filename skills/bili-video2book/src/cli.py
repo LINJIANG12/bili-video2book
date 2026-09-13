@@ -156,47 +156,40 @@ def cmd_parse(args):
         print(json.dumps(info, ensure_ascii=False, indent=2))
         return
 
-    if info.get("is_local"):
-        mins = info["duration"] // 60
-        secs = info["duration"] % 60
-        print("=" * 65)
-        print(f"【视频标题】: {info['title']}")
-        print(f"【来源路径】: {info.get('source_path')}")
-        print(f"【类型判定】: {info['type_desc']}")
-        print(f"【总时长】  : {mins:02d}:{secs:02d}")
-        print("=" * 65)
-
-        if info["has_multi_pages"]:
-            print(f"\n▶ 本地分集列表 (共 {len(info['parts'])} P):")
-            for p in info["parts"][:args.limit]:
-                pmins = p["duration"] // 60
-                psecs = p["duration"] % 60
-                print(f"  P{p['page']:02d} [{pmins:02d}:{psecs:02d}] {p['title']}")
-                print(f"      文件: {p['filepath']}")
-            if len(info["parts"]) > args.limit:
-                print(f"  ... 剩余 {len(info['parts']) - args.limit} 个分P已省略，可用 --limit 查看全量")
-        return
+    source_type = info.get("source_type") or ("local" if info.get("is_local") else "bilibili")
+    mins = info.get("duration", 0) // 60
+    secs = info.get("duration", 0) % 60
 
     print("=" * 65)
     print(f"【视频标题】: {info['title']}")
-    print(f"【UP 主】   : {_owner_line(info)}")
-    print(f"【BV 号】   : {info['bvid']}")
-    print(f"【类型判定】: {info['type_desc']}")
+    if source_type == "local":
+        print(f"【来源路径】: {info.get('source_path')}")
+    else:
+        author_label = "UP 主" if source_type == "bilibili" else ("频道" if source_type == "youtube" else "作者")
+        print(f"【{author_label}】   : {_owner_line(info)}")
+        id_label = "BV 号" if source_type == "bilibili" else "唯一标识"
+        print(f"【{id_label}】   : {info.get('bvid')}")
+    print(f"【来源平台】: {source_type.upper()}")
+    print(f"【类型判定】: {info.get('type_desc')}")
+    print(f"【总时长】  : {mins:02d}:{secs:02d}")
     if info.get("url_page"):
-        print(f"【定位分P】: P{info['url_page']:02d} 《{info.get('selected_title')}》 (CID: {info.get('selected_cid')})")
+        print(f"【定位分P】: P{info['url_page']:02d} 《{info.get('selected_title')}》")
     print("=" * 65)
 
-    if info["has_multi_pages"]:
-        print(f"\n▶ 稿件内分P列表 (共 {len(info['parts'])} P):")
+    if info.get("has_multi_pages"):
+        print(f"\n▶ 分集列表 (共 {len(info['parts'])} P):")
         for p in info["parts"][:args.limit]:
-            mins = p["duration"] // 60
-            secs = p["duration"] % 60
-            print(f"  P{p['page']:02d} [{mins:02d}:{secs:02d}] {p['title']}")
-            print(f"      CID: {p['cid']} | 链接: {p['url']}")
+            pmins = p.get("duration", 0) // 60
+            psecs = p.get("duration", 0) % 60
+            print(f"  P{p['page']:02d} [{pmins:02d}:{psecs:02d}] {p['title']}")
+            if p.get("filepath"):
+                print(f"      文件: {p['filepath']}")
+            elif p.get("url"):
+                print(f"      CID: {p.get('cid')} | 链接: {p['url']}")
         if len(info["parts"]) > args.limit:
             print(f"  ... 剩余 {len(info['parts']) - args.limit} 个分P已省略，可用 --limit 查看全量")
 
-    if info["has_ugc_season"]:
+    if info.get("has_ugc_season"):
         s_info = info["season_info"]
         print(f"\n▶ 所属合集【{s_info['title']}】(共 {len(info['season_episodes'])} 个稿件):")
         for ep in info["season_episodes"][:args.limit]:
@@ -277,48 +270,31 @@ def cmd_audio(args):
                     "status": "cached",
                 }
 
-            print(f"[fetch] 正在提取 P{p_num:02d}: {p['title']} (CID: {p['cid']})...")
+            source_type = info.get("source_type") or ("local" if info.get("is_local") else "bilibili")
+            print(f"[fetch] 正在提取 P{p_num:02d}: {p['title']} ({source_type})...")
             try:
-                if info.get("is_local"):
-                    LocalMediaParser.extract_audio(p["filepath"], target_file)
-                    saved_path = str(target_file)
-                    f_size = Path(saved_path).stat().st_size
-                    print(f"    [✓] 本地音频提取完成: {Path(saved_path).name} ({round(f_size / (1024 * 1024), 2)} MB)")
-                    return {
-                        "page": p_num,
-                        "title": p["title"],
-                        "cid": p["cid"],
-                        "duration": p["duration"],
-                        "audio_file": saved_path,
-                        "size_bytes": f_size,
-                        "quality": "64kbps-aac-mono",
-                        "status": "downloaded",
-                    }
-                else:
-                    # 中文注释：统一走 412 富化入口
-                    stream_info = get_audio_stream(
-                        bvid,
-                        p["cid"],
-                        sessdata=args.sessdata,
-                        prefer_quality=getattr(args, "quality", "low"),
-                    )
-                    saved_path = AudioFetcher.download_audio(
-                        stream_info["best_stream_url"],
-                        str(target_file),
-                        repackage_m4a=True,
-                    )
-                    f_size = Path(saved_path).stat().st_size
-                    print(f"    [✓] 下载与封装完成: {Path(saved_path).name} ({round(f_size / (1024 * 1024), 2)} MB)")
-                    return {
-                        "page": p_num,
-                        "title": p["title"],
-                        "cid": p["cid"],
-                        "duration": p["duration"],
-                        "audio_file": saved_path,
-                        "size_bytes": f_size,
-                        "quality": stream_info.get("quality_desc", "64kbps-aac-mono"),
-                        "status": "downloaded",
-                    }
+                from src.core.ingestion import get_coordinator
+                coordinator = get_coordinator()
+                coordinator.fetch_episode_audio(
+                    info,
+                    p,
+                    target_file,
+                    force=args.force,
+                    sessdata=args.sessdata,
+                    quality=getattr(args, "quality", "low"),
+                )
+                saved_path = str(target_file)
+                f_size = Path(saved_path).stat().st_size
+                print(f"    [✓] P{p_num:02d} 音频就绪: {Path(saved_path).name} ({round(f_size / (1024 * 1024), 2)} MB)")
+                return {
+                    "page": p_num,
+                    "title": p["title"],
+                    "cid": p.get("cid"),
+                    "duration": p.get("duration", 0),
+                    "audio_file": saved_path,
+                    "size_bytes": f_size,
+                    "status": "downloaded",
+                }
             except Exception as err:
                 print(f"    [✗] 处理 P{p_num:02d} 发生异常: {err}", file=sys.stderr)
                 return {
@@ -370,37 +346,21 @@ def cmd_audio(args):
     clean_title = sanitize_filename(target_title)
     target_m4a = target_audio_dir / f"{clean_title}.m4a"
 
-    if info.get("is_local"):
-        source_file = matched["filepath"] if info["has_multi_pages"] else info["source_path"]
-        print(f"[*] 正在从本地视频提取通用 64kbps 纯音频...")
-        saved_path = str(LocalMediaParser.extract_audio(source_file, target_m4a))
-        stream_info = {"quality_desc": "64kbps AAC Mono (16kHz)", "best_stream_url": saved_path}
-        print(f"[✓] 音频提取完成: {saved_path}")
-    else:
-        print(f"[*] 解析音频流中... BV: {bvid}, CID: {target_cid}")
-        # 中文注释：统一走 412 富化入口
-        stream_info = get_audio_stream(
-            bvid,
-            target_cid,
-            sessdata=args.sessdata,
-            prefer_quality=getattr(args, "quality", "low"),
-        )
-
-        if args.url_only:
-            if args.json:
-                print(json.dumps(stream_info, ensure_ascii=False, indent=2))
-            else:
-                print(f"【音质】: {stream_info['quality_desc']}")
-                print(f"【音频下载直链】:\n{stream_info['best_stream_url']}")
-            return
-
-        print(f"[*] 正在下载最高音质音频 ({stream_info['quality_desc']})...")
-        saved_path = AudioFetcher.download_audio(
-            stream_info["best_stream_url"],
-            str(target_m4a),
-            repackage_m4a=True,
-        )
-        print(f"[✓] 音频下载完成: {saved_path}")
+    source_type = info.get("source_type") or ("local" if info.get("is_local") else "bilibili")
+    matched_part = matched if info.get("has_multi_pages") else (info.get("parts") or [{}])[0]
+    print(f"[*] 正在提取单集音频 ({source_type})...")
+    from src.core.ingestion import get_coordinator
+    coordinator = get_coordinator()
+    coordinator.fetch_episode_audio(
+        info,
+        matched_part,
+        target_m4a,
+        force=args.force,
+        sessdata=args.sessdata,
+        quality=getattr(args, "quality", "low"),
+    )
+    saved_path = str(target_m4a)
+    print(f"[✓] 音频下载/提取完成: {saved_path}")
 
     # 单集模式同样落分集拓扑（与既有拓扑合并，只补不缩）
     _persist_parts_cache(
@@ -842,7 +802,14 @@ def cmd_info(args):
         f"已就绪 ({ffprobe_path})" if ffprobe_path
         else "未找到（可选：缺失时改用 `ffmpeg -i` 解析时长，精度略低、速度略慢）"
     ))
-    print("• 架构模式      : 宿主 Agent 原生派发模式（零环境变量、零网络代理绑定；转录=对话模型原生唯一路径）")
+    print("• 架构模式      : 宿主 Agent 原生派发模式（多平台统一媒体内核，转录=对话模型原生唯一路径）")
+    print("=" * 65)
+    print("【多平台媒体采集引擎状态】")
+    from src.core.ingestion import get_coordinator
+    readiness = get_coordinator().readiness_report()
+    for name, (ok, msg) in readiness.items():
+        icon = "[✓]" if ok else "[✗]"
+        print(f"• {name:<18}: {icon} {msg}")
     print("=" * 65)
     print("【阶段一听音通道（按宿主自己的工具列表选择，不要猜）】")
     # 两个 MCP 的位置由 paths.py 统一解析（新布局 <容器根>/omni-media/{mcp,mcp-ext}，

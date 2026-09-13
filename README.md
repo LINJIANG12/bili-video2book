@@ -5,9 +5,9 @@
 <h1>Bili-Video2Book</h1>
 
 <p>
-  <strong>把 B 站长视频与本地课程视频批量转换为结构化教材长文与复习笔记。</strong>
+  <strong>把 B 站、YouTube、抖音长视频与本地课程视频批量转换为结构化教材长文与复习笔记。</strong>
   <br />
-  <em>两阶段流水线 · 双通道听音 · 三轨交付 · 交付前质检 · Python 3.8+ 纯标准库</em>
+  <em>两阶段流水线 · 双通道听音 · 三轨交付 · 交付前质检 · Python 3.10+ · 现代多平台媒体内核</em>
 </p>
 
 <p>
@@ -16,7 +16,7 @@
 </p>
 
 <p>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python_3.8%2B-3776AB?style=flat&logo=python&logoColor=white" alt="运行环境：Python 3.8 及以上" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python_3.10%2B-3776AB?style=flat&logo=python&logoColor=white" alt="运行环境：Python 3.10 及以上" /></a>
 </p>
 
 <p>
@@ -56,7 +56,7 @@
 
 ## 概览
 
-Bili-Video2Book 是一个面向 AI 编程助手的技能，用来把一门课写成教材。它接受 B 站视频合集或本地课程目录，逐集产出长文，再把多集长文整编为模块教材与复习笔记。
+Bili-Video2Book 是一个面向 AI 编程助手的技能，用来把一门课写成教材。它接受 B 站视频、YouTube 频道/视频、抖音合集/视频或本地课程目录，逐集产出长文，再把多集长文整编为模块教材与复习笔记。
 
 长课程的直接难点是听不完也记不住。常见做法先把课程转录成逐字稿，读者仍要自己把口语整理成可复习的文本，而逐字稿越长，Agent 的上下文越容易溢出。这个技能把课程切成音频片段，由一个能听音的宿主模型逐段听懂并直接写成文章，中间不落逐字稿。
 

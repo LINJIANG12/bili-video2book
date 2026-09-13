@@ -5,9 +5,9 @@
 <h1>Bili-Video2Book</h1>
 
 <p>
-  <strong>Batch-transform Bilibili videos and local course media into structured textbooks and review notes.</strong>
+  <strong>Batch-transform Bilibili, YouTube, Douyin videos and local course media into structured textbooks and review notes.</strong>
   <br />
-  <em>Two-stage pipeline · Dual listening channels · Three deliverable tracks · Pre-delivery quality gate · Python 3.8+ standard library only</em>
+  <em>Two-stage pipeline · Dual listening channels · Three deliverable tracks · Pre-delivery quality gate · Python 3.10+ multi-platform media ingestion engine</em>
 </p>
 
 <p>
@@ -16,7 +16,7 @@
 </p>
 
 <p>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python_3.8%2B-3776AB?style=flat&logo=python&logoColor=white" alt="Runtime: Python 3.8 or later" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python_3.10%2B-3776AB?style=flat&logo=python&logoColor=white" alt="Runtime: Python 3.10 or later" /></a>
 </p>
 
 <p>

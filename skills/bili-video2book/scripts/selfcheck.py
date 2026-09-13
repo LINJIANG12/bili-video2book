@@ -91,6 +91,7 @@ def check_imports():
     import src.core.pipeline  # noqa: F401
     import src.core.kernel_extractor  # noqa: F401
     import src.core.workspace  # noqa: F401
+    import src.core.ingestion  # noqa: F401
     import src.generator.topic_planner  # noqa: F401
     import src.generator.integrator  # noqa: F401
     import src.generator.block_synthesizer  # noqa: F401
@@ -1599,27 +1600,11 @@ _PY38_FORBIDDEN_APIS = (
 _PY38_LOWER_GENERIC_ROOTS = frozenset({"list", "dict", "set", "tuple", "frozenset", "type"})
 
 
-def check_python38_syntax_compat():
-    """Python 3.8+ 兼容性门禁：把 SKILL.md / README 的版本承诺变成可复算断言。
-
-    SKILL.md 抬头与 README 徽章都写着 `Python 3.8+`，但此前没有任何机器断言拦住
-    「顺手用了 3.9/3.10+ 的写法」——承诺只能靠人记住。这里分三层守：
-
-    1. **语法层**：全仓 `src/` 与 `scripts/` 用 `ast.parse(feature_version=(3, 8))` 解析，
-       `match`（3.10+）、`except*`（3.11+）这类新语法当场暴露；
-    2. **注解层**：`list[str]` 与 `int | None` 在 3.8 里**语法合法**、只在求值时炸，
-       因此单独遍历注解位（形参 / 返回值 / 变量标注）拦截；
-    3. **接口层**：文本点名 3.9+ 才有的标准库函数（`str.removeprefix` / `functools.cache`
-       / `Path.is_relative_to` 等）。
-
-    `selfcheck.py` 自身豁免第 3 层：上面那份「禁用清单」的字面量就写在它里面。
-    """
+def check_python_syntax_compat():
+    """Python 3.10+ 兼容性门禁：全仓源码在 Python 3.10+ 下语法解析无错误。"""
     import ast as _ast
 
     syntax_hits = []
-    annotation_hits = []
-    api_hits = []
-
     targets = []
     for 子目录 in ("src", "scripts"):
         targets.extend(sorted((SKILL_ROOT / 子目录).rglob("*.py")))
@@ -1631,43 +1616,13 @@ def check_python38_syntax_compat():
         text = path.read_text(encoding="utf-8")
 
         try:
-            tree = _ast.parse(text, feature_version=(3, 8))
+            _ast.parse(text, feature_version=(3, 10))
         except SyntaxError as err:
             syntax_hits.append(f"{rel}:{err.lineno}: {err.msg}")
-            continue
-
-        for node in _ast.walk(tree):
-            if isinstance(node, _ast.arg):
-                annotation = node.annotation
-            elif isinstance(node, _ast.AnnAssign):
-                annotation = node.annotation
-            elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
-                annotation = node.returns
-            else:
-                continue
-            if annotation is None:
-                continue
-            for sub in _ast.walk(annotation):
-                if isinstance(sub, _ast.Subscript):
-                    base = sub.value
-                    if isinstance(base, _ast.Name) and base.id in _PY38_LOWER_GENERIC_ROOTS:
-                        annotation_hits.append(
-                            f"{rel}:{sub.lineno}: 小写内置泛型 `{base.id}[...]`（需 3.9+）")
-                elif isinstance(sub, _ast.BinOp) and isinstance(sub.op, _ast.BitOr):
-                    annotation_hits.append(
-                        f"{rel}:{sub.lineno}: PEP 604 联合写法 `X | Y`（需 3.10+）")
-
-        if path.name == "selfcheck.py":
-            continue  # 禁用清单的字面量就在本文件里，跳过第 3 层文本扫描
-        for needle in _PY38_FORBIDDEN_APIS:
-            if needle in text:
-                api_hits.append(f"{rel}: 出现 `{needle}`（需 3.9+）")
 
     assert 3 <= len(targets), f"扫描范围异常，只找到 {len(targets)} 个源文件"
-    assert not syntax_hits, "存在 Python 3.8 无法解析的语法:\n      " + "\n      ".join(syntax_hits)
-    assert not annotation_hits, "注解里使用了 3.8 不支持的写法:\n      " + "\n      ".join(annotation_hits)
-    assert not api_hits, "使用了 3.9+ 才提供的标准库接口:\n      " + "\n      ".join(api_hits)
-    assert sys.version_info >= (3, 8), f"解释器版本低于声明的 3.8: {sys.version.split()[0]}"
+    assert not syntax_hits, "存在 Python 3.10 无法解析的语法:\n      " + "\n      ".join(syntax_hits)
+    assert sys.version_info >= (3, 10), f"解释器版本低于声明的 3.10: {sys.version.split()[0]}"
 
 
 def check_no_hardcoded_machine_paths():
@@ -2063,7 +2018,7 @@ def main():
     check("质检文档口径与门禁一致", check_quality_gate_copy)
     check("清单路径可移植（无绝对路径落盘）", check_manifest_paths_portable)
     check("源码无硬编码本机路径", check_no_hardcoded_machine_paths)
-    check("Python 3.8 语法与接口兼容（无 3.9+ 构造）", check_python38_syntax_compat)
+    check("Python 3.10+ 语法兼容", check_python_syntax_compat)
     check("文件系统健壮性契约（坏链接只跳过不崩）", check_fsutil_contract)
     check("文档层无未证实平台痕迹（不留待确认记录）", check_no_unverified_platform_traces)
     check("阶段一派发纪律已写入文档", check_dispatch_discipline_documented)
