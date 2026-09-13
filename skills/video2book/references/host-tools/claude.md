@@ -18,7 +18,7 @@
 
 ## 安装
 
-把 `skills/bili-video2book/` 复制或软链到 `~/.claude/skills/bili-video2book`
-（项目级则放 `<项目>/.claude/skills/bili-video2book`）。
+把 `skills/video2book/` 复制或软链到 `~/.claude/skills/video2book`
+（项目级则放 `<项目>/.claude/skills/video2book`）。
 本仓库作为 Claude Code 插件安装时，根下的 `skills/` 会被**自动发现**（`.claude-plugin/plugin.json`
 是纯元数据，无需声明 skills 路径）。详见 `../install.md`。

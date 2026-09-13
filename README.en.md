@@ -2,7 +2,7 @@
 
 <a name="readme-top"></a>
 
-<h1>Bili-Video2Book</h1>
+<h1>Video2Book</h1>
 
 <p>
   <strong>Turn Bilibili, YouTube and Douyin long videos, plus local course media, into per-episode deep-dive textbooks, compiled modular books and mindmap review notes.</strong>
@@ -57,7 +57,7 @@ Give it a course URL or a directory, and it listens episode by episode, writes o
 
 ## Overview
 
-Bili-Video2Book is a skill for AI coding assistants that turns a course into a textbook. It accepts a Bilibili collection, a YouTube channel or playlist, a Douyin collection or a local course directory, writes one deep-dive article per episode, and consolidates those articles into a modular book and mindmap review notes.
+Video2Book is a skill for AI coding assistants that turns a course into a textbook. It accepts a Bilibili collection, a YouTube channel or playlist, a Douyin collection or a local course directory, writes one deep-dive article per episode, and consolidates those articles into a modular book and mindmap review notes.
 
 The hard part of a long course is that you cannot finish listening to it, let alone remember it. Transcribing the course into a verbatim script still leaves the reader to turn spoken language into reviewable text, and the longer the script, the more likely it is to overflow the Agent's context. This skill slices the course into audio chunks and hands them to a host model that can listen, so each chunk is understood and **written into an article directly**, with no intermediate transcript file on disk (the `transcribe` command is positioned as "zero intermediate transcript").
 
@@ -124,11 +124,11 @@ ffmpeg -version    # on PATH
 
 ```bash
 # 1) The skill itself: copy this one directory
-cp -r skills/bili-video2book ~/.claude/skills/            # Claude Code
-cp -r skills/bili-video2book ~/.codex/skills/             # Codex
-cp -r skills/bili-video2book ~/.config/opencode/skills/   # OpenCode
+cp -r skills/video2book ~/.claude/skills/            # Claude Code
+cp -r skills/video2book ~/.codex/skills/             # Codex
+cp -r skills/video2book ~/.config/opencode/skills/   # OpenCode
 
-# 2) Optional: install the CLI (then `bili-video2book` replaces `python src/cli.py`)
+# 2) Optional: install the CLI (then `video2book` replaces `python src/cli.py`)
 pip install -e .
 
 # 3) Listening channel (required): both services live in the omni-media repo
@@ -249,6 +249,8 @@ python src/cli.py cleanup --dry-run                # dry-run task-file reclamati
 python src/cli.py sync                             # reconcile manifest.json from disk
 ```
 
+Five note-quality checks are fatal and fail the delivery outright: **boilerplate filler, hollow headings, per-episode headings, inline quote fragments and episode voice**. Sentence truncation and missing structure are advisory; add `--require-structure` to gate on them. Rendering fatals are GitHub alert blocks, bare ASCII art outside fences and fence pairing; a missing fence **language tag** is advisory unless you pass `--require-lang`.
+
 <div align="right">
 
 [![Back to top][badge-top]](#readme-top)
@@ -306,7 +308,7 @@ The command-line `--sessdata` always takes precedence over the local store. Loca
 
 ```
 skill/
-├── skills/bili-video2book/     # the skill itself; this is the only directory you install
+├── skills/video2book/          # the skill itself; this is the only directory you install
 │   ├── SKILL.md                # skill contract, the single source of truth for the Agent
 │   ├── src/                    # toolchain
 │   │   ├── cli.py              # entry point: 12 subcommands
@@ -337,7 +339,7 @@ Three equivalent entry points with identical behaviour:
 
 - Repository-preferred: `python src/cli.py <subcommand>`
 - No-install script: `python scripts/run.py <subcommand>`
-- System command: `bili-video2book <subcommand>` (available after `pip install -e .`)
+- System command: `video2book <subcommand>` (available after `pip install -e .`)
 
 ### Subcommands
 

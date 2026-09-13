@@ -1,5 +1,5 @@
 ---
-name: bili-video2book
+name: video2book
 description: 把 B 站、YouTube、抖音长视频/系列网课或本地音视频重构为精读教材长文、模块合辑全书与思维导图复习笔记的完整技能，自带多平台统一媒体内核、音频提取、两趟语义聚合、双通道听音与多阶段门禁工具链。当用户提出「把网课/视频做成教材」「整理成复习笔记或思维导图」「这门课帮我精读一遍」「B 站/油管/抖音这个合集重构成文档」，或给出本地课程目录要求系统化整理时，使用本技能。
 license: MIT
 metadata:
@@ -9,7 +9,7 @@ metadata:
   compatibility: Python 3.10+；系统 ffmpeg 在 PATH；宿主需具备 read_audio 或 read_media 听音通道之一。
 ---
 
-# Bili-Video2Book: 视频网课重构教材与复习笔记 Skill
+# Video2Book: 视频网课重构教材与复习笔记 Skill
 
 本 Skill 面向**任意支持 Agent Skills 规范的宿主**（Claude Code、Codex、OpenCode 等）与系统终端，用于将 B 站、YouTube、抖音长视频/系列网课或本地音视频转换为结构化技术教材、模块合辑全书与思维导图复习笔记。平台差异（安装位置、工具名）见 `references/install.md` 与 `references/host-tools/`。
 
@@ -83,7 +83,7 @@ python src/cli.py logout                          # 撤销保存
 >
 > ```text
 > <容器根>/
-> ├── skill/skills/bili-video2book/   ← 本技能：SKILL.md + references/ + src/ + scripts/（安装单元）
+> ├── skill/skills/video2book/   ← 本技能：SKILL.md + references/ + src/ + scripts/（安装单元）
 > ├── omni-media/                     ← 独立仓库：两个音视频 MCP 服务
 > │   ├── mcp/                      ←   宿主原生听音版（read_audio，零凭证）
 > │   └── mcp-ext/                  ←   外部模型代读版（read_media，配置驱动）
@@ -406,7 +406,7 @@ python src/cli.py sync                           # 按磁盘对账回填 manifes
 所有任务必须通过以下标准入口调用（功能一致，三选一均可）：
 - 仓库推荐：`python src/cli.py <子命令>`
 - 免安装脚本：`python scripts/run.py <子命令>`
-- 系统命令：`bili-video2book <子命令>`
+- 系统命令：`video2book <子命令>`
 
 ```bash
 # 1. 解析合集结构与时长

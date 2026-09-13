@@ -1,11 +1,11 @@
 {
-  "name": "bili-video2book",
+  "name": "video2book",
   "interface": {
-    "displayName": "Bili-Video2Book"
+    "displayName": "Video2Book"
   },
   "plugins": [
     {
-      "name": "bili-video2book",
+      "name": "video2book",
       "source": {
         "source": "url",
         "url": "./"

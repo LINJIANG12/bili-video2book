@@ -2,7 +2,7 @@
 
 <a name="readme-top"></a>
 
-<h1>Bili-Video2Book</h1>
+<h1>Video2Book</h1>
 
 <p>
   <strong>把 B 站、YouTube、抖音长视频与本地课程音视频，逐集听音直出精读教材长文，再整编为模块全书与思维导图复习笔记。</strong>
@@ -57,7 +57,7 @@
 
 ## 项目概述
 
-Bili-Video2Book 是一个面向 AI 编程助手的技能，用来把一门课写成教材。它接受 B 站合集、YouTube 频道/播放列表、抖音合集或本地课程目录，逐集产出精读长文，再把多集长文整编为模块教材与思维导图复习笔记。
+Video2Book 是一个面向 AI 编程助手的技能，用来把一门课写成教材。它接受 B 站合集、YouTube 频道/播放列表、抖音合集或本地课程目录，逐集产出精读长文，再把多集长文整编为模块教材与思维导图复习笔记。
 
 长课程的直接难点是听不完、也记不住。把课程转录成逐字稿，读者仍要自己把口语整理成可复习的文本；而逐字稿越长，Agent 的上下文越容易溢出。这个技能把课程切成音频片段，交给能听音的宿主模型逐段听懂并**直接写成文章**，中途不落中间逐字稿文件（`transcribe` 的定位就是「zero intermediate transcript」）。
 
@@ -124,11 +124,11 @@ ffmpeg -version    # 已加入 PATH
 
 ```bash
 # 1) 技能本体：复制这一个目录即可
-cp -r skills/bili-video2book ~/.claude/skills/            # Claude Code
-cp -r skills/bili-video2book ~/.codex/skills/             # Codex
-cp -r skills/bili-video2book ~/.config/opencode/skills/   # OpenCode
+cp -r skills/video2book ~/.claude/skills/            # Claude Code
+cp -r skills/video2book ~/.codex/skills/             # Codex
+cp -r skills/video2book ~/.config/opencode/skills/   # OpenCode
 
-# 2) 可选：安装 CLI（装完可用 bili-video2book 命令替代 python src/cli.py）
+# 2) 可选：安装 CLI（装完可用 video2book 命令替代 python src/cli.py）
 pip install -e .
 
 # 3) 听音通道（必需）：两个服务同属配套仓库 omni-media
@@ -249,6 +249,8 @@ python src/cli.py cleanup --dry-run                # 任务书回收预演
 python src/cli.py sync                             # 以磁盘产物回填 manifest.json
 ```
 
+笔记成色的五类致命项为**套话填充、空壳标题、分集平铺标题、行内残缺引用、分集口吻**，命中即判失败；断句与结构缺件属提示项，加 `--require-structure` 才纳入门禁。渲染合规的致命项为 GitHub 告警块、围栏外裸字符画与围栏配对；**围栏语言标识**默认只提示，加 `--require-lang` 才纳入门禁。
+
 <div align="right">
 
 [![返回顶部][badge-top]](#readme-top)
@@ -306,7 +308,7 @@ python src/cli.py logout                          # 撤销保存
 
 ```
 skill/
-├── skills/bili-video2book/     # 技能本体，安装时只需这一个目录
+├── skills/video2book/          # 技能本体，安装时只需这一个目录
 │   ├── SKILL.md                # 技能契约，Agent 的唯一事实源
 │   ├── src/                    # 工具链
 │   │   ├── cli.py              # 入口：12 个子命令
@@ -337,7 +339,7 @@ skill/
 
 - 仓库推荐：`python src/cli.py <子命令>`
 - 免安装脚本：`python scripts/run.py <子命令>`
-- 系统命令：`bili-video2book <子命令>`（`pip install -e .` 后可用）
+- 系统命令：`video2book <子命令>`（`pip install -e .` 后可用）
 
 ### 子命令速查
 

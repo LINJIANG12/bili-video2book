@@ -54,7 +54,7 @@ def _resolve_status_file() -> Path:
 _STATUS_FILE = _resolve_status_file()
 
 # 412 断点续跑默认提示命令
-_RESUME_HINT = 'bili-video2book pipeline "<链接>" --all --sessdata YOUR_SESSDATA'
+_RESUME_HINT = 'video2book pipeline "<链接>" --all --sessdata YOUR_SESSDATA'
 
 
 class PipelineGateError(RuntimeError):

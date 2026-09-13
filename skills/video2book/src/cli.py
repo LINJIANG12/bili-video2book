@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Command-Line Interface for Bilibili Audio & Knowledge Extraction.
+"""Command-Line Interface for Video2Book (multi-platform video & knowledge extraction).
 
 Commands:
   parse            - Parse URL/BVID, classify video type, and inspect sub-videos
@@ -892,7 +892,7 @@ def cmd_info(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Bilibili Audio & Knowledge Extraction Agent Toolkit")
+    parser = argparse.ArgumentParser(description="Video2Book Agent Toolkit (multi-platform video & knowledge extraction)")
     subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
 
     # parse

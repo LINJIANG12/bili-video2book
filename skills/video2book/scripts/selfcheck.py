@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Minimal runnable self-check for the bili-video2book skill repo (三域分离后的技能侧自检).
+"""Minimal runnable self-check for the video2book skill repo (三域分离后的技能侧自检).
 
 Not a test framework: a flat sequence of assertions covering the invariants that
 matter after the architecture refactor (Agent-native kernel/plan chain, zero
@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 # 两个基准根（技能自包含后必须分开，否则一堆断言会指向错位置）：
-#   SKILL_ROOT = skills/bili-video2book/  ← SKILL.md / references/ / src/ / scripts/ 都在这里（= 安装单元）
+#   SKILL_ROOT = skills/video2book/  ← SKILL.md / references/ / src/ / scripts/ 都在这里（= 安装单元）
 #   REPO_ROOT  = 插件根（仓库根）          ← .git / .gitignore / README / pyproject / 平台声明在这里
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = SKILL_ROOT.parent.parent
@@ -53,7 +53,7 @@ FAILURES = []
 # 无 git（精简环境、zip 解压安装）时降级为提示，而不是抛 FileNotFoundError 让自检整体变红。
 _HAS_GIT = shutil.which("git") is not None
 
-# 是否处于「插件/仓库布局」：技能被单独安装到某平台的技能目录时（例如 ~/.claude/skills/bili-video2book/），
+# 是否处于「插件/仓库布局」：技能被单独安装到某平台的技能目录时（例如 ~/.claude/skills/video2book/），
 # 仓库级文件（README / pyproject / 平台清单）根本不存在——这类断言必须降级为提示，
 # 否则用户装完技能一跑自检就是一片红，反而以为装坏了。
 #
@@ -649,10 +649,10 @@ def check_skill_root_layout():
     """技能自包含布局：仓库根是**插件单元**，技能本体与它依赖的工具链同住 `skills/<name>/`。
 
     这是「只安装核心 skill 及依赖，不安装多余内容」的结构保证：
-    安装 = 复制或软链 `skills/bili-video2book/` 这**一个**目录。
+    安装 = 复制或软链 `skills/video2book/` 这**一个**目录。
     """
     name = SKILL_ROOT.name
-    assert name == "bili-video2book", f"技能目录名异常：{SKILL_ROOT}"
+    assert name == "video2book", f"技能目录名异常：{SKILL_ROOT}"
     assert SKILL_ROOT.parent.name == "skills", f"技能目录应位于 skills/ 下：{SKILL_ROOT}"
 
     for rel in ("SKILL.md", "references", "scripts", "src"):
@@ -684,7 +684,7 @@ def check_frontmatter_portable():
     extra = [k for k in keys if k not in allowed]
     assert not extra, f"frontmatter 含非跨工具安全字段：{extra}（应并入 metadata）"
 
-    assert re.search(r"^name:\s*bili-video2book\s*$", block, re.M), \
+    assert re.search(r"^name:\s*video2book\s*$", block, re.M), \
         "frontmatter 的 name 与技能目录名不一致"
     assert re.search(r"^\s+version:\s*\S+$", block, re.M), "metadata 缺少 version"
     # 触发语义：description 要同时说明"做什么"和"什么时候用"，否则跨平台命中率低
@@ -803,7 +803,7 @@ def check_no_unverified_platform_traces():
     doc_targets.extend(sorted((SKILL_ROOT / "references").rglob("*.md")))
 
     # 仓库级文件只在**确认是本仓库**时才纳入扫描。原因有两层：
-    #   ① 技能被装到 `~/.claude/skills/bili-video2book/` 时 `REPO_ROOT` 就是 `~/.claude`，
+    #   ① 技能被装到 `~/.claude/skills/video2book/` 时 `REPO_ROOT` 就是 `~/.claude`，
     #      那里的 `CLAUDE.md` 是**用户自己的全局记忆文件**——扫它等于把用户内容当本仓库痕迹判定；
     #   ② 通用布局探测（`PLUGIN_LAYOUT`）对这种情况会误判为真（它有 `CLAUDE.md` 这一项）。
     # 归属判定用**本仓库特有的清单目录**，它们不会出现在用户的宿主配置根里。
@@ -1979,7 +1979,7 @@ def check_fsutil_contract():
 
 def main():
     print("=" * 62)
-    print("bili-video2book 技能自检（技能自包含 + 多宿主声明 + 三域分离）")
+    print("video2book 技能自检（技能自包含 + 多宿主声明 + 三域分离）")
     print(f"  技能根  : {SKILL_ROOT}   ← 安装单元（SKILL.md + references/ + src/ + scripts/）")
     if PLUGIN_LAYOUT:
         print(f"  仓库根  : {REPO_ROOT}   ← 插件单元（平台声明 / README / LICENSE）")

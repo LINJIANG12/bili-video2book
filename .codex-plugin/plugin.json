@@ -1,15 +1,17 @@
 {
-  "name": "bili-video2book",
+  "name": "video2book",
   "version": "2.3.0",
   "description": "Batch-transform Bilibili, YouTube, Douyin course videos & local media into publication-grade deep-dive textbooks and structured review notes.",
   "author": {
     "name": "LINJIANG12"
   },
-  "homepage": "https://github.com/LINJIANG12/bili-video2book",
-  "repository": "https://github.com/LINJIANG12/bili-video2book",
+  "homepage": "https://github.com/LINJIANG12/video2book",
+  "repository": "https://github.com/LINJIANG12/video2book",
   "license": "MIT",
   "keywords": [
     "bilibili",
+    "youtube",
+    "douyin",
     "video-to-markdown",
     "study-notes",
     "textbook",
@@ -20,9 +22,9 @@
   "skills": "./skills/",
   "hooks": {},
   "interface": {
-    "displayName": "Bili-Video2Book",
-    "shortDescription": "Turn Bilibili courses and local media into deep-dive textbooks and mindmap notes",
-    "longDescription": "Use Bili-Video2Book to rebuild long course videos into three linked deliverables: per-episode deep-dive articles, compiled modular textbooks, and mindmap-friendly review notes. The bundled toolchain extracts lightweight speech audio via ffmpeg, drives a two-pass semantic aggregation, and gates delivery with machine checks. Listening is delegated to the host: use the omni-media MCP tool read_audio when the model has a native audio modality, otherwise use read_media with an external multimodal model.",
+    "displayName": "Video2Book",
+    "shortDescription": "Turn Bilibili, YouTube, Douyin and local course videos into deep-dive textbooks and mindmap notes",
+    "longDescription": "Use Video2Book to rebuild long course videos into three linked deliverables: per-episode deep-dive articles, compiled modular textbooks, and mindmap-friendly review notes. The bundled toolchain ingests Bilibili, YouTube, Douyin and local media, extracts lightweight speech audio via ffmpeg, drives a two-pass semantic aggregation, and gates delivery with machine checks. Listening is delegated to the host: use the omni-media MCP tool read_audio when the model has a native audio modality, otherwise use read_media with an external multimodal model.",
     "developerName": "LINJIANG12",
     "category": "Education",
     "capabilities": [
@@ -35,7 +37,7 @@
       "把这个本地课程目录做成教材长文",
       "帮我把这门课的视频整理成思维导图笔记"
     ],
-    "websiteURL": "https://github.com/LINJIANG12/bili-video2book",
+    "websiteURL": "https://github.com/LINJIANG12/video2book",
     "screenshots": []
   }
 }

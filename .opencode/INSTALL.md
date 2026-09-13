@@ -1,12 +1,12 @@
-# Installing Bili-Video2Book for OpenCode
+# Installing Video2Book for OpenCode
 
 ## Prerequisites
 
 - [OpenCode](https://opencode.ai) installed
-- Python 3.8+ and system `ffmpeg` on `PATH` (the skill's toolchain is pure standard library;
+- Python 3.10+ and system `ffmpeg` on `PATH` (the skill's toolchain is pure standard library;
   ffmpeg is a hard requirement for the audio stage)
 - One listening channel available to the host: MCP tool `read_audio` (native audio modality)
-  or `read_media` (external multimodal model). See `skills/bili-video2book/references/install.md`.
+  or `read_media` (external multimodal model). See `skills/video2book/references/install.md`.
 
 ## Installation
 
@@ -15,16 +15,16 @@ There is **no packaged OpenCode plugin** in this repository (no `package.json`, 
 
 ```bash
 # user level (candidate path — confirm against your own OpenCode config)
-ln -s "<this-repo>/skills/bili-video2book" ~/.config/opencode/skills/bili-video2book
+ln -s "<this-repo>/skills/video2book" ~/.config/opencode/skills/video2book
 
 # or project level
-ln -s "<this-repo>/skills/bili-video2book" "<project>/.opencode/skills/bili-video2book"
+ln -s "<this-repo>/skills/video2book" "<project>/.opencode/skills/video2book"
 ```
 
 On Windows prefer a junction (no developer mode required):
 
 ```powershell
-cmd /c mklink /J "$HOME\.config\opencode\skills\bili-video2book" "<this-repo>\skills\bili-video2book"
+cmd /c mklink /J "$HOME\.config\opencode\skills\video2book" "<this-repo>\skills\video2book"
 ```
 
 Prefer symlink/junction over copying: when the repo updates, the installed skill updates with it.
@@ -32,7 +32,7 @@ Prefer symlink/junction over copying: when the repo updates, the installed skill
 > **Unconfirmed path**: OpenCode's exact skills directory is **not documented publicly** as far as
 > this project could verify. `~/.config/opencode/skills/` is only a candidate (OpenCode's own config
 > lives at `~/.config/opencode/opencode.jsonc`). Ask OpenCode where it loads skills from, or point its
-> skill path config at `<this-repo>/skills/bili-video2book` — then match the directory name to what it expects.
+> skill path config at `<this-repo>/skills/video2book` — then match the directory name to what it expects.
 
 Restart OpenCode and verify by asking it to list its skills, or by asking:
 "把 B 站这个网课重构成教材和复习笔记".
@@ -43,10 +43,10 @@ Use OpenCode's native `skill` tool:
 
 ```
 use skill tool to list skills
-use skill tool to load bili-video2book
+use skill tool to load video2book
 ```
 
-The skill's commands are relative to the **skill directory** (`skills/bili-video2book/`).
+The skill's commands are relative to the **skill directory** (`skills/video2book/`).
 Once installed, that directory is the skill root — run its CLI from there:
 
 ```bash
@@ -85,5 +85,5 @@ The skill speaks in **actions** ("read a file", "write a file", "run a command",
 
 ## Getting Help
 
-- Issues: https://github.com/LINJIANG12/bili-video2book/issues
-- Full install matrix: `skills/bili-video2book/references/install.md`
+- Issues: https://github.com/LINJIANG12/video2book/issues
+- Full install matrix: `skills/video2book/references/install.md`

@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bili-video2book"
+name = "video2book"
 version = "2.3.0"
 description = "Batch-transform Bilibili, YouTube, Douyin videos & local media into publication-grade deep-dive textbooks and structured review books."
 readme = "README.md"
@@ -26,11 +26,10 @@ classifiers = [
 ]
 
 [project.scripts]
-bili-video2book = "src.cli:main"
-bili-skill = "src.cli:main"
+video2book = "src.cli:main"
 
-# 技能自包含于 skills/bili-video2book/：包发现与入口都指向该目录，
+# 技能自包含于 skills/video2book/：包发现与入口都指向该目录，
 # 因此 `pip install -e .` 装到的是技能本体（核心 skill + 工具链），不带仓库级杂物。
 [tool.setuptools.packages.find]
-where = ["skills/bili-video2book"]
+where = ["skills/video2book"]
 include = ["src*"]

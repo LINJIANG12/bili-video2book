@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unified Media Ingestion Subsystem for Bili-Video2Book."""
+"""Unified Media Ingestion Subsystem for Video2Book."""
 
 from __future__ import annotations
 

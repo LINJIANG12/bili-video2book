@@ -43,5 +43,5 @@ multi_agent = true
 ## 安装
 
 作为插件安装（本仓库 `.codex-plugin/plugin.json` 已声明 `"skills": "./skills/"`），
-或把 `skills/bili-video2book/` 复制 / 软链到 `~/.codex/skills/bili-video2book/`。
+或把 `skills/video2book/` 复制 / 软链到 `~/.codex/skills/video2book/`。
 详见 `../install.md`。

@@ -5,7 +5,7 @@
 ## 一、安装单元只有一个目录
 
 ```
-skills/bili-video2book/        ← 装这一个目录即可（核心 skill + 它依赖的工具链）
+skills/video2book/             ← 装这一个目录即可（核心 skill + 它依赖的工具链）
 ├── SKILL.md
 ├── references/                （含本文件、host-tools/ 与 cli-cookbook.md 场景手册）
 ├── scripts/                   （入口脚本）
@@ -36,11 +36,11 @@ skills/bili-video2book/        ← 装这一个目录即可（核心 skill + 它
 
 | 平台 | 用户级安装位 | 项目级安装位 | 依据 |
 | :--- | :--- | :--- | :--- |
-| **Claude Code** | `~/.claude/skills/bili-video2book/` | `<项目>/.claude/skills/bili-video2book/` | 已证实（本机存在 `~/.claude/skills/`） |
-| **Codex** | `~/.codex/skills/bili-video2book/`；或作为插件（本仓库 `.codex-plugin/plugin.json` 已声明 `"skills": "./skills/"`） | `<项目>/.codex/skills/bili-video2book/` | 已证实（本机存在 `~/.codex/skills/`；插件清单按 Agent Skills 规范声明） |
-| **OpenCode** | 把 `skills/bili-video2book/` 放进 OpenCode 的技能目录；**候选**：`~/.config/opencode/skills/bili-video2book/` | `<项目>/.opencode/skills/bili-video2book/` | 工具名映射已核实（见 `host-tools/opencode.md`）；安装位以本平台实际目录为准（本机存在 `~/.config/opencode/`） |
-| **通用 agents** | `~/.agents/skills/bili-video2book/` | `<项目>/.agents/skills/bili-video2book/` | 已证实（本机存在 `~/.agents/skills/`；本仓库 `.agents/plugins/marketplace.json` 已声明插件源） |
-| **其它平台** | 该平台自己的技能目录 | `<项目>/.<平台>/skills/bili-video2book/` | 无公开依据，走第四节「手动安装三法」 |
+| **Claude Code** | `~/.claude/skills/video2book/` | `<项目>/.claude/skills/video2book/` | 已证实（本机存在 `~/.claude/skills/`） |
+| **Codex** | `~/.codex/skills/video2book/`；或作为插件（本仓库 `.codex-plugin/plugin.json` 已声明 `"skills": "./skills/"`） | `<项目>/.codex/skills/video2book/` | 已证实（本机存在 `~/.codex/skills/`；插件清单按 Agent Skills 规范声明） |
+| **OpenCode** | 把 `skills/video2book/` 放进 OpenCode 的技能目录；**候选**：`~/.config/opencode/skills/video2book/` | `<项目>/.opencode/skills/video2book/` | 工具名映射已核实（见 `host-tools/opencode.md`）；安装位以本平台实际目录为准（本机存在 `~/.config/opencode/`） |
+| **通用 agents** | `~/.agents/skills/video2book/` | `<项目>/.agents/skills/video2book/` | 已证实（本机存在 `~/.agents/skills/`；本仓库 `.agents/plugins/marketplace.json` 已声明插件源） |
+| **其它平台** | 该平台自己的技能目录 | `<项目>/.<平台>/skills/video2book/` | 无公开依据，走第四节「手动安装三法」 |
 
 > 表里没有的平台，**不要**照着别处的路径去创建目录；先按第四节确认本平台实际的技能目录。
 
@@ -50,8 +50,8 @@ skills/bili-video2book/        ← 装这一个目录即可（核心 skill + 它
 
 1. **平台原生插件注册**（最省事）：若本平台支持从 Git 仓库安装插件/扩展，直接把本仓库地址交给它；
    本仓库已备好 `.codex-plugin/plugin.json`、`.claude-plugin/plugin.json`、`.agents/plugins/marketplace.json`。
-2. **软链**（只维护一份）：把 `skills/bili-video2book/` 链到本平台的技能目录。
-   - Linux/macOS：`ln -s <仓库>/skills/bili-video2book <平台技能目录>/bili-video2book`
+2. **软链**（只维护一份）：把 `skills/video2book/` 链到本平台的技能目录。
+   - Linux/macOS：`ln -s <仓库>/skills/video2book <平台技能目录>/video2book`
    - Windows：优先 `mklink /J`（junction，无需开发者模式），其次 `mklink /D`（需开发者模式）
 3. **复制**（最笨但最稳）：整目录复制到本平台的技能目录。注意：源更新后需重新复制。
 
