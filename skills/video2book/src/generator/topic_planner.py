@@ -858,6 +858,8 @@ class SemanticTopicPlanner:
         print("[!] 本工作区尚无笔记归并规划：本轮按**「一个模块一篇」兜底**继续（粒度偏碎，未归并）。")
         print(f"[*] 归并任务书：{ws.root_dir / 'note_plan_TASK.md' if ws else '(未导出)'}")
         print("[*] 让 Agent 完成归并并写出 note_plan.json 后重跑，即自动替换为聚合后的笔记。")
+        print("[i] 注意：本轮已按兜底粒度导出笔记任务书；补齐归并后重跑即自动替换，"
+              "上一轮的任务书会被自动作废——先别照着它派发。")
         return unmerged, "unmerged", []
 
     @classmethod
