@@ -34,10 +34,12 @@ def get_task_workspace(
     pattern: Optional[str] = None,
     base_dir: Optional[str] = None,
 ) -> Path:
-    """定位目标任务工作区：显式 --dir > --base-dir > 产物根（<home>/output）。
+    """定位目标任务工作区：显式 --dir > --base-dir > 产物根。
 
-    产物根由 `src/core/paths.py` 解析（$BVB_OUTPUT_DIR / $BVB_HOME / .bvb-home 标记），
-    因此从任意工作目录调用都能找到同一批工作区，不再依赖当前目录下是否存在 output/。
+    产物根由 `src/core/paths.py` 解析：`$BVB_OUTPUT_DIR` → 有容器标记（`$BVB_HOME` 或
+    `.bvb-home`）时的 `<home>/output` → **否则当前工作目录下的 `output/`**（默认，无需配置）。
+    容器布局下从任意工作目录调用都能找到同一批工作区；无容器标记时产物根跟随工作目录，
+    因此请在你放产物的那个目录下执行，或用 `--base-dir` 明确指定。
     """
     if custom_path:
         p = Path(custom_path).resolve()
@@ -362,7 +364,7 @@ def main():
     parser = argparse.ArgumentParser(description="Real-time Dynamic Queue Tracker (Sliding Window Dispatch)")
     parser.add_argument("--dir", default=None, help="Path to task workspace")
     parser.add_argument("--base-dir", default=None,
-                        help="产物根（默认：由 src/core/paths.py 解析，即 <home>/output）")
+                        help="产物根（默认：由 src/core/paths.py 解析——默认 <当前工作目录>/output，在容器内工作时为 <容器根>/output）")
     parser.add_argument("--pattern", default=None, help="Workspace directory name keyword filter")
     parser.add_argument("--next", type=int, default=0, dest="next_n", help="Show next N pending episodes for dispatch")
     parser.add_argument("--log-dispatch", action="store_true", dest="log_dispatch",

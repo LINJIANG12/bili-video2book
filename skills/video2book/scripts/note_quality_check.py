@@ -123,7 +123,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Module-note quality check (boilerplate / episode headings / truncation / structure)")
     parser.add_argument("--dir", default=None, help="直接指定单个工作区目录")
     parser.add_argument("--base-dir", default=None,
-                        help="工作区基目录（默认：由 src/core/paths.py 解析的产物根 <home>/output）")
+                        help="工作区基目录（默认：由 src/core/paths.py 解析的产物根——默认 <当前工作目录>/output，在容器内工作时为 <容器根>/output）")
     parser.add_argument("--task", default=None, help="仅处理目录名包含该关键字的工作区")
     parser.add_argument("--max-truncated", type=int, default=DEFAULT_MAX_TRUNCATED,
                         help=f"每份笔记允许的断句上限（默认 {DEFAULT_MAX_TRUNCATED}）")

@@ -276,14 +276,18 @@ Five note-quality checks are fatal and fail the delivery outright: **boilerplate
 
 | Variable | Description | Default | Required |
 |---|---|---|---|
-| `BVB_HOME` | Container root, the common parent of `skill/`, `omni-media/` and `output/` | Located via the `.bvb-home` marker | No |
-| `BVB_OUTPUT_DIR` | Products root | `<container_root>/output` | No |
+| `BVB_OUTPUT_DIR` | Products root | **`<working_dir>/output` by default**; `<container_root>/output` when working inside that container | No |
+| `BVB_HOME` | Container root, the common parent of `skill/`, `omni-media/` and `output/` | Located via the `.bvb-home` marker; **absent when there is no marker — and that does not affect usability** | No |
 | `BVB_AUDIO_TOKENS_PER_SEC` | Audio token factor; set around `100` for the OpenAI input_audio scale | `32` | No |
 | `BVB_CONTEXT_WINDOW_TOKENS` | Context window budget | `1000000` | No |
 | `OMNI_MEDIA_MCP_DIR` | Override for the native listening service directory | `<container_root>/omni-media/mcp` | No |
 | `BVB_DEBUG` | Set to `1` to re-raise stack traces verbatim | unset | No |
 
 Environment variables must be set before the process starts. A single run can also switch the products root with `--base-dir <path>`; command-line arguments take precedence over environment variables.
+
+> **The container root is optional.** With nothing configured, products land in `output/` under **the working directory you run commands from** — install it anywhere and work there.
+> Only when a container marker exists (a `.bvb-home` in an ancestor directory, or `BVB_HOME`) **and you are working inside that container** does the products root become `<container_root>/output`.
+> The listening channel needs no configuration either: the agent decides between `read_audio` and `read_media` from its own tool list at use time, wherever the MCP service is installed.
 
 ### Credentials
 
@@ -324,7 +328,8 @@ skill/
 └── pyproject.toml              # package metadata and CLI entry points
 ```
 
-Three domains are kept isolated: the code root (this repository), the container `home` root, and the products root. Products **never** land inside the code repository.
+Three domains are kept isolated: the code root (this repository), the container `home` root (**optional**), and the products root.
+By default the products root is `output/` under **the working directory**; when you work inside that container it is `<container_root>/output` — either way it stays out of the code directory. If you install the skill inside a git repository and do not want products committed, add `output/` to that repository's `.gitignore`.
 
 <div align="right">
 
@@ -364,7 +369,7 @@ Three equivalent entry points with identical behaviour:
 | `--article-type` | `pipeline` / `transcribe` | Prompt style: `learning` (recommended) / `legacy` | missing ⇒ exit code 4 |
 | `--all` / `--range X-Y` / `--page N` | `pipeline` / `audio` | Scope: all / a range / one episode | single episode |
 | `--force` | most commands | Force re-run, ignoring existing products | off |
-| `--base-dir` | all | Products root path | `BVB_OUTPUT_DIR` or `<container_root>/output` |
+| `--base-dir` | all | Products root path | `BVB_OUTPUT_DIR`, or `<working_dir>/output` by default (`<container_root>/output` when working inside that container) |
 | `--task` | all | Workspace directory name | the most recently active one |
 | `--sessdata` | all | Credential for this run, overrides the local store | stored copy |
 | `--dry-run` | `dedup` / `cleanup` / `sync` | Report only, write nothing | off |

@@ -39,7 +39,7 @@ from src.core.task_cleanup import (  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description="Reclaim completed dispatch task-files (*_TASK.md)")
     parser.add_argument("--base-dir", default=None,
-                        help="工作区基目录（默认：由 src/core/paths.py 解析的产物根 <home>/output）")
+                        help="工作区基目录（默认：由 src/core/paths.py 解析的产物根——默认 <当前工作目录>/output，在容器内工作时为 <容器根>/output）")
     parser.add_argument("--task", default=None, help="仅处理目录名包含该关键字的工作区")
     parser.add_argument("--keep", type=int, default=1, help="每类保留的范本数量（默认 1；0=全部回收）")
     parser.add_argument("--dry-run", action="store_true", help="仅预演，不实际删除")

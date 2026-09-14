@@ -162,45 +162,88 @@ def check_repo_separation():
 
 
 def check_products_root_resolution():
-    """产物根解析：与拆分前的锚点等价（<home>/output），且不随当前工作目录漂移。
+    """产物根解析契约（**容器根可选，默认落在工作目录**）：
 
-    `$BVB_OUTPUT_DIR` 是**受支持的显式覆盖**（SKILL.md / README 都写明），
-    此时不再要求「等价于 <home>/output」，只要求解析结果自洽。
+    * 有容器标记**且当前工作目录在该容器内** → `<home>/output`（容器布局的历史锚点不变）；
+    * 其余情况（无标记，或从容器外调用——例如技能软链进平台技能目录后）→ `<cwd>/output`；
+    * `$BVB_OUTPUT_DIR` 是**受支持的显式覆盖**（SKILL.md / README 都写明），此时只要求解析自洽。
+
+    三条分支都用纯函数 `products_root_for(home, cwd)` 直接断言，不依赖本机恰好处于哪种布局。
     """
-    if _paths.describe()["products_from_env"]:
+    desc = _paths.describe()
+    pinned = desc["container_pinned"]
+    inside = desc["cwd_inside_container"]
+    from_env = desc["products_from_env"]
+
+    # ① 三分支的纯函数语义（任何环境下都必须成立）
+    import tempfile as _tf
+
+    with _tf.TemporaryDirectory() as outside:
+        外部 = Path(outside).resolve()
+        assert _paths.products_root_for(None, 外部) == 外部 / _paths.DEFAULT_PRODUCTS_DIRNAME, \
+            "无容器根时应取「cwd/output」"
+        assert _paths.products_root_for(HOME_ROOT, 外部) == 外部 / _paths.DEFAULT_PRODUCTS_DIRNAME, \
+            "cwd 在容器之外时应取「cwd/output」（技能软链到平台目录后的默认行为）"
+        assert _paths.products_root_for(HOME_ROOT, HOME_ROOT) == HOME_ROOT / _paths.DEFAULT_PRODUCTS_DIRNAME, \
+            "cwd 就是容器根时应取「<home>/output」"
+        assert _paths.products_root_for(HOME_ROOT, HOME_ROOT / "output") == HOME_ROOT / _paths.DEFAULT_PRODUCTS_DIRNAME, \
+            "cwd 在容器内子目录时应取「<home>/output」"
+
+    if from_env:
         print(f"       (产物根由 ${_paths.ENV_OUTPUT_DIR} 覆盖，跳过「等价于 <home>/output」断言)")
-    else:
+    elif pinned and inside:
         expected = HOME_ROOT / "output"
         assert PRODUCTS_ROOT == expected, f"产物根解析异常: {PRODUCTS_ROOT} != {expected}"
+    else:
+        assert PRODUCTS_ROOT == _paths.products_root_for(None), \
+            f"容器布局未生效时产物根应跟随工作目录: {PRODUCTS_ROOT}"
     assert _paths.resolve_base_dir(None) == PRODUCTS_ROOT, "空 --base-dir 未解析到产物根"
     assert _paths.resolve_base_dir("") == PRODUCTS_ROOT, "空字符串 --base-dir 未解析到产物根"
     assert _paths.default_base_dir() == str(PRODUCTS_ROOT), "default_base_dir 与产物根不一致"
     # manifest 相对路径基准 = 容器根，因此历史 `output/<task>/...` 字面值继续有效。
     # 用**真实的换算函数**验证：自己拼一个 HOME_ROOT/output 前缀、再断言该路径以它开头，是恒真式
     # （原先那句在任何布局下都不可能失败，等于没检查）。
-    # 产物根被 $BVB_OUTPUT_DIR 覆盖到容器根之外时该换算本就无意义，故只在默认布局下验证。
-    if not _paths.describe()["products_from_env"]:
+    # 产物根被 $BVB_OUTPUT_DIR 覆盖、或落在容器根之外时该换算本就无意义，故只在容器布局生效时验证。
+    if pinned and inside and not from_env:
         from src.core.workspace import TaskWorkspace
 
         rel = TaskWorkspace.to_relative(PRODUCTS_ROOT / "__probe__" / "模块01_甲_精读全书.md")
         assert rel.startswith("output/"), \
             f"manifest 相对路径基准不是容器根下的 output/（实际 {rel!r}）"
 
-    # 跨工作目录一致性：从临时目录跑一次 CLI，产物根必须仍是同一个
+    # 跨工作目录解析（真跑子进程，验证 cwd 确实参与判定）：
+    # * 容器外的目录 → 解析到**该目录自己的** output/（默认语义）；
+    # * 容器内的任意工作目录 → 解析到 <home>/output；
+    # * $BVB_OUTPUT_DIR 覆盖时 → 到哪都是同一个值。
     import tempfile
 
-    with tempfile.TemporaryDirectory() as tmp:
-        code = (
-            "import sys; sys.path.insert(0, r'%s');"
-            "from src.core import paths; print(paths.products_root())" % SKILL_ROOT
-        )
+    probe = (
+        "import sys; sys.path.insert(0, r'%s');"
+        "from src.core import paths; print(paths.products_root())" % SKILL_ROOT
+    )
+
+    def _products_from(cwd: str) -> str:
         res = run_quiet(
-            [sys.executable, "-c", code],
-            cwd=tmp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
+            [sys.executable, "-c", probe],
+            cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
         )
-        got = (res.stdout or "").strip().splitlines()[-1] if res.stdout else ""
-        # 与 PRODUCTS_ROOT 比对（而不是 <home>/output）：$BVB_OUTPUT_DIR 覆盖时前者才是权威值。
-        assert got == str(PRODUCTS_ROOT), f"从其它工作目录解析出的产物根不一致: {got!r}"
+        return (res.stdout or "").strip().splitlines()[-1] if res.stdout else ""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp).resolve()
+        got = _products_from(str(tmp_root))
+        if from_env:
+            assert got == str(PRODUCTS_ROOT), \
+                f"$BVB_OUTPUT_DIR 覆盖时到哪都应一致: {got!r} != {PRODUCTS_ROOT}"
+        else:
+            expected = str(tmp_root / _paths.DEFAULT_PRODUCTS_DIRNAME)
+            assert got == expected, \
+                f"容器之外的工作目录应解析到它自己的 output/: {got!r} != {expected!r}"
+
+    if pinned and not from_env and HOME_ROOT.is_dir():
+        got2 = _products_from(str(HOME_ROOT))
+        expected2 = str(HOME_ROOT.resolve() / _paths.DEFAULT_PRODUCTS_DIRNAME)
+        assert got2 == expected2, f"容器内任意工作目录都应解析到 <home>/output: {got2!r} != {expected2!r}"
 
 
 def check_no_cross_repo_imports():
@@ -1972,7 +2015,7 @@ def main():
     check("模块导入无 ImportError", check_imports)
     check("CLI 全部子命令 --help 可用", check_cli_help)
     check("三域分离契约（仓库边界/产物在仓库外）", check_repo_separation)
-    check("产物根解析与 cwd 无关", check_products_root_resolution)
+    check("产物根解析（容器标记优先，否则取工作目录）", check_products_root_resolution)
     check("跨仓库不互引（skill ⇎ mcp）", check_no_cross_repo_imports)
     check("KernelExtractor 契约（无本地伪造抽取）", check_kernel_extractor_contract)
     check("SemanticTopicPlanner 契约（无启发式聚类 + 按实际集号校验）", check_topic_planner_contract)

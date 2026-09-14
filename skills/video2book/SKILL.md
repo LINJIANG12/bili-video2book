@@ -79,23 +79,23 @@ python src/cli.py logout                          # 撤销保存
 ## 3. 标准作业流程 (Standard Operating Procedures - SOP)
 
 > [!IMPORTANT]
-> **运行前置（技能目录与工作目录契约）**：本仓库是**插件/分发单元**；技能本体与它依赖的工具链**自包含**在同一个目录里，**安装这一个目录即可**：
+> **运行前置（技能目录与工作目录契约）**：本仓库是**插件/分发单元**；技能本体与它依赖的工具链**自包含**在同一个目录里，**安装这一个目录即可**。**容器根是可选的**，两种用法都支持：
 >
 > ```text
+> ① 容器布局（存在 $BVB_HOME 或祖先目录里的 .bvb-home 标记时沿用）
 > <容器根>/
 > ├── skill/skills/video2book/   ← 本技能：SKILL.md + references/ + src/ + scripts/（安装单元）
-> ├── omni-media/                     ← 独立仓库：两个音视频 MCP 服务
-> │   ├── mcp/                      ←   宿主原生听音版（read_audio，零凭证）
-> │   └── mcp-ext/                  ←   外部模型代读版（read_media，配置驱动）
-> └── output/                         ← 产物根：各课程工作区 + .sessdata.json / .wbi_keys.json / .cli_status.json
+> ├── omni-media/                ← 可选：两个音视频 MCP 服务的仓库（mcp/ 原生听音、mcp-ext/ 外部模型代读）
+> └── output/                    ← 产物根：各课程工作区 + .sessdata.json / .wbi_keys.json / .cli_status.json
+>
+> ② 默认（没有任何容器标记时）
+> <你的工作目录>/output/          ← 产物落在这里，不需要配置任何东西
 > ```
 >
-> - 所有命令写成 `python src/cli.py …` / `python scripts/…` 的相对形式，**请以本技能目录（`SKILL.md` 所在目录）为当前工作目录执行**；
-> - **产物根默认就是容器根下的 `output/`**，与代码彻底分离：**产物落到哪里与 cwd 无关**（`--base-dir` 缺省即产物根，绝对路径）；
->   注意区分：`python src/cli.py` 这种相对形式**仍需在技能目录下执行**；换目录请用绝对路径或已安装的 `video2book` 命令（产物位置不受影响）；
->   需要改位置时用 `--base-dir <路径>`，或设 `BVB_HOME`（容器根）/ `BVB_OUTPUT_DIR`（产物根）；
-> - **安装/挂载时把整个技能目录一起带走**（`SKILL.md` 与 `src/`、`scripts/` 同在），不要只复制 `SKILL.md`；
->   各平台装到哪、怎么装，见 `references/install.md`。
+> - **产物根默认取「你的工作目录」下的 `output/`**；只有当容器标记存在**且你就在该容器内工作**时才改用 `<容器根>/output`——标记是从技能所在位置向上找的，所以把技能软链进平台技能目录后，从别的项目调用仍按你的工作目录解析。要钉死位置就用 `--base-dir <路径>` 或 `BVB_OUTPUT_DIR`。
+> - **所以请在「你要放产物的那个工作目录」下执行命令**：用绝对路径调用 CLI（`python "<技能目录>/src/cli.py" …`）即可；相对形式 `python src/cli.py` 要求 cwd 是技能目录，那样产物会跟着落到技能目录下——除非显式传 `--base-dir`。
+> - **听音通道不需要配置**：`read_audio` / `read_media` 由宿主的 MCP 提供，**一律由 Agent 在用时按自己的工具列表判定**（见 §4.2）；配套 MCP 仓库装在哪只影响 `info` 里的位置提示，不影响通道是否可用。
+> - **安装/挂载时把整个技能目录一起带走**（`SKILL.md` 与 `src/`、`scripts/` 同在），不要只复制 `SKILL.md`；各平台装到哪、怎么装，见 `references/install.md`。
 
 整个重构流水线分为一个准备阶段与两个核心阶段，Agent 只需按顺序执行指定命令与工具：
 
@@ -458,8 +458,8 @@ python src/cli.py login --sessdata "<SESSDATA>"
 python src/cli.py logout
 ```
 
-> 阶段一的音频处理依赖 MCP 工具：**有原生音频模态的宿主**用 `omni-media:read_audio`（`<容器根>/omni-media/mcp/`，零凭证），
-> **没有原生音频模态的宿主**用 `omni-media-ext:read_media`（`<容器根>/omni-media/mcp-ext/`，由配置文件指定的外部模型代读）。
+> 阶段一的音频处理依赖 MCP 工具：**有原生音频模态的宿主**用 `omni-media:read_audio`（零凭证，服务本体在配套仓库的 `mcp/`），
+> **没有原生音频模态的宿主**用 `omni-media-ext:read_media`（服务本体在配套仓库的 `mcp-ext/`，由配置文件指定的外部模型代读）。
 > 两个服务同属仓库 [LINJIANG12/omni-media](https://github.com/LINJIANG12/omni-media)。
 > 两者各自独立成包、**互不 import**，与技能无运行时依赖，装一次即可长期使用；**分页契约同构**（同一 `OMNI_STATUS` 注释与续读循环），
 > 切换只需换工具名。选择规则见 §4.2，接入方式见 `references/install.md`。
@@ -499,7 +499,7 @@ python src/cli.py logout
 
 ### 7.1 工作区目录结构
 
-以下路径**均相对产物根**（默认 `<容器根>/output/`，与 `skill/`、`omni-media/` 平级）：
+以下路径**均相对产物根**（默认 `<你的工作目录>/output/`；在容器内工作时为 `<容器根>/output/`）：
 
 ```text
 <产物根>/<task>/
@@ -616,13 +616,14 @@ python scripts/selfcheck.py   # 全量契约自检（含 Python 3.10+ 语法兼�
 因此请以 `info` 的 FFmpeg 检查结果为准，而不要以命令是否报错来判断。
 
 **③ 两条听音通道都没挂（既无 `read_audio` 也无 `read_media`）**
-阶段一**必须停下**并提示用户先挂载其一（`<容器根>/omni-media/` 下的 `mcp/` 或 `mcp-ext/`），**不得**跳过"真正处理过本集音频"这一步直接编造正文（见 §1 红线 2）。判断依据永远是**宿主自己的工具列表**，不要猜。
+阶段一**必须停下**并提示用户先挂载其一（配套仓库 `omni-media` 的 `mcp/` 或 `mcp-ext/`，装在哪都行；`info` 给出的目录只是默认位置的提示），**不得**跳过"真正处理过本集音频"这一步直接编造正文（见 §1 红线 2）。判断依据永远是**宿主自己的工具列表**，不要猜，也不需要为它配置任何路径。
 
 **④ 没有外网 / B 站接口不可达**
 `parse` / `pipeline` 对元数据接口做带退避的重试，并对 412 频控记录状态（`info` 的「上次 412/熔断状态」可查）。仍然失败时：补 `--sessdata` 后重跑，或改用本地音视频目录（本地任务不走网络）。**已建立的工作区可以离线继续**：`cluster-notes` / `cluster-articles` 会先尝试在线解析，失败后按工作区的 `parts.json` / `manifest.json` 离线自愈——集号与标题基准始终取自工作区，不依赖在线结果（见 §7.1）。
 
 **⑤ 换位置部署（环境变量覆盖）**
-`BVB_HOME`（容器根）与 `BVB_OUTPUT_DIR`（产物根）必须在**进程启动前**设置；`--base-dir` 可在命令行临时覆盖。`info` 会标注每个路径是否来自环境变量（另见 §3 的运行前置契约）。
+`BVB_OUTPUT_DIR`（产物根）与 `BVB_HOME`（容器根）必须在**进程启动前**设置；`--base-dir` 可在命令行临时覆盖。
+两者都不设时的默认行为是**产物落在当前工作目录下的 `output/`**（不需要任何配置；只有在容器内工作时才落到 `<容器根>/output`）；`info` 会标注每个路径的来源（环境变量 / 容器标记 / 工作目录）与容器标记是否存在（另见 §3 的运行前置契约）。
 
 **⑥ 听音通道挂着、但它的上游不可达**
 和 ③ 不是一回事：MCP 服务本身装好了、网关进程也在跑，但外部模型端点连不上它自己的上游，实际请求**全部**失败。典型形态是**网关自己可达**——`omni-media-ext status --probe` 只发 `GET {base_url}/models`，会报「可达」，而真正的转录/推理请求返回 5xx；实测一次事故：`/v1/models` 返回 200，但 token 获取 503（`Token acquisition timeout`），整条通道取不到任何逐字稿。

@@ -276,14 +276,18 @@ python src/cli.py sync                             # 以磁盘产物回填 manif
 
 | 变量 | 说明 | 默认 | 必需 |
 |---|---|---|---|
-| `BVB_HOME` | 容器根，`skill/`、`omni-media/`、`output/` 的共同父目录 | 由 `.bvb-home` 标记定位 | 否 |
-| `BVB_OUTPUT_DIR` | 产物根 | `<容器根>/output` | 否 |
+| `BVB_OUTPUT_DIR` | 产物根 | **默认 `<工作目录>/output`**；在当前容器内工作时为 `<容器根>/output` | 否 |
+| `BVB_HOME` | 容器根，`skill/`、`omni-media/`、`output/` 的共同父目录 | 由 `.bvb-home` 标记定位；**没有标记时不存在，也不影响可用性** | 否 |
 | `BVB_AUDIO_TOKENS_PER_SEC` | 音频 token 系数；OpenAI input_audio 口径约设 `100` | `32` | 否 |
 | `BVB_CONTEXT_WINDOW_TOKENS` | 上下文窗口预算 | `1000000` | 否 |
 | `OMNI_MEDIA_MCP_DIR` | 原生听音服务目录的覆盖 | `<容器根>/omni-media/mcp` | 否 |
 | `BVB_DEBUG` | 设为 `1` 时原样抛出栈回溯 | 未设置 | 否 |
 
 环境变量需在进程启动前设置。单次执行也可用 `--base-dir <路径>` 换产物根，命令行参数优先于环境变量。
+
+> **容器根是可选的。** 不设任何变量时，产物落在**你执行命令时的工作目录**下的 `output/`——装到哪儿就能在哪儿干活。
+> 只有容器标记存在（祖先目录里的 `.bvb-home`，或 `BVB_HOME`）**且你就在该容器内工作**时才改用 `<容器根>/output`。
+> 听音通道同样不需要配置：`read_audio` / `read_media` 由 Agent 在用时按自己的工具列表判定，MCP 服务装在哪都可以。
 
 ### 凭证配置
 
@@ -324,7 +328,9 @@ skill/
 └── pyproject.toml              # 包元数据与 CLI 入口
 ```
 
-三域相互隔离：代码根（本仓库）、容器根 `home`、产物根 `products`。产物**永不落在代码仓库内**。
+三域相互隔离：代码根（本仓库）、容器根 `home`（**可选**）、产物根 `products`。
+默认产物根是**工作目录下的 `output/`**，在容器内工作时则是 `<容器根>/output`——
+两种情况都与代码目录分离；把技能装进某个 git 仓库、又想产物不进版本库时，给那份仓库的 `.gitignore` 加上 `output/`。
 
 <div align="right">
 
@@ -364,7 +370,7 @@ skill/
 | `--article-type` | `pipeline` / `transcribe` | 长文提示词风格：`learning`（学习，推荐）/ `legacy`（旧版） | 不传即退出码 4 |
 | `--all` / `--range X-Y` / `--page N` | `pipeline` / `audio` | 选集范围：全部 / 区间 / 单集 | 单集 |
 | `--force` | 多数命令 | 强制重跑，忽略已有产物 | 关 |
-| `--base-dir` | 全部 | 产物根路径 | `BVB_OUTPUT_DIR` 或 `<容器根>/output` |
+| `--base-dir` | 全部 | 产物根路径 | `BVB_OUTPUT_DIR`，或 `<工作目录>/output`（无容器标记时） |
 | `--task` | 全部 | 指定课程工作区目录名 | 最近活动的那个 |
 | `--sessdata` | 全部 | 本次执行的凭证，优先于本地存档 | 已保存的存档 |
 | `--dry-run` | `dedup` / `cleanup` / `sync` | 只报告不落盘 | 关 |

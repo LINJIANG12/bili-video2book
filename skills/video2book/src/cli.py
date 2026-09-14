@@ -57,13 +57,13 @@ enable_utf8_console()
 
 BASE_DIR_HELP = (
     "Base output directory for task workspaces "
-    "(default: the products root resolved by src/core/paths.py, i.e. <home>/output; "
-    f"override with ${_paths.ENV_OUTPUT_DIR} or ${_paths.ENV_HOME})"
+    "(default: the products root from src/core/paths.py — <cwd>/output when no container "
+    f"marker is present, else <home>/output; override with ${_paths.ENV_OUTPUT_DIR} or ${_paths.ENV_HOME})"
 )
 
 
 def _resolve_base_dir(value):
-    """把 --base-dir 解析为绝对路径（空值即产物根，不随当前工作目录漂移）。"""
+    """把 --base-dir 解析为绝对路径（空值即产物根；无容器标记时它跟随当前工作目录）。"""
     return str(_paths.resolve_base_dir(value))
 
 
@@ -832,12 +832,24 @@ def cmd_info(args):
     _products = Path(_三域["products_root"])
     _products_state = "已存在" if fsutil.is_dir(_products) else "尚不存在（首次运行会自动创建）"
     print(f"• 代码根       : {_三域['code_root']}")
-    print(f"• 容器根 home  : {_三域['home_root']}" + ("  [来自 ${}]".format(_paths.ENV_HOME) if _三域["home_from_env"] else ""))
-    print(f"• 产物根       : {_products}  [{_products_state}]"
-          + ("  [来自 ${}]".format(_paths.ENV_OUTPUT_DIR) if _三域["products_from_env"] else ""))
-    print(f"• MCP 仓库     : {_paths.home_root() / _paths.DEFAULT_MCP_REPO_DIRNAME}")
+    _有标记 = _三域["container_pinned"]
+    _生效 = _有标记 and _三域["cwd_inside_container"]
+    _容器说明 = (
+        "有，且容器布局生效" if _生效
+        else ("有，但当前工作目录不在容器内 → 按工作目录解析产物" if _有标记
+              else "无（容器根可选，不影响可用性）")
+    )
+    print(f"• 容器根 home  : {_三域['home_root']}  [容器标记: {_容器说明}]"
+          + ("  [来自 ${}]".format(_paths.ENV_HOME) if _三域["home_from_env"] else ""))
+    _产物来源 = (
+        "${}".format(_paths.ENV_OUTPUT_DIR) if _三域["products_from_env"]
+        else ("容器根下的 output/" if _生效 else "当前工作目录下的 output/（默认）")
+    )
+    print(f"• 产物根       : {_products}  [{_products_state}]  [来自 {_产物来源}]")
+    print(f"• MCP 仓库     : {_paths.home_root() / _paths.DEFAULT_MCP_REPO_DIRNAME}"
+          "  （仅为默认位置提示；听音通道按你工具列表里的 read_audio / read_media 判定）")
     print(f"  工作区清单   : {store_path().parent}")
-    print(f"  覆盖方式     : export {_paths.ENV_HOME}=<容器根> / export {_paths.ENV_OUTPUT_DIR}=<产物根>，或用 --base-dir")
+    print(f"  覆盖方式     : export {_paths.ENV_OUTPUT_DIR}=<产物根> / export {_paths.ENV_HOME}=<容器根>，或用 --base-dir")
     print("=" * 65)
     # 中文注释：WBI key 有效期读内存缓存+缓存文件
     print("【WBI Key 状态】")

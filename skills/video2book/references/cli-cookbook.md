@@ -6,8 +6,9 @@
 
 - **工作目录 = 技能目录**（`SKILL.md` 所在目录，即 `skills/video2book/`）。下文所有 `python src/cli.py …` / `python scripts/…` 均以此为当前目录；
 - 若已执行 `pip install -e .`，可直接使用 `video2book` 命令，等价于 `python src/cli.py`；
-- 产物一律落在**产物根**（默认 `<容器根>/output/`），与代码目录分离；下文示例中的 `output/<task>/…` 均**相对产物根**；
-- 换位置部署：`--base-dir <路径>`，或环境变量 `BVB_HOME`（容器根）/ `BVB_OUTPUT_DIR`（产物根）。
+- 产物一律落在**产物根**，与代码目录分离；下文示例中的 `output/<task>/…` 均**相对产物根**；
+  **产物根默认是「你跑命令时的工作目录」下的 `output/`**（在容器内工作时为 `<容器根>/output`）；
+- 想固定位置：`--base-dir <路径>`，或环境变量 `BVB_OUTPUT_DIR`（产物根）/ `BVB_HOME`（容器根）。
 
 ---
 
