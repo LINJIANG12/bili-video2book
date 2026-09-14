@@ -425,6 +425,12 @@ No. Both listening channels, `read_audio` and `read_media`, come from [omni-medi
 
 It depends on the host's modality. If `read_audio` is in your tool list, the host has a native audio modality — install `mcp/`, lowest latency and zero credentials. If only `read_media` is present, the host is text-only — install `mcp-ext/`, which names an external model endpoint in `config.json`. Both channels share the same pagination contract, so switching is a matter of changing the tool name.
 
+### The listening channel is installed but no transcript comes back
+
+First check which layer the error came from. If the tool reports that the error came from the endpoint's **upstream**, the MCP service and the gateway process are both fine — the gateway itself cannot obtain upstream credentials, or the upstream is unreachable. `omni-media-ext status --probe` **cannot detect this**, because it only issues `GET /models`. Check that your local proxy/accelerator is running and can reach the upstream, and do **not** change endpoint settings such as `/audio/transcriptions` or `model` — rerunning will not help either.
+
+If instead the error says the transcription endpoint returned the model's own outline/plan N times in a row, that is an occasional upstream-model behaviour: the service already re-reads within `max_retries`. If it still fails, retry the slice or re-read it with a smaller `duration_minutes`.
+
 ### Why is --article-type mandatory?
 
 The article style is confirmed by the user. Two prompts are provided: `learning` (recommended) and `legacy`. Four further shapes — consulting, interview, review and livestream — are registered but have no prompts. When the type is missing, unspellable, or maps to a shape without a prompt, the command prints the style menu and exits with code 4, writing no task file.

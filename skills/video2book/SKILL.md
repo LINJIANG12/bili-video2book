@@ -91,7 +91,8 @@ python src/cli.py logout                          # 撤销保存
 > ```
 >
 > - 所有命令写成 `python src/cli.py …` / `python scripts/…` 的相对形式，**请以本技能目录（`SKILL.md` 所在目录）为当前工作目录执行**；
-> - **产物根默认就是容器根下的 `output/`**，与代码彻底分离：命令可在任意目录执行（`--base-dir` 缺省即产物根，绝对路径）；
+> - **产物根默认就是容器根下的 `output/`**，与代码彻底分离：**产物落到哪里与 cwd 无关**（`--base-dir` 缺省即产物根，绝对路径）；
+>   注意区分：`python src/cli.py` 这种相对形式**仍需在技能目录下执行**；换目录请用绝对路径或已安装的 `video2book` 命令（产物位置不受影响）；
 >   需要改位置时用 `--base-dir <路径>`，或设 `BVB_HOME`（容器根）/ `BVB_OUTPUT_DIR`（产物根）；
 > - **安装/挂载时把整个技能目录一起带走**（`SKILL.md` 与 `src/`、`scripts/` 同在），不要只复制 `SKILL.md`；
 >   各平台装到哪、怎么装，见 `references/install.md`。
@@ -585,10 +586,10 @@ python src/cli.py logout
 
 | 依赖 | 必需性 | 缺失时会发生什么 |
 | :--- | :--- | :--- |
-| **Python 3.8+** | 必需 | 全部工具链命令无法启动（本仓库没有非 Python 实现） |
+| **Python 3.10+** | 必需 | 全部工具链命令无法启动（本仓库没有非 Python 实现） |
 | **ffmpeg**（在 `PATH`） | 必需（取音频阶段） | `pipeline` / `audio` 在音频阶段失败，任务书不会落盘 |
 | **ffprobe** | 可选 | 自动降级为 `ffmpeg -i` 解析时长（精度略低、速度略慢），流程照常 |
-| **`read_audio` 或 `read_media`** | 必需（阶段一听音） | 阶段一取不到音频事实，必须停下提示用户挂载其一 |
+| **`read_audio` 或 `read_media`** | 必需（阶段一听音） | 阶段一取不到音频事实，必须停下提示用户挂载其一；**通道挂着但上游不可达**时同样停下，见 §8.2 ⑥ |
 | **Python 3.12+** | 可选 | 仅影响链接去重的识别方式：3.12 以下没有 `Path.is_junction`，改用文件属性位识别重解析点，junction 与符号链接**同样被跳过**（不会重复计数） |
 | **git** | 可选（仅自检用） | `scripts/selfcheck.py` 里两条「产物/凭证未入库」的校验降级为提示，其余断言照常 |
 
@@ -596,13 +597,13 @@ python src/cli.py logout
 
 ```bash
 python src/cli.py info        # Python / ffmpeg / ffprobe / 两条听音通道 / 三域路径
-python scripts/selfcheck.py   # 全量契约自检（含 Python 3.8 语法与接口兼容断言）
+python scripts/selfcheck.py   # 全量契约自检（含 Python 3.10+ 语法兼容断言）
 ```
 
 ### 8.2 缺失情形与处理
 
-**① 没有 Python（或版本低于 3.8）**
-本工具链没有非 Python 的替代实现，**不要**改用别的语言重写，也不要手工拼装产物。先安装 Python 3.8+ 并确认 `python --version` 可执行，再重跑；`info` 会打印当前解释器路径与版本，低于 3.8 时明确标红提示。
+**① 没有 Python（或版本低于 3.10）**
+本工具链没有非 Python 的替代实现，**不要**改用别的语言重写，也不要手工拼装产物。先安装 **Python 3.10+** 并确认 `python --version` 可执行，再重跑；`info` 会打印当前解释器路径与版本，低于 **3.10** 时明确标红提示。
 
 **② 没有 ffmpeg**
 这是取音频与切片的**硬前置**，不是"可选增强"。`info` 会报出未找到并给出三平台安装命令（`winget install Gyan.FFmpeg` / `brew install ffmpeg` / `apt install ffmpeg`）；装好后要确保 `ffmpeg` 在 `PATH` 里，并**重开终端**再跑。
@@ -622,5 +623,9 @@ python scripts/selfcheck.py   # 全量契约自检（含 Python 3.8 语法与接
 
 **⑤ 换位置部署（环境变量覆盖）**
 `BVB_HOME`（容器根）与 `BVB_OUTPUT_DIR`（产物根）必须在**进程启动前**设置；`--base-dir` 可在命令行临时覆盖。`info` 会标注每个路径是否来自环境变量（另见 §3 的运行前置契约）。
+
+**⑥ 听音通道挂着、但它的上游不可达**
+和 ③ 不是一回事：MCP 服务本身装好了、网关进程也在跑，但外部模型端点连不上它自己的上游，实际请求**全部**失败。典型形态是**网关自己可达**——`omni-media-ext status --probe` 只发 `GET {base_url}/models`，会报「可达」，而真正的转录/推理请求返回 5xx；实测一次事故：`/v1/models` 返回 200，但 token 获取 503（`Token acquisition timeout`），整条通道取不到任何逐字稿。
+工具会在报错里点明「这条错误来自端点的**上游**」。此时**停止重试**（重跑不会变好），按提示检查本机代理/加速器是否在运行、能否连上上游，修好后重跑；**不要**去改 `/audio/transcriptions` 与 `model` 配置——那不是原因。
 
 > **缺失处理总原则**：降级项（ffprobe→`ffmpeg -i`、3.12→仅识别符号链接、在线解析→工作区离线基准）静默降级并打印说明；硬依赖项（Python、ffmpeg、听音通道）缺失时**立即终止并给出下一步命令**，绝不静默跳过。
