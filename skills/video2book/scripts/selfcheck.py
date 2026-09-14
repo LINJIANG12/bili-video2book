@@ -1581,25 +1581,6 @@ def check_manifest_paths_portable():
             f"note_file 落盘形态异常: {payload['knowledge_blocks_results'][0]['note_file']}"
 
 
-# 3.9+ 才提供的标准库接口（文本级拦截：这些调用在 3.8 上只是 AttributeError/ImportError，
-# 语法解析层看不见，必须单独点名）。
-_PY38_FORBIDDEN_APIS = (
-    "removeprefix(",
-    "removesuffix(",
-    "is_relative_to(",
-    "functools.cache",
-    "math.lcm",
-    "ast.unparse",
-    "itertools.pairwise",
-    "graphlib",
-    "zoneinfo",
-    "tomllib",
-)
-
-# 小写内置泛型下标（`list[str]` / `dict[str, int]`）需 3.9+ 才能在注解位求值。
-_PY38_LOWER_GENERIC_ROOTS = frozenset({"list", "dict", "set", "tuple", "frozenset", "type"})
-
-
 def check_python_syntax_compat():
     """Python 3.10+ 兼容性门禁：全仓源码在 Python 3.10+ 下语法解析无错误。"""
     import ast as _ast

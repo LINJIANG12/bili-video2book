@@ -778,9 +778,9 @@ def cmd_info(args):
             pass
     print("=" * 65)
     print("【系统运行环境与工具链检查】")
-    _py_ok = sys.version_info >= (3, 8)
+    _py_ok = sys.version_info >= (3, 10)
     print(f"• Python 运行环境: v{sys.version.split()[0]} ({sys.executable})"
-          + ("" if _py_ok else "  ✗ 低于最低要求 3.8，请先升级解释器"))
+          + ("" if _py_ok else "  ✗ 低于最低要求 3.10，请先升级解释器"))
     if getattr(Path, "is_junction", None) is not None:
         print("• 链接去重能力 : 完整（Python 3.12+：junction 与符号链接都能识别）")
     else:
