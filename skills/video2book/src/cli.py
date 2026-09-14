@@ -36,7 +36,14 @@ from src.core.fetcher import AudioFetcher
 from src.core.audio_chunker import AudioChunker
 from src.core.workspace import TaskWorkspace, sanitize_filename
 from src.core.kernel_extractor import KernelExtractor
-from src.core.credentials import SessdataStore, resolve_sessdata, store_path
+from src.core.credentials import (
+    DouyinCookieStore,
+    SessdataStore,
+    douyin_store_path,
+    resolve_douyin_cookie,
+    resolve_sessdata,
+    store_path,
+)
 from src.core.pipeline import (
     PipelineCoordinator,
     PipelineGateError,
@@ -59,6 +66,14 @@ BASE_DIR_HELP = (
     "Base output directory for task workspaces "
     "(default: the products root from src/core/paths.py — <cwd>/output when no container "
     f"marker is present, else <home>/output; override with ${_paths.ENV_OUTPUT_DIR} or ${_paths.ENV_HOME})"
+)
+
+# 四个会进入抖音抓取链路的子命令共用同一条说明：抖音对匿名访问有硬窗口，
+# 不配置登录态 Cookie 时会**静默少抓**（实测某博主 216 条只放行 21 条）。
+DOUYIN_COOKIE_HELP = (
+    "抖音完整 Cookie 串（可选）。抖音对匿名访问施加作品列表硬窗口——实测某博主真实 216 条、"
+    "匿名仅放行 21 条且第二页直接返回空，合集接口亦 403，免 cookie 无解。"
+    "需要完整抓取时请传入或先执行 login --douyin-cookie；优先级高于本地存档与 $DYAUDIO_COOKIE。"
 )
 
 
@@ -739,31 +754,48 @@ def cmd_sync(args):
 
 
 def cmd_login(args):
-    """持久化保存 SESSDATA，之后所有命令无需再传 --sessdata。
+    """持久化保存登录凭证（B 站 SESSDATA / 抖音 Cookie），之后所有命令无需再传。
 
     刻意不提供交互式输入：本工具主要供 Agent 自动化调度，等待人工键入的分支
     在非交互环境下会直接卡死。
     """
-    value = (getattr(args, "sessdata", None) or "").strip()
-    if not value:
-        print("[!] 未提供 SESSDATA，拒绝写入空凭证。", file=sys.stderr)
-        print('    用法：python src/cli.py login --sessdata "<你的 SESSDATA>"', file=sys.stderr)
-        print("    获取：浏览器登录 bilibili.com → F12 → 应用/存储 → Cookie → 复制 SESSDATA 的值", file=sys.stderr)
+    sessdata = (getattr(args, "sessdata", None) or "").strip()
+    douyin_cookie = (getattr(args, "douyin_cookie", None) or "").strip()
+
+    if not sessdata and not douyin_cookie:
+        print("[!] 未提供任何凭证，拒绝写入空值。", file=sys.stderr)
+        print("    B 站：python src/cli.py login --sessdata \"<你的 SESSDATA>\"", file=sys.stderr)
+        print("          浏览器登录 bilibili.com → F12 → 应用/存储 → Cookie → 复制 SESSDATA 的值", file=sys.stderr)
+        print("    抖音：python src/cli.py login --douyin-cookie \"<你的 Cookie 串>\"", file=sys.stderr)
+        print("          浏览器登录 douyin.com → F12 → 应用/存储 → Cookie → 复制整串", file=sys.stderr)
+        print("          （抖音必须登录态才能翻页取全量作品；匿名只放行约 20 条）", file=sys.stderr)
         sys.exit(1)
 
-    path = SessdataStore.save(value)
-    print(f"[✓] SESSDATA 已持久化保存: {path}")
-    print(f"    指纹: {SessdataStore.mask(value)}")
+    if sessdata:
+        path = SessdataStore.save(sessdata)
+        print(f"[✓] SESSDATA 已持久化保存: {path}")
+        print(f"    指纹: {SessdataStore.mask(sessdata)}")
+
+    if douyin_cookie:
+        path = DouyinCookieStore.save(douyin_cookie)
+        print(f"[✓] 抖音 Cookie 已持久化保存: {path}")
+        print(f"    指纹: {DouyinCookieStore.mask(douyin_cookie)}")
+
     print("[i] 该文件已被 .gitignore 排除，不会进入版本库。")
     print("[i] 撤销保存请运行：python src/cli.py logout")
 
 
 def cmd_logout(args):
-    """清除本地保存的 SESSDATA。"""
+    """清除本地保存的全部凭证（SESSDATA 与抖音 Cookie）。"""
+    清除 = []
     if SessdataStore.clear():
-        print("[✓] 已清除本地保存的 SESSDATA。")
+        清除.append("SESSDATA")
+    if DouyinCookieStore.clear():
+        清除.append("抖音 Cookie")
+    if 清除:
+        print(f"[✓] 已清除本地保存的：{'、'.join(清除)}。")
     else:
-        print("[*] 本地没有保存过 SESSDATA，无需清除。")
+        print("[*] 本地没有保存过任何凭证，无需清除。")
 
 
 def cmd_info(args):
@@ -846,8 +878,16 @@ def cmd_info(args):
         else ("容器根下的 output/" if _生效 else "当前工作目录下的 output/（默认）")
     )
     print(f"• 产物根       : {_products}  [{_products_state}]  [来自 {_产物来源}]")
-    print(f"• MCP 仓库     : {_paths.home_root() / _paths.DEFAULT_MCP_REPO_DIRNAME}"
-          "  （仅为默认位置提示；听音通道按你工具列表里的 read_audio / read_media 判定）")
+    # MCP 仓库位置：显示**实际探查到**的那个，而不是拿 home_root() 拼一个可能不存在的路径。
+    # 找不到时退回预期位置并明确标注「未找到」，避免把提示值伪装成事实。
+    _mcp_base = (
+        _mcp_dir.parent if fsutil.is_dir(_mcp_dir)
+        else (_mcp_ext_dir.parent if fsutil.is_dir(_mcp_ext_dir) else None)
+    )
+    _mcp_expected = _paths.home_root() / _paths.DEFAULT_MCP_REPO_DIRNAME
+    print(f"• MCP 仓库     : {_mcp_base or _mcp_expected}"
+          + ("" if _mcp_base else "  [未找到，此为预期位置]")
+          + "  （仅为位置提示；听音通道按你工具列表里的 read_audio / read_media 判定）")
     print(f"  工作区清单   : {store_path().parent}")
     print(f"  覆盖方式     : export {_paths.ENV_OUTPUT_DIR}=<产物根> / export {_paths.ENV_HOME}=<容器根>，或用 --base-dir")
     print("=" * 65)
@@ -865,7 +905,7 @@ def cmd_info(args):
             print("• WBI Key：无记录（尚未请求，首次调用自动获取）")
     except Exception as err:
         print(f"• WBI Key：无记录（{err}）")
-    # 中文注释：sessdata 只显示来源与脱敏指纹，绝不回显完整值
+    # 中文注释：凭证只显示来源与脱敏指纹，绝不回显完整值
     sess = getattr(args, "sessdata", None)
     src = getattr(args, "sessdata_source", None)
     if sess:
@@ -876,6 +916,20 @@ def cmd_info(args):
         print(f"• 凭证存档：已保存于 {store_path()}")
     else:
         print('• 凭证存档：无（可用 python src/cli.py login --sessdata "<值>" 持久化保存）')
+
+    # 抖音 Cookie：匿名只放行约 20 条作品（实测 216 条只取到 21 条），必须显式标出后果
+    dy = getattr(args, "douyin_cookie", None)
+    dy_src = getattr(args, "douyin_cookie_source", None)
+    if dy:
+        print(f"• 抖音 Cookie：有（来源：{dy_src}，指纹：{DouyinCookieStore.mask(dy)}）")
+    else:
+        print("• 抖音 Cookie：无 —— 抖音匿名访问只放行约 20 条作品（实测博主 216 条仅取到 21 条），")
+        print("               合集接口亦返回 403，免 cookie 无解。需完整抓取请先执行：")
+        print('               python src/cli.py login --douyin-cookie "<Cookie 串>"')
+    if DouyinCookieStore.load():
+        print(f"• 抖音凭证存档：已保存于 {douyin_store_path()}")
+    else:
+        print('• 抖音凭证存档：无（可用 python src/cli.py login --douyin-cookie "<值>" 持久化保存）')
     # 中文注释：上次 412/熔断状态
     print("【上次 412/熔断状态】")
     try:
@@ -897,7 +951,8 @@ def cmd_info(args):
     print("3. 宿主 Agent 主程序以 5 个并发通道（Task子代理或并行生成）读取任务书，直接撰写落盘！")
     print("=" * 65)
     print("【可复制的断点续跑命令示例】：")
-    print('python src/cli.py login --sessdata "<你的 SESSDATA>"   # 一次持久化，后续命令免传')
+    print('python src/cli.py login --sessdata "<你的 SESSDATA>"             # B 站凭证，一次持久化')
+    print('python src/cli.py login --douyin-cookie "<你的 Cookie 串>"        # 抖音凭证（匿名只能取约 20 条）')
     print('python src/cli.py pipeline "<链接>" --all --article-type learning')
     print('python src/cli.py pipeline "<链接>" --range 1-10 --article-type learning')
     print("=" * 65)
@@ -911,6 +966,7 @@ def main():
     p_parse = subparsers.add_parser("parse", help="Parse video topology & list parts (Bilibili URL or local media)")
     p_parse.add_argument("url", help="Bilibili URL/BV ID or local video/audio/directory path")
     p_parse.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
+    p_parse.add_argument("--douyin-cookie", dest="douyin_cookie", default=None, help=DOUYIN_COOKIE_HELP)
     p_parse.add_argument("--limit", type=int, default=10, help="Max items to display")
     p_parse.add_argument("--json", action="store_true", help="Output in JSON format")
 
@@ -925,6 +981,7 @@ def main():
     p_audio.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_audio.add_argument("--force", action="store_true", help="Force re-download/re-extraction even if audio file already exists")
     p_audio.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
+    p_audio.add_argument("--douyin-cookie", dest="douyin_cookie", default=None, help=DOUYIN_COOKIE_HELP)
     p_audio.add_argument("--url-only", action="store_true", help="Only print stream URL without downloading")
     p_audio.add_argument("--output", default=None, help="Optional explicit output directory override")
     p_audio.add_argument("--chunk-minutes", type=int, default=10, help="Split audio into balanced chunks of ~N minutes (0=disabled)")
@@ -938,6 +995,7 @@ def main():
     p_tr.add_argument("--base-dir", default=None, help=BASE_DIR_HELP)
     p_tr.add_argument("--output", default=None, help="Optional custom output path (only used when cached clean transcript exists)")
     p_tr.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
+    p_tr.add_argument("--douyin-cookie", dest="douyin_cookie", default=None, help=DOUYIN_COOKIE_HELP)
     p_tr.add_argument(
         "--article-type", default=None, dest="article_type",
         help="长文提示词风格（用户确认）：learning=学习（推荐，当前版）/ legacy=旧版（原稳定版）；"
@@ -959,6 +1017,7 @@ def main():
     p_pipe.add_argument("--skip-failed", action="store_true", default=False, help="Explicit opt-in: exempt failed episodes from transcription gate (recorded in manifest skip list)")
     p_pipe.add_argument("--chunk-minutes", type=int, default=60, help="Split audio into chunks of ~N minutes (0=disabled, default=60)")
     p_pipe.add_argument("--sessdata", help="Optional SESSDATA cookie", default=None)
+    p_pipe.add_argument("--douyin-cookie", dest="douyin_cookie", default=None, help=DOUYIN_COOKIE_HELP)
     p_pipe.add_argument(
         "--article-type", default=None, dest="article_type",
         help="长文提示词风格（用户确认）：learning=学习（推荐，当前版）/ legacy=旧版（原稳定版）；"
@@ -969,14 +1028,22 @@ def main():
     # info
     p_info = subparsers.add_parser("info", help="Show environment & toolchain readiness status")
     p_info.add_argument("--refresh", action="store_true", help="Clear cached status")
-    # 中文注释：sessdata 仅显示来源与脱敏指纹
+    # 中文注释：凭证仅显示来源与脱敏指纹
     p_info.add_argument("--sessdata", help="Optional SESSDATA cookie (only shows source & masked fingerprint)", default=None)
+    p_info.add_argument("--douyin-cookie", dest="douyin_cookie", default=None,
+                        help="Optional Douyin cookie (only shows source & masked fingerprint)")
 
-    # login / logout：SESSDATA 持久化
-    p_login = subparsers.add_parser("login", help="Persist Bilibili SESSDATA so later commands need no --sessdata")
-    p_login.add_argument("--sessdata", help="SESSDATA cookie value (required; no interactive prompt)", default=None)
+    # login / logout：登录凭证持久化（B 站 SESSDATA + 抖音 Cookie）
+    p_login = subparsers.add_parser(
+        "login", help="Persist Bilibili SESSDATA / Douyin cookie so later commands need no flag")
+    p_login.add_argument("--sessdata", help="Bilibili SESSDATA value (no interactive prompt)", default=None)
+    p_login.add_argument(
+        "--douyin-cookie", dest="douyin_cookie", default=None,
+        help="抖音完整 Cookie 串。抖音对匿名访问有硬窗口（实测某博主 216 条只放行 21 条，"
+             "合集接口 403），配置登录态 Cookie 是取全量作品的唯一途径。",
+    )
 
-    subparsers.add_parser("logout", help="Remove the persisted SESSDATA")
+    subparsers.add_parser("logout", help="Remove persisted credentials (SESSDATA + Douyin cookie)")
 
     # cluster-notes
     p_cl = subparsers.add_parser("cluster-notes", help="Two-pass semantic aggregation: plan modules, merge them into notes, dispatch note task-files")
@@ -1040,6 +1107,28 @@ def main():
     else:
         args.sessdata = resolve_sessdata(raw_sessdata)
         args.sessdata_source = "命令行参数" if raw_sessdata else ("本地存档" if args.sessdata else None)
+
+    # 抖音 Cookie：解析顺序与 SESSDATA 同构，但多一条环境变量来源（cookie 串很长，不便反复粘贴）
+    if hasattr(args, "douyin_cookie"):
+        raw_douyin = (args.douyin_cookie or "").strip()
+        if args.subcommand == "login":
+            args.douyin_cookie = raw_douyin or None
+            args.douyin_cookie_source = "命令行参数" if raw_douyin else None
+        else:
+            args.douyin_cookie = resolve_douyin_cookie(raw_douyin)
+            if raw_douyin:
+                args.douyin_cookie_source = "命令行参数"
+            elif os.environ.get("DYAUDIO_COOKIE", "").strip():
+                args.douyin_cookie_source = "环境变量 $DYAUDIO_COOKIE"
+            else:
+                args.douyin_cookie_source = "本地存档" if args.douyin_cookie else None
+
+        # 桥接到抖音内核：dyaudio 的 load_config() 本来就认 $DYAUDIO_COOKIE，在这里落一次即可，
+        # 不必把 cookie 逐层透传过 coordinator / pipeline / cluster 的十来个调用点——那种写法
+        # 漏一处就会**静默少抓**（正是本次要修的病灶）。
+        # 于是抖音凭证的优先级统一为：--douyin-cookie > 本地存档 / $DYAUDIO_COOKIE > config.json。
+        if args.douyin_cookie:
+            os.environ["DYAUDIO_COOKIE"] = args.douyin_cookie
 
     # 产物根解析：--base-dir 缺省即产物根（绝对路径），使命令与当前工作目录彻底解耦。
     if hasattr(args, "base_dir"):

@@ -52,27 +52,65 @@ metadata:
 
 ---
 
-## 2. 凭证配置：B 站任务 SESSDATA 说明
+## 2. 凭证配置：登录凭证（B 站 SESSDATA / 抖音 Cookie）
 
-当处理 B 站（bilibili.com 或 BV 号）合集任务时，建议提供 `SESSDATA` 登录凭证，以保障高并发抓取稳定性并避免触发 412 频控限制。本地音视频或非 B 站任务自动跳过此项。
+两类平台各有自己的登录凭证，**都通过同一个 `login` 命令持久化**。本地音视频、以及与你所用平台无关的任务自动跳过相应项。
 
-### 获取方式
+### 2.1 B 站任务 SESSDATA（建议提供）
+
+当处理 B 站（bilibili.com 或 BV 号）合集任务时，建议提供 `SESSDATA` 登录凭证，以保障高并发抓取稳定性并避免触发 412 频控限制。
+
+**获取方式**
 1. 浏览器访问 bilibili.com 登录；
 2. 按 `F12` 打开开发者工具 -> Application（应用） -> Cookies -> `https://www.bilibili.com`；
 3. 复制 `SESSDATA` 对应的值。
 
-### 使用方式（二选一）
-1. **一次性**：命令追加 `--sessdata "<SESSDATA>"`，仅作用于本次执行；
-2. **持久化（推荐）**：执行一次 `python src/cli.py login --sessdata "<SESSDATA>"`，之后所有命令自动使用，无需重复传参。
+### 2.2 抖音任务 Cookie（**必须优先向用户索取**）
+
+> [!IMPORTANT]
+> **处理抖音目标（`douyin.com` / `v.douyin.com` 短链）时，Agent 必须先向用户索取 Cookie，再开始抓取。**
+> 这不是"可选优化"——不提供会让抓取结果**静默残缺**。
+
+**为什么必须先问**：抖音对**匿名**访问施加作品列表硬窗口。实测某摄影博主主页显示 **216** 条作品，
+匿名抓取只放行 **21** 条，且翻页在第二页直接返回空列表；合集接口返回 **403**；
+主页 HTML 是纯 JS 壳，没有任何内联数据。**免 cookie 无任何可行绕行方案**。
+由于产物是按"实际取到的分集"生成的，缺失的部分不会出现在教材／笔记里——
+使用者若不知情，会误以为已经抓全。
+
+**索取话术（照此向用户说明，不要省略风险）**
+
+1. **先要凭证**，并附上获取指引：
+   > 抖音需要登录态 Cookie 才能取到全部作品。匿名访问只放行约 20 条
+   > （实测某博主 216 条只取到 21 条），且合集接口会返回 403，没有免 cookie 的办法绕过。
+   > 获取方式：浏览器登录 douyin.com → 按 `F12` → Application（应用）→ Cookies →
+   > `https://www.douyin.com` → 复制**整串** Cookie 值。
+   > 提供后我可以持久化保存（`login --douyin-cookie "<串>"`），后续任务不必重复提供。
+2. **用户拒绝或暂时不便提供** → **明确说明风险，但可以继续执行**：
+   > 明白。那我按匿名方式继续——请注意这次只可能抓到约 20 条作品，
+   > 其余分集不会出现在教材和笔记里。若之后想补全，重新提供 Cookie 再跑一次即可
+   > （已抓到的音频与长文会被复用，不会重复下载）。
+   随后照常推进任务，**不得**因为缺凭证而卡住或终止。
+
+**使用方式（二选一）**
+1. **一次性**：命令追加 `--douyin-cookie "<Cookie 串>"`，仅作用于本次执行；
+2. **持久化（推荐）**：执行一次 `python src/cli.py login --douyin-cookie "<Cookie 串>"`，之后所有命令自动使用。
+
+凭证优先级（抖音）：`--douyin-cookie` > 本地存档 / 环境变量 `$DYAUDIO_COOKIE` > 配置文件的 `cookie` 字段。
+
+### 2.3 通用命令
 
 ```bash
-python src/cli.py login --sessdata "<SESSDATA>"   # 保存凭证
-python src/cli.py info                            # 查看凭证来源与脱敏指纹
-python src/cli.py logout                          # 撤销保存
+python src/cli.py login --sessdata "<SESSDATA>"            # 保存 B 站凭证
+python src/cli.py login --douyin-cookie "<Cookie 串>"       # 保存抖音凭证
+python src/cli.py info                                     # 查看各凭证来源与脱敏指纹
+python src/cli.py logout                                   # 撤销保存（两类一起清除）
 ```
 
 > [!WARNING]
-> **凭证安全须知**：持久化的 SESSDATA 以明文存于 `output/.sessdata.json`，该路径已被 `.gitignore` 排除（另有显式规则兜底），不会进入版本库；命令行参数 `--sessdata` 的优先级始终高于本地存档。SESSDATA 等同你的 B 站登录态，请勿复制、上传或分享该文件；若怀疑泄露，请到 B 站退出登录使其失效，并运行 `logout` 清除本地存档。
+> **凭证安全须知**：持久化的凭证以明文存于产物根下的 `.sessdata.json` / `.douyin_cookie.json`，
+> 该路径已被 `.gitignore` 排除（另有显式规则兜底），不会进入版本库；命令行参数的优先级始终高于本地存档。
+> 这些凭证等同你的平台登录态，请勿复制、上传或分享；若怀疑泄露，请到对应平台退出登录使其失效，
+> 并运行 `logout` 清除本地存档。
 
 ---
 
@@ -101,6 +139,15 @@ python src/cli.py logout                          # 撤销保存
 
 ```text
 [输入 URL 或本地课程目录]
+          │
+          ▼
+【第 -1 步：平台凭证检查（抖音目标不可跳过）】
+  目标是抖音（douyin.com / v.douyin.com 短链）？
+  ├── 是 ➔ **先向用户索取 Cookie**（附获取指引，话术见 §2.2）
+  │        ├── 用户提供 ➔ login --douyin-cookie "<串>" 持久化后继续
+  │        └── 用户拒绝/不便 ➔ **明确说明风险**（只能抓到约 20 条，其余分集不会进产物），
+  │                          但**照常继续执行**——不得因缺凭证而卡住或终止
+  └── 否（B 站 / YouTube / 本地）➔ 跳过（B 站建议提供 SESSDATA，见 §2.1）
           │
           ▼
 【第 0 步：确认长文提示词风格（工作流启动前，不可跳过）】

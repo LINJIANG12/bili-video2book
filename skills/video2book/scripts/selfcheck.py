@@ -45,7 +45,12 @@ MCP_REPO = _paths.mcp_repo()
 MCP_EXT_REPO = _paths.mcp_ext_repo()
 # 承载两个 MCP 的仓库根（新布局为 <home>/omni-media）。迁移前两者各自独立成仓，
 # 故下面的仓库边界断言对旧布局另有一条分支。
-MCP_REPO_BASE = HOME_ROOT / _paths.DEFAULT_MCP_REPO_DIRNAME
+# 承载两个 MCP 的仓库根（新布局为 <base>/omni-media）。由**解析结果**反推而非拿 home_root() 拼：
+# 平台安装下 home_root() 只是提示值，拼出来的位置可能根本不存在；实际探查到的才是真位置。
+MCP_REPO_BASE = (
+    MCP_REPO.parent if MCP_REPO.parent.name == _paths.DEFAULT_MCP_REPO_DIRNAME
+    else HOME_ROOT / _paths.DEFAULT_MCP_REPO_DIRNAME
+)
 
 FAILURES = []
 
@@ -469,6 +474,17 @@ def check_mcp_repo_optional():
     避免两处断言各自漂移；找不到 MCP 仓库即跳过，不视为失败。
     """
     import subprocess as _sp
+
+    # 探查契约：`mcp_repo()` 现在必须**实际存在于候选父目录里**，而不是拿 home_root() 拼字符串
+    # （平台安装下 home_root() 只是提示值，拼出来的路径往往根本不存在）。
+    bases = _paths.mcp_candidate_bases()
+    assert bases, "MCP 候选父目录为空"
+    assert bases[0] == PRODUCTS_ROOT.parent, \
+        f"候选首位应为产物根的父目录（默认布局下与 omni-media/ 平级）: {bases[0]}"
+    _mcp_root = _paths.mcp_repo()
+    if _mcp_root.is_dir() and not os.environ.get(_paths.ENV_MCP_DIR, "").strip():
+        assert _mcp_root.parent.name == _paths.DEFAULT_MCP_REPO_DIRNAME, \
+            f"mcp_repo() 命中的路径形态异常（应为 <base>/omni-media/mcp）: {_mcp_root}"
 
     # 两个 MCP 现在同属 omni-media 仓库，**各自的断言集都要跑**：此前只跑 mcp 一侧，
     # 等于 mcp-ext 那份 selfcheck（体量更大）从技能侧永不触发。
@@ -1061,37 +1077,79 @@ def check_sessdata_store_safety():
     assert resolve_sessdata(secret) == secret, "显式传入未优先生效"
     assert resolve_sessdata("   ") == SessdataStore.load(), "空白显式值应回退到本地存档"
 
-    # 默认存档路径：必须落在产物根（两仓库工作树之外），且 skill/.gitignore 留有安全网
+    # 抖音 Cookie 存档与 SESSDATA 同构，必须独立走一遍读写往返 + 安全网
+    from src.core.credentials import (
+        DEFAULT_DOUYIN_STORE_NAME,
+        DouyinCookieStore,
+        douyin_store_path,
+        resolve_douyin_cookie,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        dy_store = Path(tmp) / "douyin.json"
+
+        assert DouyinCookieStore.load(path=dy_store) is None, "无存档时不得凭空返回抖音凭证"
+        try:
+            DouyinCookieStore.save("   ", path=dy_store)
+            raise AssertionError("空抖音 Cookie 未被拒绝")
+        except ValueError:
+            pass
+
+        DouyinCookieStore.save(secret, path=dy_store)
+        assert DouyinCookieStore.load(path=dy_store) == secret, "抖音存档往返不一致"
+        assert secret not in DouyinCookieStore.mask(secret), "抖音脱敏展示泄露了完整凭证"
+
+        assert DouyinCookieStore.clear(path=dy_store) is True
+        assert DouyinCookieStore.clear(path=dy_store) is False, "重复清除应返回 False"
+        assert DouyinCookieStore.load(path=dy_store) is None
+
+    assert resolve_douyin_cookie(secret) == secret, "抖音显式传入未优先生效"
+    assert douyin_store_path().name == DEFAULT_DOUYIN_STORE_NAME
+    assert douyin_store_path().parent == PRODUCTS_ROOT, \
+        f"抖音凭证存档不在产物根: {douyin_store_path()}"
+    # 两类凭证必须各占一个文件，否则后写会覆盖先写
+    assert store_path() != douyin_store_path(), "两类凭证共用同一存档文件，会互相覆盖"
+
+    # 默认存档路径：必须落在产物根（两仓库工作树之外），且 skill/.gitignore 留有安全网。
+    # 两类凭证（B 站 SESSDATA / 抖音 Cookie）一并纳入，避免新增一类时漏掉安全网。
+    _凭证文件 = ((DEFAULT_STORE_NAME, store_path()),
+                 (DEFAULT_DOUYIN_STORE_NAME, douyin_store_path()))
     if PLUGIN_LAYOUT:
-        assert DEFAULT_STORE_NAME in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8"), \
-            f"{DEFAULT_STORE_NAME} 未被仓库 .gitignore 覆盖（安全网缺失）"
-    assert store_path().name == DEFAULT_STORE_NAME
-    assert store_path().parent == PRODUCTS_ROOT, \
-        f"凭证存档不在产物根: {store_path()} (期望目录 {PRODUCTS_ROOT})"
+        _ignore_text = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+        for _name, _p in _凭证文件:
+            assert _name in _ignore_text, f"{_name} 未被仓库 .gitignore 覆盖（安全网缺失）"
+    for _name, _p in _凭证文件:
+        assert _p.name == _name
+        assert _p.parent == PRODUCTS_ROOT, \
+            f"凭证存档不在产物根: {_p} (期望目录 {PRODUCTS_ROOT})"
     if not _HAS_GIT:
         print("       (未找到 git 命令，跳过「凭证未入库」的 git 校验)")
         return
     for repo in (REPO_ROOT, MCP_REPO_BASE):
         if not (repo / ".git").is_dir():
             continue
-        tracked = run_quiet(
-            ["git", "ls-files", "--", DEFAULT_STORE_NAME],
-            cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, timeout=60,
-        )
-        assert not tracked.stdout.strip(), f"凭证存档已进入 {repo.name} 版本控制: {tracked.stdout.strip()}"
-        try:
-            store_path().relative_to(repo)
-        except ValueError:
-            continue
-        raise AssertionError(f"凭证存档位于 {repo.name} 仓库工作树内")
+        for _name, _p in _凭证文件:
+            tracked = run_quiet(
+                ["git", "ls-files", "--", _name],
+                cwd=str(repo), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, timeout=60,
+            )
+            assert not tracked.stdout.strip(), \
+                f"凭证存档已进入 {repo.name} 版本控制: {tracked.stdout.strip()}"
+            try:
+                _p.relative_to(repo)
+            except ValueError:
+                continue
+            raise AssertionError(f"凭证存档位于 {repo.name} 仓库工作树内")
 
 
 def check_cache_paths_anchored():
     """缓存/凭证文件路径必须锚定**产物根**，不得随当前所在目录漂移，也不得落回代码仓库。"""
-    from src.core.credentials import store_path
+    from src.core.credentials import douyin_store_path, store_path
     from src.core.wbi import WbiSigner
 
-    for label, p in (("WBI 密钥", WbiSigner._解析密钥文件路径()), ("凭证存档", store_path())):
+    for label, p in (("WBI 密钥", WbiSigner._解析密钥文件路径()),
+                     ("凭证存档", store_path()),
+                     ("抖音凭证存档", douyin_store_path())):
         assert p.is_absolute(), f"{label}路径不是绝对路径: {p}"
         assert PRODUCTS_ROOT in p.parents, f"{label}路径未锚定产物根: {p}"
         if PLUGIN_LAYOUT:
@@ -1578,8 +1636,16 @@ def check_manifest_paths_portable():
 
     drive_re = _re.compile(r"[A-Za-z]:[\\/]")
 
-    # 仓库内路径：相对化后必须是纯相对、无盘符、无反斜杠
-    in_repo_rel = TaskWorkspace.to_relative(HOME_ROOT / "output" / "__probe__" / "模块01_甲_精读全书.md")
+    # 相对路径基准必须**恰好是产物根的父目录**——这正是 `output/<task>/...` 在
+    # 「容器布局」与「平台安装（无容器）」两种情形下都成立的前提。
+    # 不能用 home_root() 当基准：它只是容器的**提示值**，没有容器信号时可能落到与产物根
+    # 不同的盘/树，跨盘 relativize 会退化成绝对路径（实测 Windows 平台安装下的真实故障）。
+    assert TaskWorkspace.REPO_ROOT == _paths.products_root().parent, \
+        f"manifest 相对路径基准应为 products_root().parent，实际 {TaskWorkspace.REPO_ROOT}"
+
+    # 产物根内的路径：相对化后必须是纯相对、无盘符、无反斜杠，且以 output/ 开头。
+    # 探针挂在**产物根**下（而非 home_root() 下），才与上面那条基准契约对齐。
+    in_repo_rel = TaskWorkspace.to_relative(PRODUCTS_ROOT / "__probe__" / "模块01_甲_精读全书.md")
     assert in_repo_rel == "output/__probe__/模块01_甲_精读全书.md", f"仓库内路径相对化异常: {in_repo_rel}"
     assert not drive_re.search(in_repo_rel) and "\\" not in in_repo_rel
 

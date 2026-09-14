@@ -20,11 +20,19 @@ from typing import Any, Dict, List, Optional, Union
 from . import paths as _paths
 
 
-# **容器根**（= skill/、omni-media/、output/ 的共同父目录）：同时作为 manifest 相对路径的换算基准，
-# 从而保证 `output/<task>/...` 这类历史清单路径在三域分离后依然逐字节有效。
-# ⚠️ 命名历史遗留：下面把它叫作 `_仓库根目录` / `REPO_ROOT`，但它的语义是**容器根**，
+# **相对路径基准**：取「产物根之父目录」，因为产物恒为它下面的 `output/`。
+# 这样 `to_relative(<基准>/output/<task>/x)` 恒等于 `output/<task>/x`——正是历史清单的写法。
+#
+# 为什么不沿用 `home_root()`：那是个**尽力而为的容器根提示值**，没有容器信号时会兜底到
+# 一个与产物根未必同盘、甚至未必同树的位置（实测 Windows 平台安装下会落到用户主目录）。
+# 基准一旦跨盘，`Path.relative_to` 与 `os.path.relpath` 会**双双抛 ValueError**，最内层兜底
+# 只能原样返回绝对路径——于是清单里存的不再是 `output/<task>/...` 而是绝对路径，清单失去可移植性。
+# `products_root()` 本身已按「容器内 → <home>/output；否则 → <cwd>/output」正确解析，
+# 其父目录天然就是这条基准；容器布局下它与 `home_root()` 相等，因此这次改动**零回归**。
+#
+# ⚠️ 命名历史遗留：下面把它叫作 `_仓库根目录` / `REPO_ROOT`，但它的语义是**相对路径基准**，
 #    与 selfcheck 里的 `REPO_ROOT`（仓库根 = 插件单元）**不是一回事**，读代码时不要混淆。
-_仓库根目录 = _paths.home_root()
+_仓库根目录 = _paths.products_root().parent
 
 
 class TaskWorkspace:

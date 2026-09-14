@@ -16,30 +16,32 @@
 ```
 
 两个 MCP 曾是容器根下平级的两个目录，现已收进**同一个** `omni-media/` 仓库；
-`mcp_repo()` / `mcp_ext_repo()` 负责解析它们的位置，并兼容迁移前的旧布局——
-**但听音通道是否可用，由 Agent 在用时按自己的工具列表判定**（见 SKILL §4.2），
-与这两个目录是否存在无关；它们只影响 `info` 里的位置提示。
+`mcp_repo()` / `mcp_ext_repo()` 负责**实际探查**它们的位置（见 `mcp_candidate_bases()`），
+并兼容迁移前的旧布局——**但听音通道是否可用，由 Agent 在用时按自己的工具列表判定**
+（见 SKILL §4.2），与这两个目录是否存在无关；它们只影响 `info` 里的位置提示。
 
 为什么需要这个模块：拆分之前，仓库根、代码根、产物根是**同一个目录**，于是 4 个地方各自
 用 `parents[2]` / `Path.cwd()` 猜路径。三域分离后三者不再相同，必须集中解析一次：
 
 - **container_home()**：**只认显式信号** —— `$BVB_HOME`，或代码根任一层祖先里的 `.bvb-home` 标记；
   都没有时返回 `None`（这正是「新装即用、无需配置」的默认情形）。
-- **home_root()**：`container_home()` → 向上找含同级 `output/` 的祖先 → 兜底代码根的父目录。
-  它只用于 MCP 仓库位置提示与容器布局判定，**不再决定产物落在哪**。
+- **home_root()**：`container_home()` → 向上找含同级 `output/` 的祖先 → 兜底**剥离连续的
+  `skill`/`skills` 包裹层**后取父目录。它只用于 MCP 仓库位置提示与容器布局判定，
+  **不再决定产物落在哪**。（`TaskWorkspace` 的相对路径基准已改为 `products_root().parent`，
+  不再依赖这个可能取不到真值的兜底。）
 - **products_root()**：① `$BVB_OUTPUT_DIR`（绝对路径，或相对容器根/工作目录的名字）
   → ② 有容器标记**且当前工作目录在该容器内**时的 `<home>/output`
   → ③ **否则 `<当前工作目录>/output`**（默认语义）。
   判据里带上 cwd，是因为标记是从**代码位置**向上找的：技能被软链进平台技能目录后代码位置
   仍指向原容器，只认标记会把产物写回原容器，而不是使用者当前干活的目录。
 
-环境变量必须在进程启动前设置（`home_root()` 的结果会被 `TaskWorkspace` 在导入时固化一次，
-与拆分前 `REPO_ROOT` 的语义一致）。
+环境变量必须在进程启动前设置（`TaskWorkspace` 会在导入时把 `products_root()` 固化一次作为
+相对路径基准，与拆分前 `REPO_ROOT` 的语义一致）。
 """
 
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 # 本文件位于 <技能根>/src/core/paths.py，向上两级即**代码根**（= 技能根 = 安装单元）
 CODE_ROOT = Path(__file__).resolve().parents[2]
@@ -99,8 +101,11 @@ def container_home() -> Optional[Path]:
 def home_root() -> Path:
     """容器根（`skill/`、`omni-media/`、`output/` 的共同父目录）。
 
-    仅用于 MCP 仓库位置提示与容器布局判定；**产物根不再由它决定**——
-    没有显式容器信号时会落到「工作目录」这条兜底路径上，而它只影响提示文本。
+    只用于容器布局判定，以及作为 `mcp_candidate_bases()` 的**候选之一**；
+    **产物根与 manifest 相对路径基准都不由它决定**（前者走 `products_root()`，
+    后者走 `products_root().parent`），`mcp_repo()` 也不再直接拼它而是实际探查
+    ——没有显式容器信号时它只是个**尽力而为的提示值**，取不到真容器根是正常情形，
+    调用方不得把它当作事实判据。
     """
     explicit = container_home()
     if explicit is not None:
@@ -114,13 +119,21 @@ def home_root() -> Path:
         except OSError:
             continue
 
-    # 兜底（没有任何显式信号时）：技能位于 <X>/skills/<name>/ 是标准布局，
-    # 此时取 <X> 的上一级——与拆分前「仓库的父目录」等价，保证这条兜底值**不在技能/仓库目录内**。
-    # 若直接取 CODE_ROOT.parent，搬进 skills/ 之后会变成 <仓库>/skills（落在仓库工作树里）。
-    if CODE_ROOT.parent.name == "skills":
-        上一级 = CODE_ROOT.parent.parent.parent
-        if 上一级 != 上一级.parent:  # 别一路退到文件系统根
-            return 上一级
+    # 兜底（没有任何显式信号时）：**剥离包裹技能的连续 `skill` / `skills` 层**，取其父目录。
+    # 包裹层的个数随安装方式而变，因此必须逐层剥离，**不能写死层数**：
+    #   <容器根>/skill/skills/video2book    （本仓库的容器布局，两层）→ <容器根>
+    #   ~/.workbuddy/skills/video2book      （平台用户级安装，一层）  → ~/.workbuddy
+    #   ~/.claude/skills/video2book         （同上）                  → ~/.claude
+    # 旧实现写死「退 3 层」，只对两层布局成立；遇到单层布局会**多退一层**，把锚点抛到
+    # 用户主目录（实测 Windows 上即 `C:\Users\<name>`），连带 manifest 的相对路径基准
+    # 一起错位——产物在别的盘符时会令 `relative_to` / `relpath` 双双失败，
+    # 最终把本应是 `output/<task>/...` 的相对路径降级写成了绝对路径。
+    anchor = CODE_ROOT
+    while anchor.parent != anchor and anchor.parent.name in ("skill", "skills"):
+        anchor = anchor.parent
+    父目录 = anchor.parent
+    if 父目录 != anchor:  # 别一路退到文件系统根
+        return 父目录
     return CODE_ROOT.parent
 
 
@@ -136,23 +149,78 @@ def is_container_layout() -> bool:
     return container_home() is not None
 
 
+def mcp_candidate_bases() -> List[Path]:
+    """寻找 `omni-media/` 仓库时要顺次探查的父目录（去重、保序）。
+
+    顺序反映「用户最可能把它放在哪」：
+
+    1. **产物根的父目录** —— 默认布局下 `output/` 与 `omni-media/` 就是平级的两个域，
+       而产物根本身已按「容器内 → `<home>/output`；否则 → `<cwd>/output`」正确解析过，
+       所以它的父目录是命中率最高、且与「使用者当前在哪干活」一致的那个候选；
+    2. 当前工作目录 —— 覆盖没跑过产物、但就在仓库旁边干活的情形；
+    3. `home_root()` —— 容器布局下的规范位置（也是唯一的提示值来源）；
+    4. 代码根及其各层祖先 —— 兼容技能被放进容器内、而 `omni-media/` 在上层的布局。
+
+    为什么要「找」而不是「拼」：`home_root()` 在没有容器信号时只是个**尽力而为的提示值**，
+    拼出来的路径可能根本不存在（实测平台安装下会指向 `~/.workbuddy/omni-media`，
+    而仓库其实就在工作目录里）。拼字符串等于把提示值当成事实，`info` 会被它带偏。
+    """
+    bases: List[Path] = []
+    try:
+        bases.append(products_root().parent)
+    except Exception:  # noqa: BLE001 - 解析失败不应影响其余候选
+        pass
+    try:
+        bases.append(Path.cwd())
+    except OSError:
+        pass
+    bases.extend([home_root(), CODE_ROOT, *CODE_ROOT.parents])
+
+    seen: set = set()
+    out: List[Path] = []
+    for base in bases:
+        try:
+            key = str(Path(base).resolve())
+        except OSError:
+            continue
+        if key not in seen:
+            seen.add(key)
+            out.append(Path(base))
+    return out
+
+
+def _probe_mcp_dir(subdirname: str) -> Optional[Path]:
+    """在候选父目录下寻找 `omni-media/<subdirname>`；找不到返回 None（**不编造路径**）。"""
+    for base in mcp_candidate_bases():
+        candidate = base / DEFAULT_MCP_REPO_DIRNAME / subdirname
+        try:
+            if candidate.is_dir():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 def mcp_repo() -> Path:
     """宿主原生听音版（`read_audio`）的目录。
 
     解析顺序：① `$OMNI_MEDIA_MCP_DIR`（显式覆盖，绝对路径或相对 home 的路径）
-    → ② `<home>/omni-media/mcp`（迁移后的新布局）→ ③ `<home>/mcp`（迁移前的旧布局兜底）
-    → ④ 都不存在时仍返回新布局路径，让调用方的报错指向**预期位置**而不是一个空值。
+    → ② **在候选父目录里实际探查** `<base>/omni-media/mcp`（见 `mcp_candidate_bases()`）
+    → ③ `<home>/mcp`（迁移前的旧布局兜底）
+    → ④ 都没找到时返回**预期位置**，让调用方的报错指向一个具体路径而不是空值。
     """
     env_dir = _env_path(ENV_MCP_DIR, base=home_root())
     if env_dir is not None:
         return env_dir
-    new_layout = home_root() / DEFAULT_MCP_REPO_DIRNAME / DEFAULT_MCP_DIRNAME
-    if new_layout.exists():
-        return new_layout
+
+    found = _probe_mcp_dir(DEFAULT_MCP_DIRNAME)
+    if found is not None:
+        return found
+
     legacy = home_root() / DEFAULT_MCP_DIRNAME
-    if legacy.exists():
+    if legacy.is_dir():
         return legacy
-    return new_layout
+    return home_root() / DEFAULT_MCP_REPO_DIRNAME / DEFAULT_MCP_DIRNAME
 
 
 def mcp_ext_repo() -> Path:
@@ -161,13 +229,14 @@ def mcp_ext_repo() -> Path:
     布局规则与 `mcp_repo()` 一致，但**不受** `$OMNI_MEDIA_MCP_DIR` 影响：那个变量只针对原生听音版
     （两个服务是各自独立的包，用一个变量同时改两个位置只会造成误配）。
     """
-    new_layout = home_root() / DEFAULT_MCP_REPO_DIRNAME / DEFAULT_MCP_EXT_DIRNAME
-    if new_layout.exists():
-        return new_layout
+    found = _probe_mcp_dir(DEFAULT_MCP_EXT_DIRNAME)
+    if found is not None:
+        return found
+
     legacy = home_root() / DEFAULT_MCP_EXT_DIRNAME
-    if legacy.exists():
+    if legacy.is_dir():
         return legacy
-    return new_layout
+    return home_root() / DEFAULT_MCP_REPO_DIRNAME / DEFAULT_MCP_EXT_DIRNAME
 
 
 def products_root_for(home: Optional[Path], cwd: Optional[Path] = None) -> Path:

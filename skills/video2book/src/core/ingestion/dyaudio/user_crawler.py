@@ -168,7 +168,39 @@ def collect_awemes_by_mix(client: DouyinClient, sec_uid: str, max_pages: int = 0
     if enrich_mix:
         groups = _enrich_with_mix_api(client, groups)
 
+    _report_count_gap(profile, groups)
     return profile, groups
+
+
+def _report_count_gap(profile: Dict[str, Any],
+                      groups: "OrderedDict[str, List[Dict[str, Any]]]") -> None:
+    """把「博主声明的作品数」与「实际取到的条数」对账，不一致时**显式告警**。
+
+    为什么必须告警：博主资料里的 ``aweme_count`` 一直是被取回来的，却从未有人比对过，
+    于是匿名抓取少拿几十上百条时**完全静默**，使用者会以为已抓全——实测某博主资料显示
+    216 条，匿名只取到 21 条，而产物按「取到的分集」生成，缺失部分不会出现在教材/笔记里。
+    这类静默缺口比直接报错危险得多，必须让它在屏幕上出现。
+    """
+    declared = safe_int((profile or {}).get("aweme_count"))
+    seen = {
+        str(a.get("aweme_id"))
+        for items in (groups or {}).values()
+        for a in items
+        if a.get("aweme_id")
+    }
+    实取 = len(seen)
+    if not declared or 实取 >= declared:
+        return
+
+    print(
+        f"\n[!] 抖音作品数量不符：博主资料显示 {declared} 条，实际只取到 {实取} 条"
+        f"（缺 {declared - 实取} 条）。\n"
+        "    最常见原因是**未配置登录态 Cookie**——抖音对匿名访问施加作品列表硬窗口\n"
+        "    （实测只放行 21 条，翻页在第二页直接返回空列表），且合集接口返回 403。\n"
+        "    解决：浏览器登录 douyin.com → F12 → 应用/存储 → Cookie → 复制整串，然后执行\n"
+        '      python src/cli.py login --douyin-cookie "<Cookie 串>"\n'
+        "    注意：产物是按「实际取到的分集」生成的，缺失部分不会出现在教材/笔记里。\n"
+    )
 
 
 def _enrich_with_mix_api(client: DouyinClient,
@@ -196,7 +228,9 @@ def _enrich_with_mix_api(client: DouyinClient,
             try:
                 extra = list(iter_mix_awemes(client, mix_id))
             except Exception as exc:  # noqa: BLE001 - 补全失败则忽略
-                log.debug("合集 %s 补全失败（忽略）：%s", mix_id, exc)
+                # 用 warning 而非 debug：匿名抓取时这里会稳定失败（403），
+                # 若静默降级，使用者既看不到「合集没补上」，也看不到「作品可能不全」。
+                log.warning("合集 %s 补全失败（将仅用主页作品列表）：%s", mix_id, exc)
                 continue
             for aweme in extra:
                 merged.setdefault(str(aweme.get("aweme_id")), aweme)

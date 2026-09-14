@@ -11,6 +11,33 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import BaseMediaProvider, IngestionError
 
+# 抖音分享短链：只有跟一次 302 才知道它指向单视频还是**博主主页**
+_SHORT_LINK_RE = re.compile(r"https?://v\.douyin\.com/[\w\-]+/?", re.IGNORECASE)
+
+
+def expand_share_link(session: Any, url: str, timeout: int = 15) -> str:
+    """把 ``v.douyin.com`` 短链跟一次 302 展开为最终地址；非短链或展开失败时**原样返回**。
+
+    为什么必需：短链既可能是单视频链，也可能是**博主主页**链（实测
+    ``v.douyin.com/PcHMHverMrE/`` → ``/share/user/<sec_uid>``），而二者走完全不同的处理分支。
+    没有这一步就只能靠字面量猜（短链里既没有 ``/user/`` 也没有 ``sec_uid``），
+    主页短链必然被误判成单视频，随后 ``extract_aweme_id`` 跟跳后找不到数字 ID 而抛
+    「未能从链接中解析出作品 ID」——用户看到的是「链接无效」，实际是链接有效但类型判错。
+    """
+    if not url or "v.douyin.com" not in url:
+        return url
+    try:
+        from .dyaudio.config import MOBILE_UA
+
+        resp = session.get(
+            url, timeout=timeout, allow_redirects=True,
+            headers={"User-Agent": MOBILE_UA},
+        )
+        final = str(getattr(resp, "url", "") or "")
+        return final if final.startswith("http") else url
+    except Exception:
+        return url
+
 
 class DouyinProvider(BaseMediaProvider):
     name = "douyin"
@@ -57,11 +84,29 @@ class DouyinProvider(BaseMediaProvider):
         clean_target = target.strip()
 
         with client:
+            # 0. 短链展开：`v.douyin.com` 既可能是单视频链也可能是主页链，先跟 302 再判类型，
+            #    否则主页短链会被误判成单视频（短链字面量里既无 `/user/` 也无 `sec_uid`）。
+            resolved = expand_share_link(client.session, clean_target)
+
             # 1. 判定是否为用户主页
-            is_user = "/user/" in clean_target or "sec_uid" in clean_target
+            is_user = "/user/" in resolved or "sec_uid" in resolved
             if is_user:
+                # 抖音对**匿名**访问有硬窗口：作品列表只放行约 20 条、翻页第二页即空、
+                # 合集接口 403，且主页 HTML 是纯 JS 壳（无内联数据）——免 cookie 无解。
+                # 必须主动说明，否则使用者会以为「已经抓全」（实测某博主 216 条只取到 21 条）。
+                if not cfg.cookie:
+                    print(
+                        "\n[!] 未配置抖音登录态 Cookie —— 抖音对匿名访问只放行约 20 条作品，"
+                        "翻页会直接返回空列表，\n"
+                        "    合集接口亦返回 403，因此**无法取到全部作品**"
+                        "（实测某博主真实 216 条、匿名仅取到 21 条）。\n"
+                        "    这不是链接或网络问题，且免 cookie 没有可行绕行方案。\n"
+                        "    如需完整抓取：浏览器登录 douyin.com → F12 → 应用/存储 → Cookie → 复制整串，再执行\n"
+                        '      python src/cli.py login --douyin-cookie "<Cookie 串>"\n'
+                        "    选择继续也可：任务会照常执行，但产物只覆盖实际取到的那些分集。\n"
+                    )
                 try:
-                    sec_uid = extract_sec_uid(client.session, clean_target)
+                    sec_uid = extract_sec_uid(client.session, resolved)
                 except Exception as err:
                     raise IngestionError(f"未能解析抖音用户主页: {err}") from err
 
@@ -117,9 +162,9 @@ class DouyinProvider(BaseMediaProvider):
                     "source_path": clean_target,
                 }
 
-            # 2. 单视频解析
+            # 2. 单视频解析（resolved 已是最终地址，展开失败时等于原输入）
             try:
-                info = parse_share_url(client.session, clean_target)
+                info = parse_share_url(client.session, resolved)
             except Exception as err:
                 raise IngestionError(f"抖音单视频解析失败: {err}") from err
 

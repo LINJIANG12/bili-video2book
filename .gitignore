@@ -55,6 +55,7 @@ downloads/
 config.json
 .env
 .sessdata.json
+.douyin_cookie.json
 .zcode/
 .workbuddy/
 .aide/
