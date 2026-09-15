@@ -130,6 +130,10 @@ class DouyinProvider(BaseMediaProvider):
                         total_duration += dur
 
                         display_title = f"[{mix_name}] {desc}" if mix_name != "未分类" and len(groups) > 1 else desc
+                        # 作品类型：博主主页拿的是原始 aweme 节点，本地按 images 判定
+                        # （与 dyaudio.share_parser 同一口径）。键名不带下划线，
+                        # 否则会被 pipeline 落盘时剥离、进不了 parts.json。
+                        media_kind = "image_album" if (aweme.get("images") or []) else "video"
                         parts.append({
                             "page": page_idx,
                             "title": display_title,
@@ -137,6 +141,7 @@ class DouyinProvider(BaseMediaProvider):
                             "duration": dur,
                             "url": f"https://www.douyin.com/video/{aweme_id}",
                             "filepath": "",
+                            "media_kind": media_kind,
                             "_raw_aweme": aweme,
                         })
                         page_idx += 1
@@ -182,6 +187,9 @@ class DouyinProvider(BaseMediaProvider):
                 "duration": duration,
                 "url": f"https://www.douyin.com/video/{aweme_id}",
                 "filepath": "",
+                # 单视频分支已走过 parse_share_url → parse_single_aweme，
+                # 直接用归一化结果，不在下游重判（单一事实来源）。
+                "media_kind": info.get("media_kind") or "video",
                 "_raw_aweme": info,
             }]
 

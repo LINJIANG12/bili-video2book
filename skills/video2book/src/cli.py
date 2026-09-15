@@ -45,12 +45,14 @@ from src.core.credentials import (
     store_path,
 )
 from src.core.pipeline import (
+    KIND_VIDEO,
     PipelineCoordinator,
     PipelineGateError,
     _STATUS_FILE,
     export_article_task,
     get_audio_stream,
     parse_range_string,
+    part_kind,
     resolve_course_title,
     resolve_scope_parts,
     resolve_target_info,
@@ -223,7 +225,8 @@ def _persist_parts_cache(ws, entries) -> None:
     """
     try:
         clean = [
-            {k: v for k, v in e.items() if not k.startswith("_") and k in ("page", "title", "cid", "duration")}
+            {k: v for k, v in e.items()
+             if not k.startswith("_") and k in ("page", "title", "cid", "duration", "media_kind")}
             for e in (entries or [])
             if isinstance(e, dict) and e.get("page") is not None
         ]
@@ -261,6 +264,14 @@ def cmd_audio(args):
 
         total_parts = len(selected_parts)
         prefetch_workers = max(1, int(getattr(args, "prefetch_workers", 12) or 1))
+        # 非视频作品（抖音图文/图集 note）没有可用音轨，取下来只有图片卡片+BGM。
+        # 这里预筛掉，既省时间，也避免给后续环节留下「有音频但没人声」的假象。
+        _non_video = [p for p in selected_parts if part_kind(p) != KIND_VIDEO]
+        if _non_video:
+            print(f"[*] 跳过 {len(_non_video)} 集非视频作品（图文作品，无口播）："
+                  f"P{_non_video[0]['page']:02d} 等")
+            selected_parts = [p for p in selected_parts if part_kind(p) == KIND_VIDEO]
+            total_parts = len(selected_parts)
         print("=" * 65)
         print(f"[*] 批量提取与无损转换任务启动 (共 {total_parts} 个分集，并发 {prefetch_workers} 线程)")
         print(f"[*] 目标音轨存储目录: {target_audio_dir}")
@@ -280,6 +291,7 @@ def cmd_audio(args):
                     "title": p["title"],
                     "cid": p["cid"],
                     "duration": p["duration"],
+                    "media_kind": part_kind(p),
                     "audio_file": str(target_file),
                     "size_bytes": target_file.stat().st_size,
                     "status": "cached",
@@ -306,6 +318,7 @@ def cmd_audio(args):
                     "title": p["title"],
                     "cid": p.get("cid"),
                     "duration": p.get("duration", 0),
+                    "media_kind": part_kind(p),
                     "audio_file": saved_path,
                     "size_bytes": f_size,
                     "status": "downloaded",
@@ -518,7 +531,8 @@ def cmd_cluster_notes(args):
     ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir, info_name=info.get("workspace_name"))
 
     # 集号基准以工作区为准（在线解析只用于首次建工作区），标题同理（离线也拿得到）
-    parts = resolve_scope_parts(info, ws)
+    # 再滤掉非视频作品：它们没有长文，留着会让模块规划出现「有集号没内容」的空洞。
+    parts = [p for p in resolve_scope_parts(info, ws) if part_kind(p) == KIND_VIDEO]
     course_title = resolve_course_title(info, ws)
 
     print("=" * 65)
@@ -615,7 +629,8 @@ def cmd_cluster_articles(args):
     ws = TaskWorkspace.create(title=info["title"], bvid=bvid, custom_name=args.task, base_dir=args.base_dir, info_name=info.get("workspace_name"))
 
     # 集号基准与标题都以工作区为准（在线解析只用于首次建工作区，离线也拿得到）
-    parts = resolve_scope_parts(info, ws)
+    # 再滤掉非视频作品：它们没有长文，留着会让教材整编出现空壳章节。
+    parts = [p for p in resolve_scope_parts(info, ws) if part_kind(p) == KIND_VIDEO]
     course_title = resolve_course_title(info, ws)
 
     print("=" * 65)

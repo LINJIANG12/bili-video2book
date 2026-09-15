@@ -293,11 +293,16 @@ class TaskWorkspace:
         必要原因：`pipeline --page N` / `--range A-B` 这类**局部运行**只处理选中分集，
         若直接用子集覆盖 `parts.json`，就会把「分集拓扑缓存」截断成那几集——接口被风控
         时的离线自愈会据此误判课程规模，`cli.py sync` 的 episode_total 也随之变小。
+
+        例外：`media_kind`（作品类型）是**拓扑属性**，不是本次运行的产物。旧调用方
+        （历史代码、旧格式条目）不携带它，若被 incoming 整个覆盖掉，已标记的图文作品
+        会被静默降级成视频，重新进入听音与派发。因此这里对它做「旧值兜底」：
+        incoming 未给该键时沿用已有值。
         """
         merged: Dict[Any, Any] = {}
         order: List[Any] = []
 
-        def _吸收(数据: Any) -> None:
+        def _吸收(数据: Any, 沿用已有: bool = False) -> None:
             if not isinstance(数据, list):
                 return
             for 条目 in 数据:
@@ -308,10 +313,14 @@ class TaskWorkspace:
                     continue
                 if 键 not in merged:
                     order.append(键)
+                if 沿用已有 and "media_kind" not in 条目:
+                    旧值 = merged.get(键)
+                    if isinstance(旧值, dict) and 旧值.get("media_kind"):
+                        条目 = {**条目, "media_kind": 旧值["media_kind"]}
                 merged[键] = 条目
 
         _吸收(existing)
-        _吸收(incoming)
+        _吸收(incoming, 沿用已有=True)
 
         def 排序键(键: Any) -> tuple:
             return (0, 键, "") if isinstance(键, int) else (1, 0, str(键))

@@ -623,6 +623,9 @@ python src/cli.py logout
 
 产物体系总览、长文类型矩阵与拓扑树样例请查阅：[references/delivery_matrix.md](references/delivery_matrix.md)。
 
+非视频作品（抖音图文/图集 note：无口播、不参与长文生成）的识别口径与处置规则见：
+[references/non-video-works.md](references/non-video-works.md)。
+
 ---
 
 ## 8. 环境要求与缺失处理

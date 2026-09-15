@@ -36,6 +36,21 @@ from src.generator.prompt_templates import ArticlePromptTypeError
 # 代码根（skill/）——仅用于断点续跑提示等展示；产物路径一律走 paths.products_root()
 PROJECT_ROOT = _paths.code_root()
 
+# 分集作品类型：非视频作品（抖音图文/图集 note）不参与听音与长文生成。
+# 见 references/non-video-works.md。
+KIND_VIDEO = "video"
+KIND_IMAGE_ALBUM = "image_album"
+
+
+def part_kind(part: Dict[str, Any]) -> str:
+    """分集的作品类型；缺失一律按视频处理。
+
+    为什么必须容错：`parts.json` 是**跨版本长期缓存**——B 站 / YouTube / 本地媒体
+    三种来源，以及本改动之前建立的所有抖音工作区，条目里都没有 `media_kind`。
+    用 `part["media_kind"]` 会 KeyError 让整条流水线崩在阶段一。
+    """
+    return str(part.get("media_kind") or KIND_VIDEO)
+
 
 def _resolve_status_file() -> Path:
     """状态文件（记录上次 412/熔断）路径：产物根下唯一一份。
@@ -544,11 +559,27 @@ class PipelineCoordinator:
         print("=" * 65)
         print("[*] 阶段一：音频收齐（全部选中集并发下载/提取）")
         print("=" * 65)
+        # 非视频作品（抖音图文/图集 note）先在这里预筛掉：它们只有图片卡片+BGM，
+        # 没有任何口播，下载与听音都得不到内容，照常派发只会诱导撰写环节编造。
+        # 预筛放在并发池**之前**，因此它们不会进入重试退避路径、也不产生失败记录。
+        non_video_entries: List[Dict[str, Any]] = [
+            {
+                "page": p.get("page"), "title": p.get("title"), "cid": p.get("cid"),
+                "media_kind": part_kind(p), "skip_reason": "non_video", "status": "skipped",
+            }
+            for p in selected_parts if part_kind(p) != KIND_VIDEO
+        ]
+        if non_video_entries:
+            print(f"[*] 检出 {len(non_video_entries)} 集非视频作品（图文作品，无口播）："
+                  "不下载音频、不派发文章任务书")
+            for _nv in non_video_entries:
+                print(f"    - P{_nv['page']:02d} [{_nv['media_kind']}] {_nv['title']}")
+        _prefetch_parts = [p for p in selected_parts if part_kind(p) == KIND_VIDEO]
         audio_failed: List[Dict[str, Any]] = []
         audio_ready: Dict[int, Path] = {}
         with ThreadPoolExecutor(max_workers=prefetch_workers) as prefetch_pool:
-            fut_map = {p["page"]: prefetch_pool.submit(_ensure_audio_with_retry, p) for p in selected_parts}
-            for p in selected_parts:
+            fut_map = {p["page"]: prefetch_pool.submit(_ensure_audio_with_retry, p) for p in _prefetch_parts}
+            for p in _prefetch_parts:
                 try:
                     audio_ready[p["page"]] = fut_map[p["page"]].result()
                 except Exception as err:
@@ -564,10 +595,13 @@ class PipelineCoordinator:
             ws.save_parts(TaskWorkspace.merge_parts(ws.load_parts(), _clean_parts))
         except Exception:
             pass
-        ws.save_manifest({
-            "audio_stage": {"total": len(selected_parts), "ready": len(audio_ready), "failed": len(audio_failed)},
-            "audio_failed_episodes": [dict(d) for d in audio_failed],
-        })
+        # 统计口径只算真正下载过的集；局部运行若全是图文集（_prefetch_parts 为空），
+        # 不要用 0 覆盖上一次的音频阶段统计。
+        if _prefetch_parts or not non_video_entries:
+            ws.save_manifest({
+                "audio_stage": {"total": len(_prefetch_parts), "ready": len(audio_ready), "failed": len(audio_failed)},
+                "audio_failed_episodes": [dict(d) for d in audio_failed],
+            })
         skipped_entries: List[Dict[str, Any]] = []
         if audio_failed:
             if skip_failed:
@@ -597,7 +631,12 @@ class PipelineCoordinator:
                 raise PipelineGateError(2)
 
         # ===== 阶段二「单集精读文章任务书派发」：单集直出长文，直接产出 articles/ =====
-        _skip_pages = {d.get("page") for d in skipped_entries}
+        # 排除两类不派发的分集：① 音频下载失败被 --skip-failed 豁免的；
+        # ② 非视频作品（图文/图集 note，本就没有口播，见 references/non-video-works.md）。
+        # 必须在这里排除，否则它们会被阶段二音频门禁当成「音频缺失」而误报，
+        # 并让 _all_success 永远为 False（它们不可能产出长文）。
+        _skip_pages = ({d.get("page") for d in skipped_entries}
+                       | {d.get("page") for d in non_video_entries})
         effective_parts = [p for p in selected_parts if p.get("page") not in _skip_pages]
         # 阶段二入口校验音频 100% 就绪，否则拒绝并指去向
         _missing = []
@@ -676,7 +715,11 @@ class PipelineCoordinator:
         note_plan: List[Dict[str, Any]] = []
         block_results: List[Dict[str, Any]] = []
         if process_all:
-            scope_parts = resolve_scope_parts(info, ws)
+            # 集号基准取工作区；再过滤掉非视频作品——它们没有长文，留着会让
+            # 模块规划的任务书列表里出现「有集号没内容」的空洞。
+            # 过滤放在**调用点**而不是 resolve_scope_parts 内部：那个函数的契约是
+            # 「集号基准来源」，不是内容筛选（它有多个调用方，语义各不相同）。
+            scope_parts = [p for p in resolve_scope_parts(info, ws) if part_kind(p) == KIND_VIDEO]
             # 语料摘要：优先取 Agent 已撰写的单集长文，其次 subtitles/ 下的逐字稿或人工语料
             summaries = {}
             for p in scope_parts:
@@ -745,8 +788,14 @@ class PipelineCoordinator:
         _existing["processed_episodes"] = sum(1 for d in _merged.values() if d.get("status") == "success")
         _existing["details"] = [_merged[k] for k in sorted(_merged)]
         _existing["failed_episodes"] = [_failed_merged[k] for k in sorted(_failed_merged)]
-        _existing["skipped_episodes"] = skipped_entries
-        _existing["skipped_pages"] = [d.get("page") for d in skipped_entries]
+        # 跳过名单 = 两类之和：① --skip-failed 豁免的音频失败集（故障）② 非视频作品（非故障）。
+        # 合并进 skipped_pages 是有意的：`state_sync` 用 total - len(skipped_pages) 算有效总数，
+        # 非视频集一并扣减，对账才不会把它们当成「待补的欠账」。
+        # 另存 non_video_episodes 以便区分语义（旧工作区无此字段，读取方一律 .get 兜底）。
+        _all_skipped = list(skipped_entries) + list(non_video_entries)
+        _existing["skipped_episodes"] = _all_skipped
+        _existing["skipped_pages"] = [d.get("page") for d in _all_skipped]
+        _existing["non_video_episodes"] = [dict(d) for d in non_video_entries]
         if process_all and plan is not None:
             _existing["knowledge_blocks_plan"] = plan
             _existing["knowledge_blocks_results"] = block_results

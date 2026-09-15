@@ -1847,6 +1847,63 @@ def check_regression_fixes():
         assert stored == TaskWorkspace.to_relative(textbook_path), \
             f"textbooks 落盘形态与 to_relative 不一致: {stored}"
 
+        # 7) 非视频作品（抖音图文/图集 note）识别与排除
+        #    它们没有口播，音频只是图片卡片+BGM，必须识别出来且不派发长文——
+        #    否则撰写环节拿不到任何音频事实，只能编造（触红线 2）。
+        from src.cli import _persist_parts_cache
+        from src.core.ingestion.dyaudio.share_parser import parse_single_aweme
+        from src.core.pipeline import KIND_IMAGE_ALBUM, KIND_VIDEO, part_kind
+
+        # 7.1 归一化层：images 非空 → 图文；否则为视频
+        assert parse_single_aweme(
+            {"aweme_id": "1", "images": [{"url_list": ["a"]}], "video": {"duration": 1000}}
+        )["media_kind"] == KIND_IMAGE_ALBUM, "images 非空未判为图文作品"
+        assert parse_single_aweme(
+            {"aweme_id": "2", "video": {"duration": 1000}}
+        )["media_kind"] == KIND_VIDEO, "普通视频被误判为图文作品"
+        # 7.2 图文带合成预览视频（play_addr 有值）时仍必须判为图集——
+        #     用「有没有视频地址」反推会漏判，这是实现里最容易写错的一处。
+        assert parse_single_aweme(
+            {"aweme_id": "3", "images": [{"url_list": ["a"]}],
+             "video": {"play_addr": {"url_list": ["https://v.example/x"]}}}
+        )["media_kind"] == KIND_IMAGE_ALBUM, "图文作品带预览视频时被误判为视频"
+
+        # 7.3 回读兼容：旧 parts.json（B站/YouTube/本地媒体/改动前的抖音）无该字段，
+        #     一律按视频处理——这是「不影响既有工作区」的核心保证。
+        assert part_kind({"page": 1}) == KIND_VIDEO, "缺 media_kind 时未兜底为视频"
+        assert part_kind({"page": 2, "media_kind": None}) == KIND_VIDEO, "media_kind 为 null 时未兜底"
+        assert part_kind({"page": 3, "media_kind": ""}) == KIND_VIDEO, "media_kind 为空串时未兜底"
+        assert part_kind({"page": 4, "media_kind": KIND_IMAGE_ALBUM}) == KIND_IMAGE_ALBUM
+
+        # 7.4 merge_parts 对 media_kind 的旧值兜底：局部运行的 incoming 若不带该键
+        #     （旧调用方 / 旧格式条目），不得把已标记的图文作品静默降级成视频——
+        #     否则它会重新进入听音与派发。注意其他字段仍是整体覆盖语义。
+        _mk = TaskWorkspace.merge_parts(
+            [{"page": 1, "media_kind": KIND_IMAGE_ALBUM, "title": "图文"}],
+            [{"page": 1, "title": "新标题"}],
+        )
+        assert len(_mk) == 1 and _mk[0]["title"] == "新标题", f"同 page 覆盖语义被破坏: {_mk}"
+        assert _mk[0]["media_kind"] == KIND_IMAGE_ALBUM, \
+            f"merge_parts 把已标记的图文作品降级了: {_mk}"
+        # incoming 显式给出该键时以 incoming 为准（允许纠正误判）
+        _mk2 = TaskWorkspace.merge_parts(
+            [{"page": 1, "media_kind": KIND_IMAGE_ALBUM}],
+            [{"page": 1, "media_kind": KIND_VIDEO, "title": "改判"}],
+        )
+        assert _mk2[0]["media_kind"] == KIND_VIDEO, f"incoming 显式值未生效: {_mk2}"
+
+        # 7.5 跨命令契约：`audio` 单独跑一遍不得把 `pipeline` 写好的 media_kind 冲掉。
+        #     这条守的是 _persist_parts_cache 的键白名单——它最容易在新增字段时被漏掉，
+        #     一漏就会静默退化（下次 pipeline 认不出图文集）。
+        with tempfile.TemporaryDirectory() as tmp2:
+            ws2 = TaskWorkspace(task_name="kind_persist", base_dir=tmp2)
+            _persist_parts_cache(
+                ws2, [{"page": 1, "title": "图文", "media_kind": KIND_IMAGE_ALBUM}]
+            )
+            _saved = ws2.load_parts()
+            assert _saved and _saved[0].get("media_kind") == KIND_IMAGE_ALBUM, \
+                f"parts.json 未保留 media_kind（audio 命令会冲掉标记）: {_saved}"
+
 
 def check_two_pass_planning_contract():
     """两趟语义规划契约：第一趟划模块、第二趟归并笔记，**两趟缺规划都不终止流程**。

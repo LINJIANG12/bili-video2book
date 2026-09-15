@@ -232,6 +232,13 @@ def parse_single_aweme(aweme: Dict[str, Any]) -> Dict[str, Any]:
     music = aweme.get("music") or {}
     images = aweme.get("images") or []
 
+    # 作品类型：正向按 `images` 非空判定为图文（note），否则为视频。
+    # 为什么必须正向判、不能用 `video_urls` 反推：抖音图文作品常带一段
+    # 合成预览视频（play_addr 有值），用「有没有视频地址」判会把图集漏判成视频。
+    # 主页 API、分享页 /share/video/、/share/note/ 三条路径都经本函数归一化，
+    # 所以只需在这里判一次，下游拿到的 media_kind 一定一致。
+    media_kind = "image_album" if images else "video"
+
     return {
         "aweme_id": str(aweme.get("aweme_id") or aweme.get("awemeId") or ""),
         "desc": (aweme.get("desc") or "").strip(),
@@ -244,6 +251,7 @@ def parse_single_aweme(aweme: Dict[str, Any]) -> Dict[str, Any]:
         "music_title": music.get("title") or "",
         "cover": _first_cover(video),
         "is_album": bool(images),
+        "media_kind": media_kind,
         "mix_info": aweme.get("mix_info") or None,
         "raw": aweme,
     }
